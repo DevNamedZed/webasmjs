@@ -45,7 +45,7 @@ export default class ImmediateEncoder {
         //Arg.notNull('func', func);
         let functionIndex = 0;
         if (func instanceof FunctionBuilder) {
-            functionIndex = func.index;
+            functionIndex = func._index;
         }
         else if (func instanceof ImportBuilder) {
             functionIndex = func.data.index;

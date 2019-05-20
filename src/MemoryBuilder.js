@@ -1,20 +1,19 @@
-import ElementType from './ElementType'
 import ResizableLimits from './ResizableLimits'
-import ModuleBuilder from './ModuleBuilder';
+import MemoryType from './MemoryType';
 
 export default class MemoryBuilder {
     /**
      * 
-     * @param {*} resizableLimits 
-     * @param {*} index 
+     * @param {ResizableLimits} resizableLimits 
+     * @param {Number} index 
      */
     constructor(resizableLimits, index){
-        this.resizableLimits = resizableLimits;
-        this.index = index;
+        this._memoryType = new MemoryType(resizableLimits);
+        this._index = index;
     }
 
     write(writer){
-        this.resizableLimits.write(writer);
+        this._memoryType.write(writer);
     }
 
     toBytes(){

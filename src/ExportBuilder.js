@@ -1,10 +1,17 @@
 import BinaryWriter from './BinaryWriter'
+import ExternalKind from './ExternalKind'
 
 export default class ExportBuilder {
-    constructor(name, externalKind, index){
+    /**
+     * 
+     * @param {*} name 
+     * @param {ExternalKind} externalKind 
+     * @param {*} data 
+     */
+    constructor(name, externalKind, data){
         this.name = name;
         this.externalKind = externalKind;
-        this.index = index; 
+        this.data = data; 
     }
 
     /**
@@ -15,7 +22,14 @@ export default class ExportBuilder {
         writer.writeVarUInt32(this.name.length);
         writer.writeString(this.name);
         writer.writeUInt8(this.externalKind.value);
-        writer.writeVarUInt32(this.index);
+        switch (this.externalKind){
+            case ExternalKind.Function:
+            case ExternalKind.Global:
+            case ExternalKind.Memory:
+            case ExternalKind.Table:
+                writer.writeVarUInt32(this.data._index);
+                break;
+        }
     }
 
     toBytes(){

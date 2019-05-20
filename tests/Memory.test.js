@@ -18,18 +18,16 @@ test('Memory - ', async () => {
             asm.store8_i32(0, 0);
         });        
         
-    
-
     const module = await moduleBuilder.instantiate();
     const readMemory = module.instance.exports.readMemory;
     const writeMemory = module.instance.exports.writeMemory;
 
-    for (let address = 0, value = 3; value < 300; address++, value += 3){
+    for (let address = 0, value = 1; value < 100; address++, value += 3){
         writeMemory(address, value);
     }
 
     
-    for (let address = 0, value = 3; value < 300; address++, value += 3){
+    for (let address = 0, value = 1; value < 100; address++, value += 3){
         expect(readMemory(address)).toBe(value);
     }
 });

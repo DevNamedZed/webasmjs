@@ -89,7 +89,7 @@ export default class ElementSegmentBuilder {
         this._initExpressionEmitter.write(writer);
         writer.writeVarUInt32(this._functions.length);
         this._functions.forEach(x => {
-            writer.writeVarUInt32(x.index);
+            writer.writeVarUInt32(x._index);
         });
     }
 

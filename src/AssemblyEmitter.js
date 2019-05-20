@@ -283,7 +283,6 @@ export default class AssemblyEmitter extends OpCodeEmitter {
                 return Immediate.createBlockSignature(block);
 
             case ImmediateType.BranchTable:
-            debugger;
                 validateParameters(immediateType, values, 2);
                 return Immediate.createBranchTable(values[0], values[1], depth);
 

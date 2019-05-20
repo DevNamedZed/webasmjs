@@ -19,7 +19,7 @@ export default class FunctionBuilder {
      */
     funcTypeBuilder;
     parameters;
-    index;
+    _index;
     options;
 
     /**
@@ -37,7 +37,7 @@ export default class FunctionBuilder {
     constructor(name, funcTypeBuilder, index, options = { export: false, disableVerification: false }) {
         this.name = name;
         this.funcTypeBuilder = funcTypeBuilder;
-        this.index = index;
+        this._index = index;
         this.options = options;
         this.parameters = funcTypeBuilder.parameterTypes.map((x, i) => new FunctionParameterBuilder(x, i));
     }

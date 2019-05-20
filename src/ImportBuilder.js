@@ -1,14 +1,18 @@
 import BinaryWriter from './BinaryWriter'
 import ExternalKind from './ExternalKind';
 import GlobalType from './GlobalType';
+import FuncTypeBuilder from './FuncTypeBuilder';
 
+/**
+ * Represents an import of a function, global, memory, or table from another module.
+ */
 export default class ImportBuilder {
     /**
-     * 
-     * @param {*} moduleName 
-     * @param {*} fieldName 
-     * @param {*} externalKind 
-     * @param {Number | GlobalType} data 
+     * Creates an initializes a new ImportBuilder.
+     * @param {String} moduleName The name of the module. 
+     * @param {String} fieldName 
+     * @param {ExternalKind} externalKind 
+     * @param {Number | FuncTypeBuilder| GlobalType} data 
      * @param {*} index 
      */
     constructor(moduleName, fieldName, externalKind, data, index){

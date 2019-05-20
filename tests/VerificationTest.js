@@ -29,15 +29,12 @@ export default class VerificationTest{
             parameters,
             generatorCallback,
             { generateNameSection: true, disableVerification: false });
-
-            debugger;
         const resultNoValidation = await VerificationTest._execute(
             returnType, 
             parameters,
             generatorCallback,
             { generateNameSection: true, disableVerification: true });
 
-            debugger;
         expect(resultWithValidation.result).toBe(ExecuteResult.VerificationError);
         expect(resultNoValidation.result).toBe(ExecuteResult.CompileError);
         expect(resultWithValidation.err).toBeInstanceOf(VerificationError);

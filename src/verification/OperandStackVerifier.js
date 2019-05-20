@@ -62,7 +62,7 @@ export default class OperandStackVerifier {
             this._verifyControlFlowPop(controlBlock, modifiedStack);
         }
         else if (opCode == OpCodes.return) {
-            this._verifyReturnValues(modifiedStack);
+            modifiedStack = this._verifyReturnValues(modifiedStack, true);
         }
 
         if (immediate && immediate.type === ImmediateType.RelativeDepth) {
@@ -94,7 +94,7 @@ export default class OperandStackVerifier {
      * Verifies any remaining values on the stack match the return types for the function.
      * @param {OperandStack} stack The stack to check. 
      */
-    _verifyReturnValues(stack) {
+    _verifyReturnValues(stack, pop) {
         const remaining = this._getStackValueTypes(stack, stack.length);
         if (remaining.length !== this._funcType.returnTypes.length) {
             if (remaining.length === 0) {
@@ -127,6 +127,14 @@ export default class OperandStackVerifier {
             throw new VerificationError(
                 "Error returning from function: " + errorMessage);
         }
+
+        if (pop){
+            for (let index = 0; index < remaining.length; index++){
+                stack = stack.pop();
+            }
+        }
+
+        return stack;
     }
 
     /**
