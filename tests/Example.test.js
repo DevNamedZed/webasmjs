@@ -8,7 +8,6 @@ test('Example - Factorial', async () => {
         "factorialRecursive", 
         [ValueType.Int32], 
         [ValueType.Int32], 
-        { export: true },
         (f, a) => {
             const numParam = f.getParameter(0);
     
@@ -28,13 +27,12 @@ test('Example - Factorial', async () => {
             a.sub_i32();
             a.call(f);
             a.mul_i32();        
-        });
+        }).withExport();
     
     moduleBuilder.defineFunction(
         "factorialIterative", 
         [ValueType.Int32], 
         [ValueType.Int32], 
-        { export: true },
         (f, a) => {
             const numParam = f.getParameter(0);
             const index = a.declareLocal(ValueType.Int32, "index");
@@ -69,7 +67,8 @@ test('Example - Factorial', async () => {
             });
     
             a.get_local(result);
-        });
+        }).withExport();
+
     const module = await moduleBuilder.instantiate();
     expect(module.instance.exports.factorialRecursive(1)).toBe(1);
     expect(module.instance.exports.factorialRecursive(2)).toBe(2);

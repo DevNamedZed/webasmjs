@@ -4,9 +4,12 @@ import ModuleBuilder from './ModuleBuilder';
 import { FunctionBuilder } from '.';
 import TableType from './TableType';
 
+/**
+ * Used to generate a table.
+ */
 export default class TableBuilder {
     /**
-     * 
+     * Creates and initializes a new TableBuilder.
      * @param {ModuleBuilder} moduleBuilder 
      * @param {ElementType} elementType 
      * @param {ResizableLimits} resizableLimits 
@@ -24,6 +27,16 @@ export default class TableBuilder {
 
     get resizableLimits(){
         return this._tableType._resizableLimits;
+    }
+
+    /**
+     * Marks the table for export.
+     * @param {String} name The name of the table.
+     * @type {TableBuilder} 
+     */
+    withExport(name){
+        this._moduleBuilder.exportTable(this, name);
+        return this;
     }
 
     /**

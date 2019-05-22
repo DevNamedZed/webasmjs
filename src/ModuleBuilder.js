@@ -18,6 +18,7 @@ import CustomSectionBuilder from './CustomSectionBuilder';
 import { FunctionEmitter } from './Emitters'
 import MemoryType from './MemoryType';
 import TableType from './TableType';
+import { VerificationError } from './verification/VerificationError';
 
 
 /**
@@ -75,6 +76,13 @@ export default class ModuleBuilder {
 
         this._name = name;
         this._options = options || ModuleBuilder.defaultOptions;
+    }
+
+    /**
+     * Gets a flag indicating whether module verification should be disabled.
+     */
+    get disableVerification(){
+        return this._options && this._options.disableVerification === true;
     }
 
     /**
@@ -148,11 +156,11 @@ export default class ModuleBuilder {
      * @param {Number} maximumSize Optional maximum size of the table
      * @returns {ImportBuilder} An ImportBuilder that can be used to reference the import. 
      */
-    importTable(moduleName, field, elementType, initialSize, maximumSize = null) {
+    importTable(moduleName, name, elementType, initialSize, maximumSize = null) {
         if (this._imports.find(x =>
             x.externalKind === ExternalKind.Table &&
             x.moduleName === moduleName &&
-            x.field === field)) {
+            x.field === name)) {
             throw new Error(`An import already existing for ${moduleName}.${name}`);
         }
 
@@ -180,11 +188,18 @@ export default class ModuleBuilder {
      * @returns {ImportBuilder} An ImportBuilder that can be used to reference the import. 
      */
     importMemory(moduleName, name, initialSize, maximumSize = null) {
+        Arg.string('moduleName', moduleName);
+        Arg.string('name', name);
+        Arg.number('initialSize', initialSize);
+
         if (this._imports.find(x =>
-            x.externalKind === ExternalKind.Global &&
             x.moduleName === moduleName &&
             x.field === field)) {
-            throw new Error(`An import already existing for ${moduleName}.${name}`);
+            throw new VerificationError(`An import already existing for ${moduleName}.${name}`);
+        }
+
+        if (this._memories.length !== 0 || this._importsIndexSpace.memory !== 0){
+            throw new VerificationError('Only one memory is allowed per module.');
         }
 
         const memoryType = new MemoryType(new ResizableLimits(initialSize, maximumSize));
@@ -238,11 +253,10 @@ export default class ModuleBuilder {
      * @param {String} name The name of the function.
      * @param {ValueType[]} returnTypes A collection of value types that represent the functions return values.
      * @param {ValueType[]} parameters A collection of value types that represent the functions parameters values.
-     * @param {Object} options Optional parameters for the function.
-     * @param {createFunctionCallback} createCallback
+     * @param {createFunctionCallback} createCallback Callback used to initialize the function.
      * @returns {FunctionBuilder} A new function builder.
      */
-    defineFunction(name, returnTypes, parameters, options = { export: false }, createCallback = null) {
+    defineFunction(name, returnTypes, parameters, createCallback = null) {
         const existing = this._functions.find(x => x.name === name);
         if (existing) {
             throw new Error(`Function has already been defined with the name ${name}`);
@@ -250,19 +264,14 @@ export default class ModuleBuilder {
 
         const funcType = this.defineFuncType(returnTypes, parameters);
         const functionBuilder = new FunctionBuilder(
+            this,
             name,
             funcType,
-            this._functions.length + this._importsIndexSpace.function,
-            { ...options, disableVerification: this._options.disableVerification });
+            this._functions.length + this._importsIndexSpace.function);
         this._functions.push(functionBuilder);
 
-        if (options && options.export) {
-            const exportBuilder = new ExportBuilder(name, ExternalKind.Function, functionBuilder);
-            this._exports.push(exportBuilder);
-        }
-
         if (createCallback) {
-            functionBuilder.createAssemblyEmitter(x => {
+            functionBuilder.createEmitter(x => {
                 createCallback(functionBuilder, x);
             });
         }
@@ -298,11 +307,12 @@ export default class ModuleBuilder {
      * @returns {MemoryBuilder} A memory builder that can used to references the memory.
      */
     defineMemory(initialSize, maximumSize = null) {
-        if (this._memories.length === 1) {
-            throw new Error('Only one memory can be created per module.')
+        if (this._memories.length !== 0 || this._importsIndexSpace.memory !== 0){
+            throw new VerificationError('Only one memory is allowed per module.');
         }
 
         const memory = new MemoryBuilder(
+            this,
             new ResizableLimits(initialSize, maximumSize),
             this._memories.length + this._importsIndexSpace.memory);
         this._memories.push(memory);
@@ -318,6 +328,7 @@ export default class ModuleBuilder {
      */
     defineGlobal(valueType, mutable, value) {
         const globalBuilder = new GlobalBuilder(
+            this,
             valueType,
             mutable,
             this._globals.length + this._importsIndexSpace.global);
@@ -336,7 +347,7 @@ export default class ModuleBuilder {
      * @returns {ExportBuilder} 
      */
     exportFunction(functionBuilder, name = null) {
-        Arg.instanceOf('functionBuilder', functionBuilder, functionBuilder);
+        Arg.instanceOf('functionBuilder', functionBuilder, FunctionBuilder);
 
         const functionName = name || functionBuilder.name;
         Arg.notEmptyString('name', functionName);
@@ -396,13 +407,17 @@ export default class ModuleBuilder {
 
     /**
      * Marks a global for export making it accessible outside the module.
-     * @param {GlobalBuilder} functionBuilder The global to export.
+     * @param {GlobalBuilder} globalBuilder The global to export.
      * @param {String} name The name for the export, if this is not provided the function name will be used. 
      * @returns {ExportBuilder} 
      */
     exportGlobal(globalBuilder, name) {
         Arg.notEmptyString('name', name);
         Arg.instanceOf('globalBuilder', globalBuilder, GlobalBuilder);
+        if (globalBuilder.globalType.mutable && !this.disableVerification){
+            throw new VerificationError('Cannot export a mutable global.');
+        }
+
 
         if (this._exports.find(x =>
             x.externalKind === ExternalKind.Global &&

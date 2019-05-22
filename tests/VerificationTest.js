@@ -46,8 +46,10 @@ export default class VerificationTest{
 
     static async _execute(returnType, parameters, generatorCallback, options){
         const moduleBuilder = new ModuleBuilder("test", options);
-        const testFunction = moduleBuilder.defineFunction("test", returnType, parameters, { export: true })
-        const asmGenerator = testFunction.createAssemblyEmitter();
+        const testFunction = moduleBuilder.defineFunction("test", returnType, parameters)
+
+        const asmGenerator = testFunction.createEmitter();
+        testFunction.withExport();
         
         try{
             generatorCallback(asmGenerator);

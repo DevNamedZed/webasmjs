@@ -1,15 +1,23 @@
 import ResizableLimits from './ResizableLimits'
+import ModuleBuilder from './ModuleBuilder';
 import MemoryType from './MemoryType';
 
 export default class MemoryBuilder {
     /**
      * 
+     * @param {ModuleBuilder} moduleBuilder
      * @param {ResizableLimits} resizableLimits 
      * @param {Number} index 
      */
-    constructor(resizableLimits, index){
+    constructor(moduleBuilder, resizableLimits, index){
+        this._moduleBuilder = moduleBuilder;
         this._memoryType = new MemoryType(resizableLimits);
         this._index = index;
+    }
+
+    withExport(name){
+        this._moduleBuilder.exportMemory(this, name);
+        return this;
     }
 
     write(writer){

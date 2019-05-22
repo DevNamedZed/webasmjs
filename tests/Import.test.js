@@ -3,30 +3,18 @@ import TestHelper from './TestHelper'
 test('Import Function', async () => {
 
     const exportModuleBuilder = new ModuleBuilder("testModule");
-    const exportFunction = exportModuleBuilder.defineFunction("inc", [ValueType.Int32], [ValueType.Int32], { export: true })
-    exportFunction.createAssemblyEmitter(
-        /**
-         * @param {AssemblyEmitter} asm
-         */
-        asm => {
-            asm.get_local(0);
-            asm.const_i32(1);
-            asm.add_i32();
-        });
-
+    exportModuleBuilder.defineFunction("inc", [ValueType.Int32], [ValueType.Int32], (f, a) => {
+        a.get_local(0);
+        a.const_i32(1);
+        a.add_i32();
+    }).withExport();
 
     const importModuleBuilder = new ModuleBuilder("other");
-    const testFunction = importModuleBuilder.defineFunction("testFunc", [ValueType.Int32], [ValueType.Int32], { export: true })
     const functionImport = importModuleBuilder.importFunction("testModule", "inc", [ValueType.Int32], [ValueType.Int32]);
-    testFunction.createAssemblyEmitter(
-        /**
-         * @param {AssemblyEmitter} asm
-         */
-        asm => {
-            asm.get_local(0);
-            asm.call(functionImport);
-        });
-
+    importModuleBuilder.defineFunction("testFunc", [ValueType.Int32], [ValueType.Int32], (f, a) => {
+        a.get_local(0);
+        a.call(functionImport);
+    }).withExport()
         
     const exportModule = await exportModuleBuilder.instantiate();
     const importModule = await importModuleBuilder.instantiate({
@@ -35,5 +23,8 @@ test('Import Function', async () => {
         }
     });
 
-    importModule.instance.exports.testFunc(5);
+    expect(importModule.instance.exports.testFunc(5)).toBe(6);
+    expect(importModule.instance.exports.testFunc(544)).toBe(545);
+    expect(importModule.instance.exports.testFunc(2155447)).toBe(2155448);
 });
+

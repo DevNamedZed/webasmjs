@@ -6,7 +6,7 @@ import ResizableLimits from './ResizableLimits'
  */
 export default class TableType {
     /**
-     * 
+     * Creates and initializes a new TableType.
      * @param {ElementType} elementType The type of elements that will be stored in the tables.
      * @param {ResizableLimits} resizableLimits 
      */
@@ -20,8 +20,8 @@ export default class TableType {
      * @param {BinaryWriter} writer The binary writer the object should be written to.
      */
     write(writer){
-        writer.writeVarUInt32(this.elementType.value);
-        this.resizableLimits.write(writer);
+        writer.writeVarUInt32(this._elementType.value);
+        this._resizableLimits.write(writer);
     }
 
     /**

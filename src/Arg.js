@@ -42,7 +42,7 @@ export default class Arg {
 
     static string(name, value) {
         Arg.notNull(name, value);
-        if (!(typeof myVar === 'string' || myVar instanceof String)) {
+        if (!(typeof value === 'string' || value instanceof String)) {
             throw new Error(`The parameter ${name} must be a string.`);
         }
     }

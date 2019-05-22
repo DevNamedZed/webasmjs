@@ -39,6 +39,8 @@ export default class ImportBuilder {
                 break;
 
             case ExternalKind.Global:
+            case ExternalKind.Memory:
+            case ExternalKind.Table:
                 this.data.write(writer);
                 break;
 

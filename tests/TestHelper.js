@@ -17,8 +17,9 @@ export default class TestHelper {
    */
   static async compileFunction(name, returnType, parameters, generatorCallback, options) {
     const moduleBuilder = new ModuleBuilder("test", options || ModuleBuilder.defaultOptions);
-    const testFunction = moduleBuilder.defineFunction(name, returnType, parameters, { export: true })
-    const asmGenerator = testFunction.createAssemblyEmitter();
+    const testFunction = moduleBuilder.defineFunction(name, returnType, parameters)
+    const asmGenerator = testFunction.createEmitter();
+    testFunction.withExport();
     generatorCallback(asmGenerator);
   
     const module = await moduleBuilder.instantiate();

@@ -1,10 +1,11 @@
 import GlobalType from "./GlobalType";
+import InitExpressionType from "./InitExpressionType";
+import ModuleBuilder from "./ModuleBuilder";
 import ValueType from './ValueType'
 import { InitExpressionEmitter } from "./Emitters";
-import InitExpressionType from "./InitExpressionType";
 
 /**
- * Represents a global entry.
+ * Represents a global variable.
  */
 export default class GlobalBuilder {
 
@@ -24,12 +25,19 @@ export default class GlobalBuilder {
     _initExpressionEmitter;
 
     /**
-     * 
+     * @type {ModuleBuilder}
+     */
+    _moduleBuilder;
+
+    /**
+     * Creates and initializes a new ModuleBuilder
+     * @param {ModuleBuilder} moduleBuilder
      * @param {ValueType} valueType 
      * @param {Boolean} mutable 
      * @param {Number} index 
      */
-    constructor(valueType, mutable, index) {
+    constructor(moduleBuilder, valueType, mutable, index) {
+        this._moduleBuilder = moduleBuilder;
         this._globalType = new GlobalType(valueType, mutable);
         this._index = index;
     }
@@ -83,6 +91,12 @@ export default class GlobalBuilder {
         else {
             throw new Error('Unsupported global value.');
         }
+    }
+
+    
+    withExport(name){
+        this._moduleBuilder.exportGlobal(this, name);
+        return this;
     }
 
     /**

@@ -70,4 +70,6 @@ moduleBuilder.defineFunction(
     });
 
 const module = moduleBuilder.instantiate();
-module.factorial(3)
+console.log(`factorialRecursive = ${module.factorialRecursive(3)}`)
+console.log(`factorialIterative = ${module.factorialIterative(5)}`)
+

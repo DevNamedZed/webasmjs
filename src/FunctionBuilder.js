@@ -1,8 +1,9 @@
-import FuncTypeBuilder from './FuncTypeBuilder'
-import TypeForm from './TypeForm'
-import LocalBuilder from './LocalBuilder';
 import BinaryWriter from './BinaryWriter';
 import FunctionParameterBuilder from './FunctionParametersBuilder';
+import FuncTypeBuilder from './FuncTypeBuilder'
+import LocalBuilder from './LocalBuilder';
+import ModuleBuilder from './ModuleBuilder';
+import TypeForm from './TypeForm'
 import { FunctionEmitter } from './Emitters';
 
 /**
@@ -11,16 +12,29 @@ import { FunctionEmitter } from './Emitters';
  * @param {FunctionEmitter} asm The emitter used to generate the expression function.
  */
 
+ /**
+  * Constructs a new function.
+  */
 export default class FunctionBuilder {
+    /**
+     * @type {String}
+     */
     name;
 
     /**
      * @type {FuncTypeBuilder}
      */
     funcTypeBuilder;
+
+    /**
+     * @type {FunctionParameterBuilder[]}
+     */
     parameters;
+
+    /**
+     * @type {Number}
+     */
     _index;
-    options;
 
     /**
      * @type {FunctionEmitter}
@@ -28,35 +42,42 @@ export default class FunctionBuilder {
     functionEmitter;
 
     /**
-     * 
-     * @param {String} name 
-     * @param {FuncTypeBuilder} funcTypeBuilder 
-     * @param {Number} index 
-     * @param {Object} options 
+     * @type {ModuleBuilder}
      */
-    constructor(name, funcTypeBuilder, index, options = { export: false, disableVerification: false }) {
+    _moduleBuilder;
+
+    /**
+     * Creates and initializes a new FunctionBuilder. 
+     * @param {ModuleBuilder} moduleBuilder The module this function belongs to.
+     * @param {String} name The name of the function.
+     * @param {FuncTypeBuilder} funcTypeBuilder Func type that describes the signature of the function.
+     * @param {Number} index Index of the function.
+     */
+    constructor(moduleBuilder, name, funcTypeBuilder, index) {
+        this._moduleBuilder = moduleBuilder;
         this.name = name;
         this.funcTypeBuilder = funcTypeBuilder;
         this._index = index;
-        this.options = options;
         this.parameters = funcTypeBuilder.parameterTypes.map((x, i) => new FunctionParameterBuilder(x, i));
     }
 
+    /**
+     * Gets a collection of  {@link ValueType} that represent the function return value types.
+     */
     get returnType() {
         return this.funcTypeBuilder.returnType;
     }
 
+    /**
+     * Gets a collection of {@link ValueType} that represent the function parameter types.
+     */
     get parameterTypes() {
         return this.funcTypeBuilder.parameterTypes;
     }
 
-    get export() {
-        return this.options.export === true;
-    }
-
     /**
-     * Gets
-     * @param {*} index 
+     * Gets the @type {FunctionParameterBuilder} for the function parameter at the specified index.
+     * @param {Number} index The function parameter index. 
      * @returns {FunctionParameterBuilder}
      */
     getParameter(index) {
@@ -64,16 +85,16 @@ export default class FunctionBuilder {
     }
     
     /**
-     * 
-     * @param {emitFunctionCallback} callback 
+     * Creates a new {@link FunctionEmitter} used to generate the body for this function.
+     * @param {emitFunctionCallback=} callback Optional callback used to generate the function body.
      * @returns {FunctionEmitter}
      */
-    createAssemblyEmitter(callback) {
+    createEmitter(callback) {
         if (this.functionEmitter) {
             throw new Error('Function emitter has already been created.');
         }
 
-        this.functionEmitter = new FunctionEmitter(this, { disableVerification: this.options.disableVerification });
+        this.functionEmitter = new FunctionEmitter(this, { disableVerification: this._moduleBuilder.disableVerification });
         if (callback) {
             callback(this.functionEmitter);
             this.functionEmitter.end();
@@ -82,6 +103,20 @@ export default class FunctionBuilder {
         return this.functionEmitter;
     }
 
+    /**
+     * Marks this function for export.
+     * @param {String=} name The name that function should be exported as. 
+     * @returns {FunctionBuilder}
+     */
+    withExport(name){
+        this._moduleBuilder.exportFunction(this, name);
+        return this;        
+    }
+    
+    /**
+     * Writes the object to a binary writer.
+     * @param {BinaryWriter} writer The binary writer the object should be written to.
+     */
     write(writer) {
         if (!this.functionEmitter) {
             throw new Error('Function body has not been defined.');
@@ -90,6 +125,10 @@ export default class FunctionBuilder {
         this.functionEmitter.write(writer);
     }
 
+    /**
+     * Creates a byte representation of the object.
+     * @returns {Uint8Array} The byte representation of the object.
+     */
     toBytes() {
         const buffer = new BinaryWriter();
         this.writeBytes(buffer);
