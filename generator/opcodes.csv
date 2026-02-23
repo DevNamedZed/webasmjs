@@ -13,7 +13,7 @@ value,name,mnemonic,friendlyName,immediate,controlflow,pop,push,prefix,feature
 16,call,call,call,Function,,"[""Arguments""]","[""Returns""]",,
 17,call_indirect,call_indirect,call_indirect,IndirectFunction,,"[""Arguments"",""Int32""]","[""Returns""]",,
 26,drop,drop,drop,,,"[""Any""]",,,
-27,select,select,select,,,"[""Int32"",""Any"",""Any""]","[""Any""]",,
+27,select,select,select,,,"[""Any"",""Any"",""Int32""]","[""Any""]",,
 32,get_local,local.get,get_local,Local,,,"[""Any""]",,
 33,set_local,local.set,set_local,Local,,"[""Any""]",,,
 34,tee_local,local.tee,tee_local,Local,,"[""Any""]","[""Any""]",,

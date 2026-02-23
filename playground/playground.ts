@@ -1203,7 +1203,7 @@ log('Final: ' + getCounter());`,
     label: 'SIMD Vector Add',
     group: 'SIMD',
     code: `// SIMD: add two f32x4 vectors in memory
-const mod = new webasmjs.ModuleBuilder('simdAdd', { disableVerification: true });
+const mod = new webasmjs.ModuleBuilder('simdAdd');
 mod.defineMemory(1);
 
 // vec4_add(srcA, srcB, dst) — adds two 4-float vectors
@@ -1255,7 +1255,7 @@ for (let i = 0; i < 4; i++) {
     label: 'SIMD Dot Product',
     group: 'SIMD',
     code: `// SIMD dot product: multiply element-wise then sum lanes
-const mod = new webasmjs.ModuleBuilder('simdDot', { disableVerification: true });
+const mod = new webasmjs.ModuleBuilder('simdDot');
 mod.defineMemory(1);
 
 mod.defineFunction('dot4', [webasmjs.ValueType.Float32],
@@ -1311,7 +1311,7 @@ log('Expected: ' + (1*5 + 2*6 + 3*7 + 4*8));`,
     label: 'SIMD Splat & Scale',
     group: 'SIMD',
     code: `// SIMD splat: broadcast a scalar to all lanes, then multiply
-const mod = new webasmjs.ModuleBuilder('simdScale', { disableVerification: true });
+const mod = new webasmjs.ModuleBuilder('simdScale');
 mod.defineMemory(1);
 
 // scale_vec4(src, dst, scalar) — multiply a vector by a scalar

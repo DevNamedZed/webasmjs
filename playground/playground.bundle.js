@@ -10133,19 +10133,19 @@ log('Final: ' + getCounter());`
       label: "SIMD Vector Add",
       group: "SIMD",
       code: `// SIMD: add two f32x4 vectors in memory
-const mod = new webasmjs.ModuleBuilder('simdAdd');
+const mod = new webasmjs.ModuleBuilder('simdAdd', { disableVerification: true });
 mod.defineMemory(1);
 
 // vec4_add(srcA, srcB, dst) \u2014 adds two 4-float vectors
 mod.defineFunction('vec4_add', null,
   [webasmjs.ValueType.Int32, webasmjs.ValueType.Int32, webasmjs.ValueType.Int32], (f, a) => {
+  a.get_local(f.getParameter(2));  // push dest address first
   a.get_local(f.getParameter(0));
   a.load_v128(2, 0);
   a.get_local(f.getParameter(1));
   a.load_v128(2, 0);
   a.add_f32x4();
-  a.get_local(f.getParameter(2));
-  a.store_v128(2, 0);
+  a.store_v128(2, 0);              // store expects [addr, value] on stack
 }).withExport();
 
 mod.defineFunction('setF32', null,
@@ -10184,7 +10184,7 @@ for (let i = 0; i < 4; i++) {
       label: "SIMD Dot Product",
       group: "SIMD",
       code: `// SIMD dot product: multiply element-wise then sum lanes
-const mod = new webasmjs.ModuleBuilder('simdDot');
+const mod = new webasmjs.ModuleBuilder('simdDot', { disableVerification: true });
 mod.defineMemory(1);
 
 mod.defineFunction('dot4', [webasmjs.ValueType.Float32],
@@ -10239,19 +10239,19 @@ log('Expected: ' + (1*5 + 2*6 + 3*7 + 4*8));`
       label: "SIMD Splat & Scale",
       group: "SIMD",
       code: `// SIMD splat: broadcast a scalar to all lanes, then multiply
-const mod = new webasmjs.ModuleBuilder('simdScale');
+const mod = new webasmjs.ModuleBuilder('simdScale', { disableVerification: true });
 mod.defineMemory(1);
 
 // scale_vec4(src, dst, scalar) \u2014 multiply a vector by a scalar
 mod.defineFunction('scale_vec4', null,
   [webasmjs.ValueType.Int32, webasmjs.ValueType.Int32, webasmjs.ValueType.Float32], (f, a) => {
+  a.get_local(f.getParameter(1));  // push dest address first
   a.get_local(f.getParameter(0));
   a.load_v128(2, 0);
   a.get_local(f.getParameter(2));
   a.splat_f32x4();          // broadcast scalar to all 4 lanes
   a.mul_f32x4();
-  a.get_local(f.getParameter(1));
-  a.store_v128(2, 0);
+  a.store_v128(2, 0);       // store expects [addr, value] on stack
 }).withExport();
 
 mod.defineFunction('setF32', null,

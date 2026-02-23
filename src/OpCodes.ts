@@ -95,7 +95,7 @@ const OpCodes = {
     value: 27,
     mnemonic: "select",
     stackBehavior: "PopPush",
-    popOperands: ["Int32","Any","Any"] as const,
+    popOperands: ["Any","Any","Int32"] as const,
     pushOperands: ["Any"] as const,
   },
   "get_local": {

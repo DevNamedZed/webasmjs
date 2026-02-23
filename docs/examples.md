@@ -374,8 +374,7 @@ Add two arrays of four floats using 128-bit SIMD instructions:
 ```typescript
 import { ModuleBuilder, ValueType } from 'webasmjs';
 
-// SIMD requires disabling the operand stack verifier (v128 not yet supported)
-const mod = new ModuleBuilder('simdAdd', { disableVerification: true });
+const mod = new ModuleBuilder('simdAdd');
 mod.defineMemory(1);
 
 // vec4_add: adds four f32 values starting at [srcA] and [srcB], stores result at [dst]
@@ -437,8 +436,7 @@ Compute a dot product of two 4-element float vectors using SIMD multiply and lan
 ```typescript
 import { ModuleBuilder, ValueType } from 'webasmjs';
 
-// SIMD requires disabling the operand stack verifier (v128 not yet supported)
-const mod = new ModuleBuilder('simdDot', { disableVerification: true });
+const mod = new ModuleBuilder('simdDot');
 mod.defineMemory(1);
 
 // dot4: dot product of two f32x4 vectors in memory
