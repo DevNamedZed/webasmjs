@@ -2,6 +2,21 @@ import ModuleBuilder from '../src/ModuleBuilder';
 import { ValueType, ElementType } from '../src/types';
 import VerificationError from '../src/verification/VerificationError';
 
+// Detect engine support for extended-const (requires V8 11.4+ / Node 21+)
+const HAS_EXTENDED_CONST = (() => {
+  try {
+    // Minimal module: (global i32 (i32.add (i32.const 1) (i32.const 2)))
+    const bytes = new Uint8Array([
+      0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00, // magic + version
+      0x06, 0x09,                                        // global section, 9 bytes
+      0x01,                                               // 1 global
+      0x7f, 0x00,                                         // i32, immutable
+      0x41, 0x01, 0x41, 0x02, 0x6a, 0x0b,                // i32.const 1, i32.const 2, i32.add, end
+    ]);
+    return WebAssembly.validate(bytes);
+  } catch { return false; }
+})();
+
 // ─── Target System ───────────────────────────────────────────────────
 
 describe('Target system', () => {
@@ -357,7 +372,7 @@ describe('Extended const expressions', () => {
     expect(() => emitter.add_i32()).toThrow(/extended-const/i);
   });
 
-  test('extended-const global init compiles and runs', async () => {
+  (HAS_EXTENDED_CONST ? test : test.skip)('extended-const global init compiles and runs', async () => {
     const mod = new ModuleBuilder('test');
     const g = mod.defineGlobal(ValueType.Int32, false);
     g.createInitEmitter((asm) => {
