@@ -9,8 +9,8 @@ export default class InitExpressionEmitter extends AssemblyEmitter {
   _initExpressionType: InitExpressionType;
   _features: Set<WasmFeature>;
 
-  constructor(initExpressionType: InitExpressionType, valueType: ValueTypeDescriptor, features?: Set<WasmFeature>) {
-    super(new FuncTypeSignature([valueType], []));
+  constructor(initExpressionType: InitExpressionType, valueType: ValueTypeDescriptor, features?: Set<WasmFeature>, disableVerification?: boolean) {
+    super(new FuncTypeSignature([valueType], []), { disableVerification: disableVerification || false });
     this._initExpressionType = initExpressionType;
     this._features = features || new Set();
   }
@@ -98,6 +98,31 @@ export default class InitExpressionEmitter extends AssemblyEmitter {
         }
         break;
       }
+
+      // GC: allow struct/array/ref operations in init expressions
+      case OpCodes.struct_new:
+      case OpCodes.struct_new_default:
+      case OpCodes.array_new:
+      case OpCodes.array_new_default:
+      case OpCodes.array_new_fixed:
+      case OpCodes.ref_i31:
+      case OpCodes.any_convert_extern:
+      case OpCodes.extern_convert_any: {
+        if (!this._features.has('gc')) {
+          throw new Error(
+            `Opcode ${opCode.mnemonic} requires the 'gc' feature to be used in an initializer expression.`
+          );
+        }
+        break;
+      }
+
+      // ref.null is valid in init expressions (reference-types or gc)
+      case OpCodes.ref_null:
+        break;
+
+      // ref.func is valid in element segment init expressions
+      case OpCodes.ref_func:
+        break;
 
       default:
         throw new Error(

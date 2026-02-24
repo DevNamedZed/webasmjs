@@ -431,7 +431,11 @@ class WatParserImpl {
       this.expectKeyword('type');
       const typeIndex = this.parseNumber();
       this.expect(TokenType.RightParen);
-      const funcType = this.moduleBuilder._types[typeIndex];
+      const typeEntry = this.moduleBuilder._types[typeIndex];
+      if (!('returnTypes' in typeEntry)) {
+        throw new Error(`Type index ${typeIndex} is not a function type.`);
+      }
+      const funcType = typeEntry as import('./FuncTypeBuilder').default;
       funcReturnTypes = funcType.returnTypes.length > 0 ? funcType.returnTypes : null;
       funcParamTypes = funcType.parameterTypes;
     } else {
@@ -593,7 +597,11 @@ class WatParserImpl {
     let funcParamTypes: ValueTypeDescriptor[];
 
     if (hasExplicitType) {
-      const funcType = this.moduleBuilder._types[typeIndex];
+      const typeEntry = this.moduleBuilder._types[typeIndex];
+      if (!('returnTypes' in typeEntry)) {
+        throw new Error(`Type index ${typeIndex} is not a function type.`);
+      }
+      const funcType = typeEntry as import('./FuncTypeBuilder').default;
       funcReturnTypes = funcType.returnTypes.length > 0 ? funcType.returnTypes : null;
       funcParamTypes = funcType.parameterTypes;
     } else {

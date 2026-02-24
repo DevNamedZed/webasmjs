@@ -2125,5 +2125,129 @@ export default abstract class OpCodeEmitter {
     return this.emit(OpCodes.i32x4_relaxed_dot_i8x16_i7x16_add_s);
   }
 
+  struct_new(varUInt32: number): any {
+    return this.emit(OpCodes.struct_new, varUInt32);
+  }
+
+  struct_new_default(varUInt32: number): any {
+    return this.emit(OpCodes.struct_new_default, varUInt32);
+  }
+
+  struct_get(typeIndex: number, fieldIndex: number): any {
+    return this.emit(OpCodes.struct_get, typeIndex, fieldIndex);
+  }
+
+  struct_get_s(typeIndex: number, fieldIndex: number): any {
+    return this.emit(OpCodes.struct_get_s, typeIndex, fieldIndex);
+  }
+
+  struct_get_u(typeIndex: number, fieldIndex: number): any {
+    return this.emit(OpCodes.struct_get_u, typeIndex, fieldIndex);
+  }
+
+  struct_set(typeIndex: number, fieldIndex: number): any {
+    return this.emit(OpCodes.struct_set, typeIndex, fieldIndex);
+  }
+
+  array_new(varUInt32: number): any {
+    return this.emit(OpCodes.array_new, varUInt32);
+  }
+
+  array_new_default(varUInt32: number): any {
+    return this.emit(OpCodes.array_new_default, varUInt32);
+  }
+
+  array_new_fixed(typeIndex: number, index: number): any {
+    return this.emit(OpCodes.array_new_fixed, typeIndex, index);
+  }
+
+  array_new_data(typeIndex: number, index: number): any {
+    return this.emit(OpCodes.array_new_data, typeIndex, index);
+  }
+
+  array_new_elem(typeIndex: number, index: number): any {
+    return this.emit(OpCodes.array_new_elem, typeIndex, index);
+  }
+
+  array_get(varUInt32: number): any {
+    return this.emit(OpCodes.array_get, varUInt32);
+  }
+
+  array_get_s(varUInt32: number): any {
+    return this.emit(OpCodes.array_get_s, varUInt32);
+  }
+
+  array_get_u(varUInt32: number): any {
+    return this.emit(OpCodes.array_get_u, varUInt32);
+  }
+
+  array_set(varUInt32: number): any {
+    return this.emit(OpCodes.array_set, varUInt32);
+  }
+
+  array_len(): any {
+    return this.emit(OpCodes.array_len);
+  }
+
+  array_fill(varUInt32: number): any {
+    return this.emit(OpCodes.array_fill, varUInt32);
+  }
+
+  array_copy(typeIndex: number, index: number): any {
+    return this.emit(OpCodes.array_copy, typeIndex, index);
+  }
+
+  array_init_data(typeIndex: number, index: number): any {
+    return this.emit(OpCodes.array_init_data, typeIndex, index);
+  }
+
+  array_init_elem(typeIndex: number, index: number): any {
+    return this.emit(OpCodes.array_init_elem, typeIndex, index);
+  }
+
+  ref_test(heapType: any): any {
+    return this.emit(OpCodes.ref_test, heapType);
+  }
+
+  ref_test_null(heapType: any): any {
+    return this.emit(OpCodes.ref_test_null, heapType);
+  }
+
+  ref_cast(heapType: any): any {
+    return this.emit(OpCodes.ref_cast, heapType);
+  }
+
+  ref_cast_null(heapType: any): any {
+    return this.emit(OpCodes.ref_cast_null, heapType);
+  }
+
+  br_on_cast(flags: number, labelBuilder: any, heapType1: any, heapType2: any): any {
+    return this.emit(OpCodes.br_on_cast, flags, labelBuilder, heapType1, heapType2);
+  }
+
+  br_on_cast_fail(flags: number, labelBuilder: any, heapType1: any, heapType2: any): any {
+    return this.emit(OpCodes.br_on_cast_fail, flags, labelBuilder, heapType1, heapType2);
+  }
+
+  any_convert_extern(): any {
+    return this.emit(OpCodes.any_convert_extern);
+  }
+
+  extern_convert_any(): any {
+    return this.emit(OpCodes.extern_convert_any);
+  }
+
+  ref_i31(): any {
+    return this.emit(OpCodes.ref_i31);
+  }
+
+  i31_get_s(): any {
+    return this.emit(OpCodes.i31_get_s);
+  }
+
+  i31_get_u(): any {
+    return this.emit(OpCodes.i31_get_u);
+  }
+
   abstract emit(opCode: any, ...args: any[]): any;
 }

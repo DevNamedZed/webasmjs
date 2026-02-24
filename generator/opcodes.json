@@ -10,6 +10,7 @@
     "opcodes/reference-types.json",
     "opcodes/simd.json",
     "opcodes/threads.json",
-    "opcodes/relaxed-simd.json"
+    "opcodes/relaxed-simd.json",
+    "opcodes/gc.json"
   ]
 }

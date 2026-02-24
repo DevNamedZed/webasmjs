@@ -14,8 +14,7 @@ export default class CustomSectionBuilder {
 
   write(writer: BinaryWriter): void {
     const sectionWriter = new BinaryWriter();
-    sectionWriter.writeVarUInt32(this.name.length);
-    sectionWriter.writeString(this.name);
+    sectionWriter.writeLenPrefixedString(this.name);
     if (this._data.length > 0) {
       sectionWriter.writeBytes(this._data);
     }

@@ -26,6 +26,9 @@ import TagBuilder from './TagBuilder';
 import CustomSectionBuilder from './CustomSectionBuilder';
 import FunctionEmitter from './FunctionEmitter';
 import VerificationError from './verification/VerificationError';
+import StructTypeBuilder, { StructField, StructTypeOptions } from './StructTypeBuilder';
+import ArrayTypeBuilder, { ArrayTypeOptions } from './ArrayTypeBuilder';
+import RecGroupBuilder, { TypeEntry } from './RecGroupBuilder';
 
 export default class ModuleBuilder {
   static defaultOptions: ModuleBuilderOptions = {
@@ -44,7 +47,8 @@ export default class ModuleBuilder {
   };
 
   _name: string;
-  _types: FuncTypeBuilder[] = [];
+  _types: TypeEntry[] = [];
+  _typeSectionEntries: (TypeEntry | RecGroupBuilder)[] = [];
   _imports: ImportBuilder[] = [];
   _functions: FunctionBuilder[] = [];
   _tables: TableBuilder[] = [];
@@ -112,7 +116,7 @@ export default class ModuleBuilder {
     }
 
     const funcTypeKey = FuncTypeBuilder.createKey(normalizedReturnTypes, parameters);
-    let funcType = this._types.find((x) => x.key === funcTypeKey);
+    let funcType = this._types.find((x) => x instanceof FuncTypeBuilder && x.key === funcTypeKey) as FuncTypeBuilder | undefined;
     if (!funcType) {
       funcType = new FuncTypeBuilder(
         funcTypeKey,
@@ -121,6 +125,7 @@ export default class ModuleBuilder {
         this._types.length
       );
       this._types.push(funcType);
+      this._typeSectionEntries.push(funcType);
     }
 
     return funcType;
@@ -141,7 +146,7 @@ export default class ModuleBuilder {
           x.fieldName === name
       )
     ) {
-      throw new Error(`An import already existing for ${moduleName}.${name}`);
+      throw new Error(`An import already exists for ${moduleName}.${name}`);
     }
 
     const importBuilder = new ImportBuilder(
@@ -174,7 +179,7 @@ export default class ModuleBuilder {
           x.fieldName === name
       )
     ) {
-      throw new Error(`An import already existing for ${moduleName}.${name}`);
+      throw new Error(`An import already exists for ${moduleName}.${name}`);
     }
 
     const tableType = new TableType(
@@ -215,7 +220,7 @@ export default class ModuleBuilder {
           x.fieldName === name
       )
     ) {
-      throw new Error(`An import already existing for ${moduleName}.${name}`);
+      throw new Error(`An import already exists for ${moduleName}.${name}`);
     }
 
     if ((this._memories.length !== 0 || this._importsIndexSpace.memory !== 0) && !this._resolvedFeatures.has('multi-memory')) {
@@ -249,7 +254,7 @@ export default class ModuleBuilder {
           x.fieldName === name
       )
     ) {
-      throw new Error(`An import already existing for ${moduleName}.${name}`);
+      throw new Error(`An import already exists for ${moduleName}.${name}`);
     }
 
     const globalType = new GlobalType(valueType, mutable);
@@ -381,7 +386,7 @@ export default class ModuleBuilder {
         (x) => x.externalKind === ExternalKind.Function && x.name === functionName
       )
     ) {
-      throw new Error(`An export already existing for a function named ${functionName}.`);
+      throw new Error(`An export already exists for a function named ${functionName}.`);
     }
 
     const exportBuilder = new ExportBuilder(
@@ -402,7 +407,7 @@ export default class ModuleBuilder {
         (x) => x.externalKind === ExternalKind.Memory && x.name === name
       )
     ) {
-      throw new Error(`An export already existing for memory named ${name}.`);
+      throw new Error(`An export already exists for memory named ${name}.`);
     }
 
     const exportBuilder = new ExportBuilder(name, ExternalKind.Memory, memoryBuilder);
@@ -419,7 +424,7 @@ export default class ModuleBuilder {
         (x) => x.externalKind === ExternalKind.Table && x.name === name
       )
     ) {
-      throw new Error(`An export already existing for a table named ${name}.`);
+      throw new Error(`An export already exists for a table named ${name}.`);
     }
 
     const exportBuilder = new ExportBuilder(name, ExternalKind.Table, tableBuilder);
@@ -439,7 +444,7 @@ export default class ModuleBuilder {
         (x) => x.externalKind === ExternalKind.Global && x.name === name
       )
     ) {
-      throw new Error(`An export already existing for a global named ${name}.`);
+      throw new Error(`An export already exists for a global named ${name}.`);
     }
 
     const exportBuilder = new ExportBuilder(name, ExternalKind.Global, globalBuilder);
@@ -452,7 +457,7 @@ export default class ModuleBuilder {
     elements: (FunctionBuilder | ImportBuilder)[],
     offset?: number | GlobalBuilder | ((asm: any) => void)
   ): ElementSegmentBuilder {
-    const segment = new ElementSegmentBuilder(table, elements, this._resolvedFeatures);
+    const segment = new ElementSegmentBuilder(table, elements, this._resolvedFeatures, this.disableVerification);
     if (offset !== undefined) {
       segment.offset(offset as any);
     }
@@ -464,7 +469,7 @@ export default class ModuleBuilder {
   definePassiveElementSegment(
     elements: (FunctionBuilder | ImportBuilder)[]
   ): ElementSegmentBuilder {
-    const segment = new ElementSegmentBuilder(null, elements, this._resolvedFeatures);
+    const segment = new ElementSegmentBuilder(null, elements, this._resolvedFeatures, this.disableVerification);
     segment.passive();
     this._elements.push(segment);
     return segment;
@@ -472,11 +477,12 @@ export default class ModuleBuilder {
 
   defineData(
     data: Uint8Array,
-    offset?: number | GlobalBuilder | ((asm: any) => void)
+    offset?: number | bigint | GlobalBuilder | ((asm: any) => void)
   ): DataSegmentBuilder {
     Arg.instanceOf('data', data, Uint8Array);
 
-    const dataSegmentBuilder = new DataSegmentBuilder(data, this._resolvedFeatures);
+    const hasMemory64 = this._memories.some((m) => m.isMemory64);
+    const dataSegmentBuilder = new DataSegmentBuilder(data, this._resolvedFeatures, hasMemory64, this.disableVerification);
     if (offset !== undefined) {
       dataSegmentBuilder.offset(offset as any);
     }
@@ -499,6 +505,53 @@ export default class ModuleBuilder {
     const customSectionBuilder = new CustomSectionBuilder(name, data);
     this._customSections.push(customSectionBuilder);
     return customSectionBuilder;
+  }
+
+  defineStructType(
+    fields: StructField[],
+    options?: StructTypeOptions
+  ): StructTypeBuilder {
+    this._requireFeature('gc');
+    const key = StructTypeBuilder.createKey(fields);
+    const structType = new StructTypeBuilder(key, fields, this._types.length, options);
+    this._types.push(structType);
+    this._typeSectionEntries.push(structType);
+    return structType;
+  }
+
+  defineArrayType(
+    elementType: ValueTypeDescriptor,
+    mutable: boolean,
+    options?: ArrayTypeOptions
+  ): ArrayTypeBuilder {
+    this._requireFeature('gc');
+    const key = ArrayTypeBuilder.createKey(elementType, mutable);
+    const arrayType = new ArrayTypeBuilder(key, elementType, mutable, this._types.length, options);
+    this._types.push(arrayType);
+    this._typeSectionEntries.push(arrayType);
+    return arrayType;
+  }
+
+  defineRecGroup(
+    callback: (builder: RecGroupBuilder) => void
+  ): RecGroupBuilder {
+    this._requireFeature('gc');
+    const recGroup = new RecGroupBuilder(this._types.length);
+    callback(recGroup);
+    if (recGroup._types.length === 0) {
+      throw new Error('Recursive type group must contain at least one type.');
+    }
+    recGroup._types.forEach((t) => {
+      this._types.push(t);
+    });
+    this._typeSectionEntries.push(recGroup);
+    return recGroup;
+  }
+
+  _requireFeature(feature: WasmFeature): void {
+    if (!this._resolvedFeatures.has(feature)) {
+      throw new Error(`The '${feature}' feature is required but not enabled. Use target 'latest' or add '${feature}' to features.`);
+    }
   }
 
   async instantiate(imports?: WebAssembly.Imports): Promise<WebAssembly.WebAssemblyInstantiatedSource> {

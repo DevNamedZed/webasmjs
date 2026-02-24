@@ -5,6 +5,17 @@ export default class ResizableLimits {
   maximum: number | null;
 
   constructor(initial: number, maximum: number | null = null) {
+    if (initial < 0) {
+      throw new Error('Initial size must be non-negative.');
+    }
+    if (maximum !== null) {
+      if (maximum < 0) {
+        throw new Error('Maximum size must be non-negative.');
+      }
+      if (initial > maximum) {
+        throw new Error(`Initial size (${initial}) must not exceed maximum size (${maximum}).`);
+      }
+    }
     this.initial = initial;
     this.maximum = maximum;
   }

@@ -101,6 +101,24 @@ export default class Immediate {
     return new Immediate(ImmediateType.ShuffleMask, [mask]);
   }
 
+  static createTypeIndexField(typeIndex: number, fieldIndex: number): Immediate {
+    return new Immediate(ImmediateType.TypeIndexField, [typeIndex, fieldIndex]);
+  }
+
+  static createTypeIndexIndex(typeIndex: number, index: number): Immediate {
+    return new Immediate(ImmediateType.TypeIndexIndex, [typeIndex, index]);
+  }
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  static createHeapType(heapType: any): Immediate {
+    return new Immediate(ImmediateType.HeapType, [heapType]);
+  }
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  static createBrOnCast(flags: number, labelBuilder: any, heapType1: any, heapType2: any): Immediate {
+    return new Immediate(ImmediateType.BrOnCast, [flags, labelBuilder, heapType1, heapType2]);
+  }
+
   writeBytes(writer: BinaryWriter): void {
     switch (this.type) {
       case ImmediateType.BlockSignature:
@@ -169,6 +187,22 @@ export default class Immediate {
 
       case ImmediateType.ShuffleMask:
         ImmediateEncoder.encodeShuffleMask(writer, this.values[0]);
+        break;
+
+      case ImmediateType.TypeIndexField:
+        ImmediateEncoder.encodeTypeIndexField(writer, this.values[0], this.values[1]);
+        break;
+
+      case ImmediateType.TypeIndexIndex:
+        ImmediateEncoder.encodeTypeIndexIndex(writer, this.values[0], this.values[1]);
+        break;
+
+      case ImmediateType.HeapType:
+        ImmediateEncoder.encodeHeapType(writer, this.values[0]);
+        break;
+
+      case ImmediateType.BrOnCast:
+        ImmediateEncoder.encodeBrOnCast(writer, this.values[0], this.values[1], this.values[2], this.values[3]);
         break;
 
       default:

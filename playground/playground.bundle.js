@@ -1,6 +1,9 @@
 "use strict";
 var webasmPlayground = (() => {
   // src/types.ts
+  function isConcreteRefType(vt) {
+    return "refPrefix" in vt;
+  }
   var LanguageType = {
     Int32: { name: "i32", value: 127, short: "i" },
     Int64: { name: "i64", value: 126, short: "l" },
@@ -10,12 +13,68 @@ var webasmPlayground = (() => {
     Func: { name: "func", value: 96, short: "f" },
     Void: { name: "void", value: 64, short: "v" }
   };
+  var RefType = {
+    FuncRef: { name: "funcref", value: 112, short: "F" },
+    ExternRef: { name: "externref", value: 111, short: "X" },
+    AnyRef: { name: "anyref", value: 110, short: "A" },
+    EqRef: { name: "eqref", value: 109, short: "E" },
+    I31Ref: { name: "i31ref", value: 108, short: "J" },
+    StructRef: { name: "structref", value: 107, short: "S" },
+    ArrayRef: { name: "arrayref", value: 106, short: "R" },
+    NullRef: { name: "nullref", value: 113, short: "N" },
+    NullFuncRef: { name: "nullfuncref", value: 115, short: "Z" },
+    NullExternRef: { name: "nullexternref", value: 114, short: "W" }
+  };
+  var HeapType = {
+    Func: { name: "func", value: 112 },
+    Extern: { name: "extern", value: 111 },
+    Any: { name: "any", value: 110 },
+    Eq: { name: "eq", value: 109 },
+    I31: { name: "i31", value: 108 },
+    Struct: { name: "struct", value: 107 },
+    Array: { name: "array", value: 106 },
+    None: { name: "none", value: 113 },
+    NoFunc: { name: "nofunc", value: 115 },
+    NoExtern: { name: "noextern", value: 114 }
+  };
+  var RefTypePrefix = {
+    Ref: 100,
+    RefNull: 99
+  };
+  function refType(typeIndex, name) {
+    return {
+      name: name || `(ref ${typeIndex})`,
+      value: RefTypePrefix.Ref,
+      short: `r${typeIndex}`,
+      refPrefix: RefTypePrefix.Ref,
+      typeIndex
+    };
+  }
+  function refNullType(typeIndex, name) {
+    return {
+      name: name || `(ref null ${typeIndex})`,
+      value: RefTypePrefix.RefNull,
+      short: `n${typeIndex}`,
+      refPrefix: RefTypePrefix.RefNull,
+      typeIndex
+    };
+  }
   var ValueType = {
     Int32: LanguageType.Int32,
     Int64: LanguageType.Int64,
     Float32: LanguageType.Float32,
     Float64: LanguageType.Float64,
-    V128: { name: "v128", value: 123, short: "v" }
+    V128: { name: "v128", value: 123, short: "v" },
+    FuncRef: RefType.FuncRef,
+    ExternRef: RefType.ExternRef,
+    AnyRef: RefType.AnyRef,
+    EqRef: RefType.EqRef,
+    I31Ref: RefType.I31Ref,
+    StructRef: RefType.StructRef,
+    ArrayRef: RefType.ArrayRef,
+    NullRef: RefType.NullRef,
+    NullFuncRef: RefType.NullFuncRef,
+    NullExternRef: RefType.NullExternRef
   };
   var BlockType = {
     Int32: LanguageType.Int32,
@@ -23,10 +82,20 @@ var webasmPlayground = (() => {
     Float32: LanguageType.Float32,
     Float64: LanguageType.Float64,
     V128: ValueType.V128,
-    Void: LanguageType.Void
+    Void: LanguageType.Void,
+    FuncRef: RefType.FuncRef,
+    ExternRef: RefType.ExternRef,
+    AnyRef: RefType.AnyRef,
+    EqRef: RefType.EqRef,
+    I31Ref: RefType.I31Ref,
+    StructRef: RefType.StructRef,
+    ArrayRef: RefType.ArrayRef
   };
   var ElementType = {
-    AnyFunc: LanguageType.AnyFunc
+    AnyFunc: LanguageType.AnyFunc,
+    FuncRef: RefType.FuncRef,
+    ExternRef: RefType.ExternRef,
+    AnyRef: RefType.AnyRef
   };
   var ExternalKind = {
     Function: { name: "Function", value: 0 },
@@ -54,8 +123,21 @@ var webasmPlayground = (() => {
   };
   var TypeForm = {
     Func: { name: "func", value: 96 },
-    Block: { name: "block", value: 64 }
+    Block: { name: "block", value: 64 },
+    Struct: { name: "struct", value: 95 },
+    Array: { name: "array", value: 94 },
+    Rec: { name: "rec", value: 78 },
+    Sub: { name: "sub", value: 80 },
+    SubFinal: { name: "sub_final", value: 79 }
   };
+  function writeValueType(writer, vt) {
+    if (isConcreteRefType(vt)) {
+      writer.writeVarInt7(vt.refPrefix);
+      writer.writeVarInt32(vt.typeIndex);
+    } else {
+      writer.writeVarInt7(vt.value);
+    }
+  }
 
   // src/Arg.ts
   var formatOrList = (values) => {
@@ -197,6 +279,12 @@ var webasmPlayground = (() => {
       const utfBytes = encoder.encode(value);
       this.writeBytes(utfBytes);
     }
+    writeLenPrefixedString(value) {
+      const encoder = new TextEncoder();
+      const utfBytes = encoder.encode(value);
+      this.writeVarUInt32(utfBytes.length);
+      this.writeBytes(utfBytes);
+    }
     writeFloat32(value) {
       const array = new Float32Array(1);
       array[0] = value;
@@ -243,6 +331,41 @@ var webasmPlayground = (() => {
     }
   };
 
+  // src/ArrayTypeBuilder.ts
+  var ArrayTypeBuilder = class {
+    constructor(key, elementType, mutable, index, options) {
+      this.key = key;
+      this.elementType = elementType;
+      this.mutable = mutable;
+      this.index = index;
+      this.superTypes = options?.superTypes || [];
+      this.final = options?.final !== false;
+    }
+    get typeForm() {
+      return TypeForm.Array;
+    }
+    static createKey(elementType, mutable) {
+      return `array(${elementType.short}:${mutable ? "m" : "i"})`;
+    }
+    write(writer) {
+      if (this.superTypes.length > 0 || !this.final) {
+        writer.writeVarInt7(this.final ? TypeForm.SubFinal.value : TypeForm.Sub.value);
+        writer.writeVarUInt32(this.superTypes.length);
+        this.superTypes.forEach((st) => {
+          writer.writeVarUInt32(st.index);
+        });
+      }
+      writer.writeVarInt7(TypeForm.Array.value);
+      writeValueType(writer, this.elementType);
+      writer.writeVarUInt1(this.mutable ? 1 : 0);
+    }
+    toBytes() {
+      const buffer = new BinaryWriter();
+      this.write(buffer);
+      return buffer.toArray();
+    }
+  };
+
   // src/BinaryModuleWriter.ts
   var MagicHeader = 1836278016;
   var Version = 1;
@@ -270,7 +393,7 @@ var webasmPlayground = (() => {
       section.write(writer);
     }
     writeTypeSection(writer) {
-      _BinaryModuleWriter.writeSection(writer, SectionType.Type, this.moduleBuilder._types);
+      _BinaryModuleWriter.writeSection(writer, SectionType.Type, this.moduleBuilder._typeSectionEntries);
     }
     writeImportSection(writer) {
       _BinaryModuleWriter.writeSection(writer, SectionType.Import, this.moduleBuilder._imports);
@@ -317,6 +440,19 @@ var webasmPlayground = (() => {
     writeCodeSection(writer) {
       _BinaryModuleWriter.writeSection(writer, SectionType.Code, this.moduleBuilder._functions);
     }
+    writeDataCountSection(writer) {
+      if (this.moduleBuilder._data.length === 0) {
+        return;
+      }
+      const hasPassiveSegment = this.moduleBuilder._data.some((d) => d._passive);
+      if (!hasPassiveSegment) {
+        return;
+      }
+      const sectionWriter = new BinaryWriter();
+      sectionWriter.writeVarUInt32(this.moduleBuilder._data.length);
+      _BinaryModuleWriter.writeSectionHeader(writer, SectionType.DataCount, sectionWriter.length);
+      writer.writeBytes(sectionWriter);
+    }
     writeDataSection(writer) {
       _BinaryModuleWriter.writeSection(writer, SectionType.Data, this.moduleBuilder._data);
     }
@@ -324,8 +460,7 @@ var webasmPlayground = (() => {
       const mod = this.moduleBuilder;
       const nameWriter = new BinaryWriter();
       const moduleNameWriter = new BinaryWriter();
-      moduleNameWriter.writeVarUInt32(mod._name.length);
-      moduleNameWriter.writeString(mod._name);
+      moduleNameWriter.writeLenPrefixedString(mod._name);
       nameWriter.writeVarUInt7(0);
       nameWriter.writeVarUInt32(moduleNameWriter.length);
       nameWriter.writeBytes(moduleNameWriter);
@@ -339,8 +474,7 @@ var webasmPlayground = (() => {
         allFunctions.forEach((f, i) => {
           const name = "name" in f ? f.name : `${f.moduleName}.${f.fieldName}`;
           funcNameWriter.writeVarUInt32(i);
-          funcNameWriter.writeVarUInt32(name.length);
-          funcNameWriter.writeString(name);
+          funcNameWriter.writeLenPrefixedString(name);
         });
         nameWriter.writeVarUInt7(1);
         nameWriter.writeVarUInt32(funcNameWriter.length);
@@ -373,8 +507,7 @@ var webasmPlayground = (() => {
           localNameWriter.writeVarUInt32(namedEntries.length);
           namedEntries.forEach((entry) => {
             localNameWriter.writeVarUInt32(entry.index);
-            localNameWriter.writeVarUInt32(entry.name.length);
-            localNameWriter.writeString(entry.name);
+            localNameWriter.writeLenPrefixedString(entry.name);
           });
         });
         nameWriter.writeVarUInt7(2);
@@ -397,8 +530,7 @@ var webasmPlayground = (() => {
         globalNameWriter.writeVarUInt32(namedGlobals.length);
         namedGlobals.forEach((entry) => {
           globalNameWriter.writeVarUInt32(entry.index);
-          globalNameWriter.writeVarUInt32(entry.name.length);
-          globalNameWriter.writeString(entry.name);
+          globalNameWriter.writeLenPrefixedString(entry.name);
         });
         nameWriter.writeVarUInt7(7);
         nameWriter.writeVarUInt32(globalNameWriter.length);
@@ -406,8 +538,7 @@ var webasmPlayground = (() => {
       }
       const sectionWriter = new BinaryWriter();
       const sectionName = "name";
-      sectionWriter.writeVarUInt32(sectionName.length);
-      sectionWriter.writeString(sectionName);
+      sectionWriter.writeLenPrefixedString(sectionName);
       sectionWriter.writeBytes(nameWriter);
       writer.writeVarUInt7(0);
       writer.writeVarUInt32(sectionWriter.length);
@@ -435,6 +566,7 @@ var webasmPlayground = (() => {
       this.writeExportSection(writer);
       this.writeStartSection(writer);
       this.writeElementSection(writer);
+      this.writeDataCountSection(writer);
       this.writeCodeSection(writer);
       this.writeDataSection(writer);
       this.writeCustomSections(writer);
@@ -4948,6 +5080,301 @@ var webasmPlayground = (() => {
       pushOperands: ["V128"],
       prefix: 253,
       feature: "relaxed-simd"
+    },
+    "struct_new": {
+      value: 0,
+      mnemonic: "struct.new",
+      immediate: "VarUInt32",
+      stackBehavior: "Push",
+      pushOperands: ["Any"],
+      prefix: 251,
+      feature: "gc"
+    },
+    "struct_new_default": {
+      value: 1,
+      mnemonic: "struct.new_default",
+      immediate: "VarUInt32",
+      stackBehavior: "Push",
+      pushOperands: ["Any"],
+      prefix: 251,
+      feature: "gc"
+    },
+    "struct_get": {
+      value: 2,
+      mnemonic: "struct.get",
+      immediate: "TypeIndexField",
+      stackBehavior: "PopPush",
+      popOperands: ["Any"],
+      pushOperands: ["Any"],
+      prefix: 251,
+      feature: "gc"
+    },
+    "struct_get_s": {
+      value: 3,
+      mnemonic: "struct.get_s",
+      immediate: "TypeIndexField",
+      stackBehavior: "PopPush",
+      popOperands: ["Any"],
+      pushOperands: ["Int32"],
+      prefix: 251,
+      feature: "gc"
+    },
+    "struct_get_u": {
+      value: 4,
+      mnemonic: "struct.get_u",
+      immediate: "TypeIndexField",
+      stackBehavior: "PopPush",
+      popOperands: ["Any"],
+      pushOperands: ["Int32"],
+      prefix: 251,
+      feature: "gc"
+    },
+    "struct_set": {
+      value: 5,
+      mnemonic: "struct.set",
+      immediate: "TypeIndexField",
+      stackBehavior: "Pop",
+      popOperands: ["Any", "Any"],
+      prefix: 251,
+      feature: "gc"
+    },
+    "array_new": {
+      value: 6,
+      mnemonic: "array.new",
+      immediate: "VarUInt32",
+      stackBehavior: "PopPush",
+      popOperands: ["Any", "Int32"],
+      pushOperands: ["Any"],
+      prefix: 251,
+      feature: "gc"
+    },
+    "array_new_default": {
+      value: 7,
+      mnemonic: "array.new_default",
+      immediate: "VarUInt32",
+      stackBehavior: "PopPush",
+      popOperands: ["Int32"],
+      pushOperands: ["Any"],
+      prefix: 251,
+      feature: "gc"
+    },
+    "array_new_fixed": {
+      value: 8,
+      mnemonic: "array.new_fixed",
+      immediate: "TypeIndexIndex",
+      stackBehavior: "Push",
+      pushOperands: ["Any"],
+      prefix: 251,
+      feature: "gc"
+    },
+    "array_new_data": {
+      value: 9,
+      mnemonic: "array.new_data",
+      immediate: "TypeIndexIndex",
+      stackBehavior: "PopPush",
+      popOperands: ["Int32", "Int32"],
+      pushOperands: ["Any"],
+      prefix: 251,
+      feature: "gc"
+    },
+    "array_new_elem": {
+      value: 10,
+      mnemonic: "array.new_elem",
+      immediate: "TypeIndexIndex",
+      stackBehavior: "PopPush",
+      popOperands: ["Int32", "Int32"],
+      pushOperands: ["Any"],
+      prefix: 251,
+      feature: "gc"
+    },
+    "array_get": {
+      value: 11,
+      mnemonic: "array.get",
+      immediate: "VarUInt32",
+      stackBehavior: "PopPush",
+      popOperands: ["Any", "Int32"],
+      pushOperands: ["Any"],
+      prefix: 251,
+      feature: "gc"
+    },
+    "array_get_s": {
+      value: 12,
+      mnemonic: "array.get_s",
+      immediate: "VarUInt32",
+      stackBehavior: "PopPush",
+      popOperands: ["Any", "Int32"],
+      pushOperands: ["Int32"],
+      prefix: 251,
+      feature: "gc"
+    },
+    "array_get_u": {
+      value: 13,
+      mnemonic: "array.get_u",
+      immediate: "VarUInt32",
+      stackBehavior: "PopPush",
+      popOperands: ["Any", "Int32"],
+      pushOperands: ["Int32"],
+      prefix: 251,
+      feature: "gc"
+    },
+    "array_set": {
+      value: 14,
+      mnemonic: "array.set",
+      immediate: "VarUInt32",
+      stackBehavior: "Pop",
+      popOperands: ["Any", "Int32", "Any"],
+      prefix: 251,
+      feature: "gc"
+    },
+    "array_len": {
+      value: 15,
+      mnemonic: "array.len",
+      stackBehavior: "PopPush",
+      popOperands: ["Any"],
+      pushOperands: ["Int32"],
+      prefix: 251,
+      feature: "gc"
+    },
+    "array_fill": {
+      value: 16,
+      mnemonic: "array.fill",
+      immediate: "VarUInt32",
+      stackBehavior: "Pop",
+      popOperands: ["Any", "Int32", "Any", "Int32"],
+      prefix: 251,
+      feature: "gc"
+    },
+    "array_copy": {
+      value: 17,
+      mnemonic: "array.copy",
+      immediate: "TypeIndexIndex",
+      stackBehavior: "Pop",
+      popOperands: ["Any", "Int32", "Any", "Int32", "Int32"],
+      prefix: 251,
+      feature: "gc"
+    },
+    "array_init_data": {
+      value: 18,
+      mnemonic: "array.init_data",
+      immediate: "TypeIndexIndex",
+      stackBehavior: "Pop",
+      popOperands: ["Any", "Int32", "Int32", "Int32"],
+      prefix: 251,
+      feature: "gc"
+    },
+    "array_init_elem": {
+      value: 19,
+      mnemonic: "array.init_elem",
+      immediate: "TypeIndexIndex",
+      stackBehavior: "Pop",
+      popOperands: ["Any", "Int32", "Int32", "Int32"],
+      prefix: 251,
+      feature: "gc"
+    },
+    "ref_test": {
+      value: 20,
+      mnemonic: "ref.test",
+      immediate: "HeapType",
+      stackBehavior: "PopPush",
+      popOperands: ["Any"],
+      pushOperands: ["Int32"],
+      prefix: 251,
+      feature: "gc"
+    },
+    "ref_test_null": {
+      value: 21,
+      mnemonic: "ref.test null",
+      immediate: "HeapType",
+      stackBehavior: "PopPush",
+      popOperands: ["Any"],
+      pushOperands: ["Int32"],
+      prefix: 251,
+      feature: "gc"
+    },
+    "ref_cast": {
+      value: 22,
+      mnemonic: "ref.cast",
+      immediate: "HeapType",
+      stackBehavior: "PopPush",
+      popOperands: ["Any"],
+      pushOperands: ["Any"],
+      prefix: 251,
+      feature: "gc"
+    },
+    "ref_cast_null": {
+      value: 23,
+      mnemonic: "ref.cast null",
+      immediate: "HeapType",
+      stackBehavior: "PopPush",
+      popOperands: ["Any"],
+      pushOperands: ["Any"],
+      prefix: 251,
+      feature: "gc"
+    },
+    "br_on_cast": {
+      value: 24,
+      mnemonic: "br_on_cast",
+      immediate: "BrOnCast",
+      stackBehavior: "PopPush",
+      popOperands: ["Any"],
+      pushOperands: ["Any"],
+      prefix: 251,
+      feature: "gc"
+    },
+    "br_on_cast_fail": {
+      value: 25,
+      mnemonic: "br_on_cast_fail",
+      immediate: "BrOnCast",
+      stackBehavior: "PopPush",
+      popOperands: ["Any"],
+      pushOperands: ["Any"],
+      prefix: 251,
+      feature: "gc"
+    },
+    "any_convert_extern": {
+      value: 26,
+      mnemonic: "any.convert_extern",
+      stackBehavior: "PopPush",
+      popOperands: ["Any"],
+      pushOperands: ["Any"],
+      prefix: 251,
+      feature: "gc"
+    },
+    "extern_convert_any": {
+      value: 27,
+      mnemonic: "extern.convert_any",
+      stackBehavior: "PopPush",
+      popOperands: ["Any"],
+      pushOperands: ["Any"],
+      prefix: 251,
+      feature: "gc"
+    },
+    "ref_i31": {
+      value: 28,
+      mnemonic: "ref.i31",
+      stackBehavior: "PopPush",
+      popOperands: ["Int32"],
+      pushOperands: ["Any"],
+      prefix: 251,
+      feature: "gc"
+    },
+    "i31_get_s": {
+      value: 29,
+      mnemonic: "i31.get_s",
+      stackBehavior: "PopPush",
+      popOperands: ["Any"],
+      pushOperands: ["Int32"],
+      prefix: 251,
+      feature: "gc"
+    },
+    "i31_get_u": {
+      value: 30,
+      mnemonic: "i31.get_u",
+      stackBehavior: "PopPush",
+      popOperands: ["Any"],
+      pushOperands: ["Int32"],
+      prefix: 251,
+      feature: "gc"
     }
   };
   var OpCodes_default = OpCodes;
@@ -5362,8 +5789,7 @@ var webasmPlayground = (() => {
     }
     write(writer) {
       const sectionWriter = new BinaryWriter();
-      sectionWriter.writeVarUInt32(this.name.length);
-      sectionWriter.writeString(this.name);
+      sectionWriter.writeLenPrefixedString(this.name);
       if (this._data.length > 0) {
         sectionWriter.writeBytes(this._data);
       }
@@ -5459,7 +5885,8 @@ var webasmPlayground = (() => {
       this._initExpressionEmitter = new InitExpressionEmitter(
         "Global" /* Global */,
         this.valueType,
-        this._moduleBuilder.features
+        this._moduleBuilder.features,
+        this._moduleBuilder.disableVerification
       );
       if (callback) {
         callback(this._initExpressionEmitter);
@@ -5547,7 +5974,7 @@ var webasmPlayground = (() => {
   };
 
   // src/ImmediateEncoder.ts
-  var ImmediateEncoder = class {
+  var ImmediateEncoder = class _ImmediateEncoder {
     static encodeBlockSignature(writer, blockType) {
       writer.writeVarInt7(blockType.value);
     }
@@ -5651,6 +6078,34 @@ var webasmPlayground = (() => {
         writer.writeByte(mask[i]);
       }
     }
+    static encodeTypeIndexField(writer, typeIndex, fieldIndex) {
+      writer.writeVarUInt32(typeIndex);
+      writer.writeVarUInt32(fieldIndex);
+    }
+    static encodeTypeIndexIndex(writer, typeIndex, index) {
+      writer.writeVarUInt32(typeIndex);
+      writer.writeVarUInt32(index);
+    }
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    static encodeHeapType(writer, heapType) {
+      if (typeof heapType === "number") {
+        writer.writeVarInt32(heapType);
+      } else if (heapType && typeof heapType.value === "number") {
+        writer.writeVarInt7(heapType.value);
+      } else if (heapType && typeof heapType.index === "number") {
+        writer.writeVarInt32(heapType.index);
+      } else {
+        throw new Error("Invalid heap type argument.");
+      }
+    }
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    static encodeBrOnCast(writer, flags, labelBuilder, heapType1, heapType2) {
+      writer.writeByte(flags);
+      const relativeDepth = labelBuilder;
+      writer.writeVarUInt32(typeof relativeDepth === "number" ? relativeDepth : 0);
+      _ImmediateEncoder.encodeHeapType(writer, heapType1);
+      _ImmediateEncoder.encodeHeapType(writer, heapType2);
+    }
   };
 
   // src/Immediate.ts
@@ -5730,6 +6185,20 @@ var webasmPlayground = (() => {
       }
       return new _Immediate("ShuffleMask" /* ShuffleMask */, [mask]);
     }
+    static createTypeIndexField(typeIndex, fieldIndex) {
+      return new _Immediate("TypeIndexField" /* TypeIndexField */, [typeIndex, fieldIndex]);
+    }
+    static createTypeIndexIndex(typeIndex, index) {
+      return new _Immediate("TypeIndexIndex" /* TypeIndexIndex */, [typeIndex, index]);
+    }
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    static createHeapType(heapType) {
+      return new _Immediate("HeapType" /* HeapType */, [heapType]);
+    }
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    static createBrOnCast(flags, labelBuilder, heapType1, heapType2) {
+      return new _Immediate("BrOnCast" /* BrOnCast */, [flags, labelBuilder, heapType1, heapType2]);
+    }
     writeBytes(writer) {
       switch (this.type) {
         case "BlockSignature" /* BlockSignature */:
@@ -5782,6 +6251,18 @@ var webasmPlayground = (() => {
           break;
         case "ShuffleMask" /* ShuffleMask */:
           ImmediateEncoder.encodeShuffleMask(writer, this.values[0]);
+          break;
+        case "TypeIndexField" /* TypeIndexField */:
+          ImmediateEncoder.encodeTypeIndexField(writer, this.values[0], this.values[1]);
+          break;
+        case "TypeIndexIndex" /* TypeIndexIndex */:
+          ImmediateEncoder.encodeTypeIndexIndex(writer, this.values[0], this.values[1]);
+          break;
+        case "HeapType" /* HeapType */:
+          ImmediateEncoder.encodeHeapType(writer, this.values[0]);
+          break;
+        case "BrOnCast" /* BrOnCast */:
+          ImmediateEncoder.encodeBrOnCast(writer, this.values[0], this.values[1], this.values[2], this.values[3]);
           break;
         default:
           throw new Error("Cannot encode unknown operand type.");
@@ -7435,6 +7916,99 @@ var webasmPlayground = (() => {
     relaxed_dot_i8x16_i7x16_add_s_i32x4() {
       return this.emit(OpCodes_default.i32x4_relaxed_dot_i8x16_i7x16_add_s);
     }
+    struct_new(varUInt32) {
+      return this.emit(OpCodes_default.struct_new, varUInt32);
+    }
+    struct_new_default(varUInt32) {
+      return this.emit(OpCodes_default.struct_new_default, varUInt32);
+    }
+    struct_get(typeIndex, fieldIndex) {
+      return this.emit(OpCodes_default.struct_get, typeIndex, fieldIndex);
+    }
+    struct_get_s(typeIndex, fieldIndex) {
+      return this.emit(OpCodes_default.struct_get_s, typeIndex, fieldIndex);
+    }
+    struct_get_u(typeIndex, fieldIndex) {
+      return this.emit(OpCodes_default.struct_get_u, typeIndex, fieldIndex);
+    }
+    struct_set(typeIndex, fieldIndex) {
+      return this.emit(OpCodes_default.struct_set, typeIndex, fieldIndex);
+    }
+    array_new(varUInt32) {
+      return this.emit(OpCodes_default.array_new, varUInt32);
+    }
+    array_new_default(varUInt32) {
+      return this.emit(OpCodes_default.array_new_default, varUInt32);
+    }
+    array_new_fixed(typeIndex, index) {
+      return this.emit(OpCodes_default.array_new_fixed, typeIndex, index);
+    }
+    array_new_data(typeIndex, index) {
+      return this.emit(OpCodes_default.array_new_data, typeIndex, index);
+    }
+    array_new_elem(typeIndex, index) {
+      return this.emit(OpCodes_default.array_new_elem, typeIndex, index);
+    }
+    array_get(varUInt32) {
+      return this.emit(OpCodes_default.array_get, varUInt32);
+    }
+    array_get_s(varUInt32) {
+      return this.emit(OpCodes_default.array_get_s, varUInt32);
+    }
+    array_get_u(varUInt32) {
+      return this.emit(OpCodes_default.array_get_u, varUInt32);
+    }
+    array_set(varUInt32) {
+      return this.emit(OpCodes_default.array_set, varUInt32);
+    }
+    array_len() {
+      return this.emit(OpCodes_default.array_len);
+    }
+    array_fill(varUInt32) {
+      return this.emit(OpCodes_default.array_fill, varUInt32);
+    }
+    array_copy(typeIndex, index) {
+      return this.emit(OpCodes_default.array_copy, typeIndex, index);
+    }
+    array_init_data(typeIndex, index) {
+      return this.emit(OpCodes_default.array_init_data, typeIndex, index);
+    }
+    array_init_elem(typeIndex, index) {
+      return this.emit(OpCodes_default.array_init_elem, typeIndex, index);
+    }
+    ref_test(heapType) {
+      return this.emit(OpCodes_default.ref_test, heapType);
+    }
+    ref_test_null(heapType) {
+      return this.emit(OpCodes_default.ref_test_null, heapType);
+    }
+    ref_cast(heapType) {
+      return this.emit(OpCodes_default.ref_cast, heapType);
+    }
+    ref_cast_null(heapType) {
+      return this.emit(OpCodes_default.ref_cast_null, heapType);
+    }
+    br_on_cast(flags, labelBuilder, heapType1, heapType2) {
+      return this.emit(OpCodes_default.br_on_cast, flags, labelBuilder, heapType1, heapType2);
+    }
+    br_on_cast_fail(flags, labelBuilder, heapType1, heapType2) {
+      return this.emit(OpCodes_default.br_on_cast_fail, flags, labelBuilder, heapType1, heapType2);
+    }
+    any_convert_extern() {
+      return this.emit(OpCodes_default.any_convert_extern);
+    }
+    extern_convert_any() {
+      return this.emit(OpCodes_default.extern_convert_any);
+    }
+    ref_i31() {
+      return this.emit(OpCodes_default.ref_i31);
+    }
+    i31_get_s() {
+      return this.emit(OpCodes_default.i31_get_s);
+    }
+    i31_get_u() {
+      return this.emit(OpCodes_default.i31_get_u);
+    }
   };
 
   // src/verification/ControlFlowBlock.ts
@@ -7667,11 +8241,11 @@ var webasmPlayground = (() => {
       writer.writeVarInt7(TypeForm.Func.value);
       writer.writeVarUInt32(this.parameterTypes.length);
       this.parameterTypes.forEach((x) => {
-        writer.writeVarInt7(x.value);
+        writeValueType(writer, x);
       });
       writer.writeVarUInt32(this.returnTypes.length);
       this.returnTypes.forEach((x) => {
-        writer.writeVarInt7(x.value);
+        writeValueType(writer, x);
       });
     }
     toSignature() {
@@ -8154,6 +8728,18 @@ var webasmPlayground = (() => {
         case "ShuffleMask" /* ShuffleMask */:
           validateParameters(immediateType, values, 1);
           return Immediate.createShuffleMask(values[0]);
+        case "TypeIndexField" /* TypeIndexField */:
+          validateParameters(immediateType, values, 2);
+          return Immediate.createTypeIndexField(values[0], values[1]);
+        case "TypeIndexIndex" /* TypeIndexIndex */:
+          validateParameters(immediateType, values, 2);
+          return Immediate.createTypeIndexIndex(values[0], values[1]);
+        case "HeapType" /* HeapType */:
+          validateParameters(immediateType, values, 1);
+          return Immediate.createHeapType(values[0]);
+        case "BrOnCast" /* BrOnCast */:
+          validateParameters(immediateType, values, 4);
+          return Immediate.createBrOnCast(values[0], values[1], values[2], values[3]);
         default:
           throw new Error("Unknown operand type.");
       }
@@ -8162,8 +8748,8 @@ var webasmPlayground = (() => {
 
   // src/InitExpressionEmitter.ts
   var InitExpressionEmitter = class extends AssemblyEmitter {
-    constructor(initExpressionType, valueType, features) {
-      super(new FuncTypeSignature([valueType], []));
+    constructor(initExpressionType, valueType, features, disableVerification) {
+      super(new FuncTypeSignature([valueType], []), { disableVerification: disableVerification || false });
       this._initExpressionType = initExpressionType;
       this._features = features || /* @__PURE__ */ new Set();
     }
@@ -8234,6 +8820,28 @@ var webasmPlayground = (() => {
           }
           break;
         }
+        // GC: allow struct/array/ref operations in init expressions
+        case OpCodes_default.struct_new:
+        case OpCodes_default.struct_new_default:
+        case OpCodes_default.array_new:
+        case OpCodes_default.array_new_default:
+        case OpCodes_default.array_new_fixed:
+        case OpCodes_default.ref_i31:
+        case OpCodes_default.any_convert_extern:
+        case OpCodes_default.extern_convert_any: {
+          if (!this._features.has("gc")) {
+            throw new Error(
+              `Opcode ${opCode.mnemonic} requires the 'gc' feature to be used in an initializer expression.`
+            );
+          }
+          break;
+        }
+        // ref.null is valid in init expressions (reference-types or gc)
+        case OpCodes_default.ref_null:
+          break;
+        // ref.func is valid in element segment init expressions
+        case OpCodes_default.ref_func:
+          break;
         default:
           throw new Error(
             `Opcode ${opCode.mnemonic} is not supported in an initializer expression.`
@@ -8244,12 +8852,15 @@ var webasmPlayground = (() => {
 
   // src/DataSegmentBuilder.ts
   var DataSegmentBuilder = class {
-    constructor(data, features) {
+    constructor(data, features, memory64, disableVerification) {
       this._initExpressionEmitter = null;
       this._passive = false;
       this._memoryIndex = 0;
+      this._memory64 = false;
       this._data = data;
       this._features = features || /* @__PURE__ */ new Set();
+      this._memory64 = memory64 || false;
+      this._disableVerification = disableVerification || false;
     }
     passive() {
       this._passive = true;
@@ -8265,8 +8876,9 @@ var webasmPlayground = (() => {
       }
       this._initExpressionEmitter = new InitExpressionEmitter(
         "Data" /* Data */,
-        ValueType.Int32,
-        this._features
+        this._memory64 ? ValueType.Int64 : ValueType.Int32,
+        this._features,
+        this._disableVerification
       );
       if (callback) {
         callback(this._initExpressionEmitter);
@@ -8281,9 +8893,17 @@ var webasmPlayground = (() => {
         this.createInitEmitter((asm) => {
           asm.get_global(value);
         });
+      } else if (typeof value === "bigint") {
+        this.createInitEmitter((asm) => {
+          asm.const_i64(value);
+        });
       } else if (typeof value === "number") {
         this.createInitEmitter((asm) => {
-          asm.const_i32(value);
+          if (this._memory64) {
+            asm.const_i64(value);
+          } else {
+            asm.const_i32(value);
+          }
         });
       } else {
         throw new Error("Unsupported offset");
@@ -8397,13 +9017,14 @@ var webasmPlayground = (() => {
 
   // src/ElementSegmentBuilder.ts
   var ElementSegmentBuilder = class {
-    constructor(table, functions, features) {
+    constructor(table, functions, features, disableVerification) {
       this._functions = [];
       this._initExpressionEmitter = null;
       this._passive = false;
       this._table = table;
       this._functions = functions;
       this._features = features || /* @__PURE__ */ new Set();
+      this._disableVerification = disableVerification || false;
     }
     passive() {
       this._passive = true;
@@ -8416,7 +9037,8 @@ var webasmPlayground = (() => {
       this._initExpressionEmitter = new InitExpressionEmitter(
         "Element" /* Element */,
         ValueType.Int32,
-        this._features
+        this._features,
+        this._disableVerification
       );
       if (callback) {
         callback(this._initExpressionEmitter);
@@ -8509,6 +9131,17 @@ var webasmPlayground = (() => {
   // src/ResizableLimits.ts
   var ResizableLimits = class {
     constructor(initial, maximum = null) {
+      if (initial < 0) {
+        throw new Error("Initial size must be non-negative.");
+      }
+      if (maximum !== null) {
+        if (maximum < 0) {
+          throw new Error("Maximum size must be non-negative.");
+        }
+        if (initial > maximum) {
+          throw new Error(`Initial size (${initial}) must not exceed maximum size (${maximum}).`);
+        }
+      }
       this.initial = initial;
       this.maximum = maximum;
     }
@@ -8638,6 +9271,59 @@ var webasmPlayground = (() => {
     }
   };
 
+  // src/StructTypeBuilder.ts
+  var StructTypeBuilder = class {
+    constructor(key, fields, index, options) {
+      this.key = key;
+      this.fields = fields;
+      this.index = index;
+      this.superTypes = options?.superTypes || [];
+      this.final = options?.final !== false;
+    }
+    get typeForm() {
+      return TypeForm.Struct;
+    }
+    static createKey(fields) {
+      let key = "struct(";
+      fields.forEach((f, i) => {
+        key += f.type.short;
+        key += f.mutable ? ":m" : ":i";
+        if (i !== fields.length - 1) {
+          key += ",";
+        }
+      });
+      key += ")";
+      return key;
+    }
+    getFieldIndex(name) {
+      const index = this.fields.findIndex((f) => f.name === name);
+      if (index === -1) {
+        throw new Error(`Field '${name}' not found in struct type.`);
+      }
+      return index;
+    }
+    write(writer) {
+      if (this.superTypes.length > 0 || !this.final) {
+        writer.writeVarInt7(this.final ? TypeForm.SubFinal.value : TypeForm.Sub.value);
+        writer.writeVarUInt32(this.superTypes.length);
+        this.superTypes.forEach((st) => {
+          writer.writeVarUInt32(st.index);
+        });
+      }
+      writer.writeVarInt7(TypeForm.Struct.value);
+      writer.writeVarUInt32(this.fields.length);
+      this.fields.forEach((field) => {
+        writeValueType(writer, field.type);
+        writer.writeVarUInt1(field.mutable ? 1 : 0);
+      });
+    }
+    toBytes() {
+      const buffer = new BinaryWriter();
+      this.write(buffer);
+      return buffer.toArray();
+    }
+  };
+
   // src/TextModuleWriter.ts
   var TextModuleWriter = class {
     constructor(moduleBuilder) {
@@ -8663,13 +9349,24 @@ var webasmPlayground = (() => {
     }
     writeTypes(lines, mod) {
       mod._types.forEach((type, i) => {
-        const params = type.parameterTypes.map((p) => p.name).join(" ");
-        const results = type.returnTypes.map((r) => r.name).join(" ");
-        let sig = `(func`;
-        if (params.length > 0) sig += ` (param ${params})`;
-        if (results.length > 0) sig += ` (result ${results})`;
-        sig += ")";
-        lines.push(`  (type (;${i};) ${sig})`);
+        if (type instanceof FuncTypeBuilder) {
+          const params = type.parameterTypes.map((p) => p.name).join(" ");
+          const results = type.returnTypes.map((r) => r.name).join(" ");
+          let sig = `(func`;
+          if (params.length > 0) sig += ` (param ${params})`;
+          if (results.length > 0) sig += ` (result ${results})`;
+          sig += ")";
+          lines.push(`  (type (;${i};) ${sig})`);
+        } else if (type instanceof StructTypeBuilder) {
+          const fields = type.fields.map((f) => {
+            const mut = f.mutable ? `(mut ${f.type.name})` : f.type.name;
+            return `(field $${f.name} ${mut})`;
+          }).join(" ");
+          lines.push(`  (type (;${i};) (struct ${fields}))`);
+        } else if (type instanceof ArrayTypeBuilder) {
+          const mut = type.mutable ? `(mut ${type.elementType.name})` : type.elementType.name;
+          lines.push(`  (type (;${i};) (array ${mut}))`);
+        }
       });
     }
     writeImports(lines, mod) {
@@ -8825,6 +9522,21 @@ var webasmPlayground = (() => {
           }
           return text;
         }
+        case "VarUInt32" /* VarUInt32 */:
+          return String(values[0]);
+        case "TypeIndexField" /* TypeIndexField */:
+          return `${values[0]} ${values[1]}`;
+        case "TypeIndexIndex" /* TypeIndexIndex */:
+          return `${values[0]} ${values[1]}`;
+        case "HeapType" /* HeapType */: {
+          const ht = values[0];
+          if (typeof ht === "number") return String(ht);
+          if (ht && typeof ht.name === "string") return ht.name;
+          if (ht && typeof ht.index === "number") return String(ht.index);
+          return "";
+        }
+        case "BrOnCast" /* BrOnCast */:
+          return `${values[0]} ${values[1]} ${values[2]} ${values[3]}`;
         default:
           return "";
       }
@@ -8990,10 +9702,66 @@ var webasmPlayground = (() => {
     }
   };
 
+  // src/RecGroupBuilder.ts
+  var RecGroupBuilder = class {
+    constructor(baseIndex) {
+      this._types = [];
+      this._baseIndex = baseIndex;
+    }
+    addStructType(fields, options) {
+      const index = this._baseIndex + this._types.length;
+      const key = StructTypeBuilder.createKey(fields);
+      const builder = new StructTypeBuilder(key, fields, index, options);
+      this._types.push(builder);
+      return builder;
+    }
+    addArrayType(elementType, mutable, options) {
+      const index = this._baseIndex + this._types.length;
+      const key = ArrayTypeBuilder.createKey(elementType, mutable);
+      const builder = new ArrayTypeBuilder(key, elementType, mutable, index, options);
+      this._types.push(builder);
+      return builder;
+    }
+    addFuncType(returnTypes, parameterTypes) {
+      const index = this._baseIndex + this._types.length;
+      const key = FuncTypeBuilder.createKey(returnTypes, parameterTypes);
+      const builder = new FuncTypeBuilder(key, returnTypes, parameterTypes, index);
+      this._types.push(builder);
+      return builder;
+    }
+    /**
+     * Create a nullable reference to a type within this group by group-relative index.
+     */
+    refNull(groupRelativeIndex) {
+      return refNullType(this._baseIndex + groupRelativeIndex);
+    }
+    /**
+     * Create a non-nullable reference to a type within this group by group-relative index.
+     */
+    ref(groupRelativeIndex) {
+      return refType(this._baseIndex + groupRelativeIndex);
+    }
+    write(writer) {
+      if (this._types.length === 1) {
+        this._types[0].write(writer);
+      } else {
+        writer.writeVarInt7(TypeForm.Rec.value);
+        writer.writeVarUInt32(this._types.length);
+        this._types.forEach((t) => t.write(writer));
+      }
+    }
+    toBytes() {
+      const buffer = new BinaryWriter();
+      this.write(buffer);
+      return buffer.toArray();
+    }
+  };
+
   // src/ModuleBuilder.ts
   var _ModuleBuilder = class _ModuleBuilder {
     constructor(name, options = { generateNameSection: true, disableVerification: false }) {
       this._types = [];
+      this._typeSectionEntries = [];
       this._imports = [];
       this._functions = [];
       this._tables = [];
@@ -9044,7 +9812,7 @@ var webasmPlayground = (() => {
         throw new Error("A method can only return zero to one values. Enable the multi-value feature to allow multiple return values.");
       }
       const funcTypeKey = FuncTypeBuilder.createKey(normalizedReturnTypes, parameters);
-      let funcType = this._types.find((x) => x.key === funcTypeKey);
+      let funcType = this._types.find((x) => x instanceof FuncTypeBuilder && x.key === funcTypeKey);
       if (!funcType) {
         funcType = new FuncTypeBuilder(
           funcTypeKey,
@@ -9053,6 +9821,7 @@ var webasmPlayground = (() => {
           this._types.length
         );
         this._types.push(funcType);
+        this._typeSectionEntries.push(funcType);
       }
       return funcType;
     }
@@ -9061,7 +9830,7 @@ var webasmPlayground = (() => {
       if (this._imports.some(
         (x) => x.externalKind === ExternalKind.Function && x.moduleName === moduleName && x.fieldName === name
       )) {
-        throw new Error(`An import already existing for ${moduleName}.${name}`);
+        throw new Error(`An import already exists for ${moduleName}.${name}`);
       }
       const importBuilder = new ImportBuilder(
         moduleName,
@@ -9080,7 +9849,7 @@ var webasmPlayground = (() => {
       if (this._imports.find(
         (x) => x.externalKind === ExternalKind.Table && x.moduleName === moduleName && x.fieldName === name
       )) {
-        throw new Error(`An import already existing for ${moduleName}.${name}`);
+        throw new Error(`An import already exists for ${moduleName}.${name}`);
       }
       const tableType = new TableType(
         elementType,
@@ -9106,7 +9875,7 @@ var webasmPlayground = (() => {
       if (this._imports.find(
         (x) => x.externalKind === ExternalKind.Memory && x.moduleName === moduleName && x.fieldName === name
       )) {
-        throw new Error(`An import already existing for ${moduleName}.${name}`);
+        throw new Error(`An import already exists for ${moduleName}.${name}`);
       }
       if ((this._memories.length !== 0 || this._importsIndexSpace.memory !== 0) && !this._resolvedFeatures.has("multi-memory")) {
         throw new VerificationError("Only one memory is allowed per module. Enable the multi-memory feature to allow multiple memories.");
@@ -9126,7 +9895,7 @@ var webasmPlayground = (() => {
       if (this._imports.some(
         (x) => x.externalKind === ExternalKind.Global && x.moduleName === moduleName && x.fieldName === name
       )) {
-        throw new Error(`An import already existing for ${moduleName}.${name}`);
+        throw new Error(`An import already exists for ${moduleName}.${name}`);
       }
       const globalType = new GlobalType(valueType, mutable);
       const importBuilder = new ImportBuilder(
@@ -9223,7 +9992,7 @@ var webasmPlayground = (() => {
       if (this._exports.find(
         (x) => x.externalKind === ExternalKind.Function && x.name === functionName
       )) {
-        throw new Error(`An export already existing for a function named ${functionName}.`);
+        throw new Error(`An export already exists for a function named ${functionName}.`);
       }
       const exportBuilder = new ExportBuilder(
         functionName,
@@ -9239,7 +10008,7 @@ var webasmPlayground = (() => {
       if (this._exports.find(
         (x) => x.externalKind === ExternalKind.Memory && x.name === name
       )) {
-        throw new Error(`An export already existing for memory named ${name}.`);
+        throw new Error(`An export already exists for memory named ${name}.`);
       }
       const exportBuilder = new ExportBuilder(name, ExternalKind.Memory, memoryBuilder);
       this._exports.push(exportBuilder);
@@ -9251,7 +10020,7 @@ var webasmPlayground = (() => {
       if (this._exports.find(
         (x) => x.externalKind === ExternalKind.Table && x.name === name
       )) {
-        throw new Error(`An export already existing for a table named ${name}.`);
+        throw new Error(`An export already exists for a table named ${name}.`);
       }
       const exportBuilder = new ExportBuilder(name, ExternalKind.Table, tableBuilder);
       this._exports.push(exportBuilder);
@@ -9266,14 +10035,14 @@ var webasmPlayground = (() => {
       if (this._exports.find(
         (x) => x.externalKind === ExternalKind.Global && x.name === name
       )) {
-        throw new Error(`An export already existing for a global named ${name}.`);
+        throw new Error(`An export already exists for a global named ${name}.`);
       }
       const exportBuilder = new ExportBuilder(name, ExternalKind.Global, globalBuilder);
       this._exports.push(exportBuilder);
       return exportBuilder;
     }
     defineTableSegment(table, elements, offset) {
-      const segment = new ElementSegmentBuilder(table, elements, this._resolvedFeatures);
+      const segment = new ElementSegmentBuilder(table, elements, this._resolvedFeatures, this.disableVerification);
       if (offset !== void 0) {
         segment.offset(offset);
       }
@@ -9281,14 +10050,15 @@ var webasmPlayground = (() => {
       return segment;
     }
     definePassiveElementSegment(elements) {
-      const segment = new ElementSegmentBuilder(null, elements, this._resolvedFeatures);
+      const segment = new ElementSegmentBuilder(null, elements, this._resolvedFeatures, this.disableVerification);
       segment.passive();
       this._elements.push(segment);
       return segment;
     }
     defineData(data, offset) {
       Arg.instanceOf("data", data, Uint8Array);
-      const dataSegmentBuilder = new DataSegmentBuilder(data, this._resolvedFeatures);
+      const hasMemory64 = this._memories.some((m) => m.isMemory64);
+      const dataSegmentBuilder = new DataSegmentBuilder(data, this._resolvedFeatures, hasMemory64, this.disableVerification);
       if (offset !== void 0) {
         dataSegmentBuilder.offset(offset);
       }
@@ -9306,6 +10076,40 @@ var webasmPlayground = (() => {
       const customSectionBuilder = new CustomSectionBuilder(name, data);
       this._customSections.push(customSectionBuilder);
       return customSectionBuilder;
+    }
+    defineStructType(fields, options) {
+      this._requireFeature("gc");
+      const key = StructTypeBuilder.createKey(fields);
+      const structType = new StructTypeBuilder(key, fields, this._types.length, options);
+      this._types.push(structType);
+      this._typeSectionEntries.push(structType);
+      return structType;
+    }
+    defineArrayType(elementType, mutable, options) {
+      this._requireFeature("gc");
+      const key = ArrayTypeBuilder.createKey(elementType, mutable);
+      const arrayType = new ArrayTypeBuilder(key, elementType, mutable, this._types.length, options);
+      this._types.push(arrayType);
+      this._typeSectionEntries.push(arrayType);
+      return arrayType;
+    }
+    defineRecGroup(callback) {
+      this._requireFeature("gc");
+      const recGroup = new RecGroupBuilder(this._types.length);
+      callback(recGroup);
+      if (recGroup._types.length === 0) {
+        throw new Error("Recursive type group must contain at least one type.");
+      }
+      recGroup._types.forEach((t) => {
+        this._types.push(t);
+      });
+      this._typeSectionEntries.push(recGroup);
+      return recGroup;
+    }
+    _requireFeature(feature) {
+      if (!this._resolvedFeatures.has(feature)) {
+        throw new Error(`The '${feature}' feature is required but not enabled. Use target 'latest' or add '${feature}' to features.`);
+      }
     }
     async instantiate(imports) {
       const moduleBytes = this.toBytes();
@@ -9774,7 +10578,11 @@ var webasmPlayground = (() => {
         this.expectKeyword("type");
         const typeIndex = this.parseNumber();
         this.expect("RightParen" /* RightParen */);
-        const funcType = this.moduleBuilder._types[typeIndex];
+        const typeEntry = this.moduleBuilder._types[typeIndex];
+        if (!("returnTypes" in typeEntry)) {
+          throw new Error(`Type index ${typeIndex} is not a function type.`);
+        }
+        const funcType = typeEntry;
         funcReturnTypes = funcType.returnTypes.length > 0 ? funcType.returnTypes : null;
         funcParamTypes = funcType.parameterTypes;
       } else {
@@ -9909,7 +10717,11 @@ var webasmPlayground = (() => {
       let funcReturnTypes;
       let funcParamTypes;
       if (hasExplicitType) {
-        const funcType = this.moduleBuilder._types[typeIndex];
+        const typeEntry = this.moduleBuilder._types[typeIndex];
+        if (!("returnTypes" in typeEntry)) {
+          throw new Error(`Type index ${typeIndex} is not a function type.`);
+        }
+        const funcType = typeEntry;
         funcReturnTypes = funcType.returnTypes.length > 0 ? funcType.returnTypes : null;
         funcParamTypes = funcType.parameterTypes;
       } else {
@@ -10427,7 +11239,7 @@ var webasmPlayground = (() => {
     return parser.parse(options);
   }
 
-  // playground/playground.ts
+  // playground/examples.ts
   var EXAMPLES = {
     // ─── Basics ───
     "hello-wasm": {
@@ -10436,10 +11248,11 @@ var webasmPlayground = (() => {
       description: "The simplest possible module \u2014 export a function that returns 42.",
       target: "mvp",
       features: [],
+      imports: ["ModuleBuilder", "ValueType"],
       code: `// Hello WASM \u2014 the simplest possible module
-const mod = new webasmjs.ModuleBuilder('hello');
+const mod = new ModuleBuilder('hello');
 
-mod.defineFunction('answer', [webasmjs.ValueType.Int32], [], (f, a) => {
+mod.defineFunction('answer', [ValueType.Int32], [], (f, a) => {
   a.const_i32(42);
 }).withExport();
 
@@ -10453,21 +11266,22 @@ log('The answer to everything: ' + answer());`
       description: "Iterative factorial using loop and block for control flow.",
       target: "mvp",
       features: [],
+      imports: ["ModuleBuilder", "ValueType", "BlockType"],
       code: `// Factorial \u2014 iterative with loop and block
-const mod = new webasmjs.ModuleBuilder('factorial');
+const mod = new ModuleBuilder('factorial');
 
-mod.defineFunction('factorial', [webasmjs.ValueType.Int32], [webasmjs.ValueType.Int32], (f, a) => {
+mod.defineFunction('factorial', [ValueType.Int32], [ValueType.Int32], (f, a) => {
   const n = f.getParameter(0);
-  const result = a.declareLocal(webasmjs.ValueType.Int32, 'result');
-  const i = a.declareLocal(webasmjs.ValueType.Int32, 'i');
+  const result = a.declareLocal(ValueType.Int32, 'result');
+  const i = a.declareLocal(ValueType.Int32, 'i');
 
   a.const_i32(1);
   a.set_local(result);
   a.const_i32(1);
   a.set_local(i);
 
-  a.loop(webasmjs.BlockType.Void, (loopLabel) => {
-    a.block(webasmjs.BlockType.Void, (breakLabel) => {
+  a.loop(BlockType.Void, (loopLabel) => {
+    a.block(BlockType.Void, (breakLabel) => {
       a.get_local(i);
       a.get_local(n);
       a.gt_i32();
@@ -10501,20 +11315,21 @@ for (let n = 0; n <= 10; n++) {
       description: "Iterative Fibonacci with local variables and branching.",
       target: "mvp",
       features: [],
+      imports: ["ModuleBuilder", "ValueType", "BlockType"],
       code: `// Fibonacci sequence \u2014 iterative
-const mod = new webasmjs.ModuleBuilder('fibonacci');
+const mod = new ModuleBuilder('fibonacci');
 
-mod.defineFunction('fib', [webasmjs.ValueType.Int32], [webasmjs.ValueType.Int32], (f, a) => {
+mod.defineFunction('fib', [ValueType.Int32], [ValueType.Int32], (f, a) => {
   const n = f.getParameter(0);
-  const prev = a.declareLocal(webasmjs.ValueType.Int32, 'prev');
-  const curr = a.declareLocal(webasmjs.ValueType.Int32, 'curr');
-  const temp = a.declareLocal(webasmjs.ValueType.Int32, 'temp');
-  const i = a.declareLocal(webasmjs.ValueType.Int32, 'i');
+  const prev = a.declareLocal(ValueType.Int32, 'prev');
+  const curr = a.declareLocal(ValueType.Int32, 'curr');
+  const temp = a.declareLocal(ValueType.Int32, 'temp');
+  const i = a.declareLocal(ValueType.Int32, 'i');
 
   a.get_local(n);
   a.const_i32(1);
   a.le_i32();
-  a.if(webasmjs.BlockType.Void, () => {
+  a.if(BlockType.Void, () => {
     a.get_local(n);
     a.return();
   });
@@ -10526,8 +11341,8 @@ mod.defineFunction('fib', [webasmjs.ValueType.Int32], [webasmjs.ValueType.Int32]
   a.const_i32(2);
   a.set_local(i);
 
-  a.loop(webasmjs.BlockType.Void, (loopLabel) => {
-    a.block(webasmjs.BlockType.Void, (breakLabel) => {
+  a.loop(BlockType.Void, (loopLabel) => {
+    a.block(BlockType.Void, (breakLabel) => {
       a.get_local(i);
       a.get_local(n);
       a.gt_i32();
@@ -10565,15 +11380,16 @@ for (let n = 0; n <= 15; n++) {
       description: "Absolute value and sign function using typed if/else blocks.",
       target: "mvp",
       features: [],
+      imports: ["ModuleBuilder", "ValueType", "BlockType"],
       code: `// If/Else \u2014 absolute value and sign function
-const mod = new webasmjs.ModuleBuilder('ifElse');
+const mod = new ModuleBuilder('ifElse');
 
 // Absolute value using if/else with typed block
-mod.defineFunction('abs', [webasmjs.ValueType.Int32], [webasmjs.ValueType.Int32], (f, a) => {
+mod.defineFunction('abs', [ValueType.Int32], [ValueType.Int32], (f, a) => {
   a.get_local(f.getParameter(0));
   a.const_i32(0);
   a.lt_i32();
-  a.if(webasmjs.BlockType.Int32);
+  a.if(BlockType.Int32);
     a.const_i32(0);
     a.get_local(f.getParameter(0));
     a.sub_i32();
@@ -10583,17 +11399,17 @@ mod.defineFunction('abs', [webasmjs.ValueType.Int32], [webasmjs.ValueType.Int32]
 }).withExport();
 
 // Sign function: returns -1, 0, or 1
-mod.defineFunction('sign', [webasmjs.ValueType.Int32], [webasmjs.ValueType.Int32], (f, a) => {
+mod.defineFunction('sign', [ValueType.Int32], [ValueType.Int32], (f, a) => {
   a.get_local(f.getParameter(0));
   a.const_i32(0);
   a.lt_i32();
-  a.if(webasmjs.BlockType.Int32);
+  a.if(BlockType.Int32);
     a.const_i32(-1);
   a.else();
     a.get_local(f.getParameter(0));
     a.const_i32(0);
     a.gt_i32();
-    a.if(webasmjs.BlockType.Int32);
+    a.if(BlockType.Int32);
       a.const_i32(1);
     a.else();
       a.const_i32(0);
@@ -10612,6 +11428,120 @@ log('sign(42) = ' + sign(42));
 log('sign(-7) = ' + sign(-7));
 log('sign(0) = ' + sign(0));`
     },
+    "min-max": {
+      label: "Min/Max",
+      group: "Basics",
+      description: "Compare values and return the smaller or larger using select.",
+      target: "mvp",
+      features: [],
+      imports: ["ModuleBuilder", "ValueType"],
+      code: `// Min/Max \u2014 compare values and return the smaller/larger
+const mod = new ModuleBuilder('minmax');
+
+mod.defineFunction('min', [ValueType.Int32], [ValueType.Int32, ValueType.Int32], (f, a) => {
+  const x = f.getParameter(0);
+  const y = f.getParameter(1);
+  a.get_local(x);
+  a.get_local(y);
+  a.get_local(x);
+  a.get_local(y);
+  a.lt_i32();
+  a.select();
+}).withExport();
+
+mod.defineFunction('max', [ValueType.Int32], [ValueType.Int32, ValueType.Int32], (f, a) => {
+  const x = f.getParameter(0);
+  const y = f.getParameter(1);
+  a.get_local(x);
+  a.get_local(y);
+  a.get_local(x);
+  a.get_local(y);
+  a.gt_i32();
+  a.select();
+}).withExport();
+
+const instance = await mod.instantiate();
+const { min, max } = instance.instance.exports;
+log('min(3, 7) = ' + min(3, 7));
+log('min(10, 2) = ' + min(10, 2));
+log('max(3, 7) = ' + max(3, 7));
+log('max(-5, 5) = ' + max(-5, 5));`
+    },
+    "multi-return": {
+      label: "Multiple Returns",
+      group: "Basics",
+      description: "Function returning two values using multi-value returns.",
+      target: "2.0",
+      features: [],
+      imports: ["ModuleBuilder", "ValueType"],
+      code: `// Multiple Returns \u2014 function returning two values
+const mod = new ModuleBuilder('multiReturn', { target: '2.0' });
+
+// divmod: returns (quotient, remainder)
+mod.defineFunction('divmod', [ValueType.Int32, ValueType.Int32], [ValueType.Int32, ValueType.Int32], (f, a) => {
+  const x = f.getParameter(0);
+  const y = f.getParameter(1);
+  // quotient = x / y
+  a.get_local(x);
+  a.get_local(y);
+  a.div_i32();
+  // remainder = x % y
+  a.get_local(x);
+  a.get_local(y);
+  a.rem_i32();
+}).withExport();
+
+const instance = await mod.instantiate();
+const divmod = instance.instance.exports.divmod;
+const result = divmod(17, 5);
+log('divmod(17, 5) = [' + result[0] + ', ' + result[1] + ']');
+log('  quotient: ' + result[0]);
+log('  remainder: ' + result[1]);
+
+const result2 = divmod(100, 7);
+log('divmod(100, 7) = [' + result2[0] + ', ' + result2[1] + ']');`
+    },
+    "counting-loop": {
+      label: "Counting Loop",
+      group: "Basics",
+      description: "Print numbers 1 to N using a loop with imported print function.",
+      target: "mvp",
+      features: [],
+      imports: ["ModuleBuilder", "ValueType", "BlockType"],
+      code: `// Counting Loop \u2014 print numbers 1 to N
+const mod = new ModuleBuilder('countLoop');
+
+const printImport = mod.importFunction('env', 'print', null, [ValueType.Int32]);
+
+mod.defineFunction('countTo', null, [ValueType.Int32], (f, a) => {
+  const n = f.getParameter(0);
+  const i = a.declareLocal(ValueType.Int32, 'i');
+  a.const_i32(1);
+  a.set_local(i);
+  a.loop(BlockType.Void, (cont) => {
+    a.block(BlockType.Void, (brk) => {
+      a.get_local(i);
+      a.get_local(n);
+      a.gt_i32();
+      a.br_if(brk);
+      a.get_local(i);
+      a.call(printImport);
+      a.get_local(i);
+      a.const_i32(1);
+      a.add_i32();
+      a.set_local(i);
+      a.br(cont);
+    });
+  });
+}).withExport();
+
+const logged = [];
+const instance = await mod.instantiate({
+  env: { print: (v) => logged.push(v) },
+});
+instance.instance.exports.countTo(10);
+log('Counted to 10: ' + logged.join(', '));`
+    },
     // ─── Memory ───
     memory: {
       label: "Memory Basics",
@@ -10619,18 +11549,19 @@ log('sign(0) = ' + sign(0));`
       description: "Store and load i32 values in linear memory.",
       target: "mvp",
       features: [],
+      imports: ["ModuleBuilder", "ValueType"],
       code: `// Memory: store and load values
-const mod = new webasmjs.ModuleBuilder('memoryExample');
+const mod = new ModuleBuilder('memoryExample');
 const mem = mod.defineMemory(1);
 mod.exportMemory(mem, 'memory');
 
-mod.defineFunction('store', null, [webasmjs.ValueType.Int32, webasmjs.ValueType.Int32], (f, a) => {
+mod.defineFunction('store', null, [ValueType.Int32, ValueType.Int32], (f, a) => {
   a.get_local(f.getParameter(0));
   a.get_local(f.getParameter(1));
   a.store_i32(2, 0);
 }).withExport();
 
-mod.defineFunction('load', [webasmjs.ValueType.Int32], [webasmjs.ValueType.Int32], (f, a) => {
+mod.defineFunction('load', [ValueType.Int32], [ValueType.Int32], (f, a) => {
   a.get_local(f.getParameter(0));
   a.load_i32(2, 0);
 }).withExport();
@@ -10651,36 +11582,37 @@ log('Sum stored at 0: ' + load(0));`
       description: "Store and sum individual bytes with load8/store8 instructions.",
       target: "mvp",
       features: [],
+      imports: ["ModuleBuilder", "ValueType", "BlockType"],
       code: `// Byte array \u2014 store and sum individual bytes
-const mod = new webasmjs.ModuleBuilder('byteArray');
+const mod = new ModuleBuilder('byteArray');
 mod.defineMemory(1);
 
 // Store a byte at offset
-mod.defineFunction('setByte', null, [webasmjs.ValueType.Int32, webasmjs.ValueType.Int32], (f, a) => {
+mod.defineFunction('setByte', null, [ValueType.Int32, ValueType.Int32], (f, a) => {
   a.get_local(f.getParameter(0));
   a.get_local(f.getParameter(1));
   a.store8_i32(0, 0);
 }).withExport();
 
 // Load a byte from offset
-mod.defineFunction('getByte', [webasmjs.ValueType.Int32], [webasmjs.ValueType.Int32], (f, a) => {
+mod.defineFunction('getByte', [ValueType.Int32], [ValueType.Int32], (f, a) => {
   a.get_local(f.getParameter(0));
   a.load8_i32_u(0, 0);
 }).withExport();
 
 // Sum bytes from offset 0 to length-1
-mod.defineFunction('sumBytes', [webasmjs.ValueType.Int32], [webasmjs.ValueType.Int32], (f, a) => {
+mod.defineFunction('sumBytes', [ValueType.Int32], [ValueType.Int32], (f, a) => {
   const len = f.getParameter(0);
-  const sum = a.declareLocal(webasmjs.ValueType.Int32, 'sum');
-  const i = a.declareLocal(webasmjs.ValueType.Int32, 'i');
+  const sum = a.declareLocal(ValueType.Int32, 'sum');
+  const i = a.declareLocal(ValueType.Int32, 'i');
 
   a.const_i32(0);
   a.set_local(sum);
   a.const_i32(0);
   a.set_local(i);
 
-  a.loop(webasmjs.BlockType.Void, (loopLabel) => {
-    a.block(webasmjs.BlockType.Void, (breakLabel) => {
+  a.loop(BlockType.Void, (loopLabel) => {
+    a.block(BlockType.Void, (breakLabel) => {
       a.get_local(i);
       a.get_local(len);
       a.ge_i32();
@@ -10723,8 +11655,9 @@ log('Sum of 10 bytes: ' + sumBytes(10));`
       description: "Store a string via data segment and compute its length.",
       target: "mvp",
       features: [],
+      imports: ["ModuleBuilder", "ValueType", "BlockType"],
       code: `// Strings in memory \u2014 store a string, compute its length
-const mod = new webasmjs.ModuleBuilder('stringMem');
+const mod = new ModuleBuilder('stringMem');
 const mem = mod.defineMemory(1);
 mod.exportMemory(mem, 'memory');
 
@@ -10733,15 +11666,15 @@ const greeting = new TextEncoder().encode('Hello, WebAssembly!');
 mod.defineData(new Uint8Array([...greeting, 0]), 0); // null-terminated
 
 // strlen: count bytes until null
-mod.defineFunction('strlen', [webasmjs.ValueType.Int32], [webasmjs.ValueType.Int32], (f, a) => {
+mod.defineFunction('strlen', [ValueType.Int32], [ValueType.Int32], (f, a) => {
   const ptr = f.getParameter(0);
-  const len = a.declareLocal(webasmjs.ValueType.Int32, 'len');
+  const len = a.declareLocal(ValueType.Int32, 'len');
 
   a.const_i32(0);
   a.set_local(len);
 
-  a.loop(webasmjs.BlockType.Void, (loopLabel) => {
-    a.block(webasmjs.BlockType.Void, (breakLabel) => {
+  a.loop(BlockType.Void, (loopLabel) => {
+    a.block(BlockType.Void, (breakLabel) => {
       // Load byte at ptr + len
       a.get_local(ptr);
       a.get_local(len);
@@ -10778,8 +11711,9 @@ log('Length: ' + strLen);`
       description: "Pre-initialize memory with defineData and read values at runtime.",
       target: "mvp",
       features: [],
+      imports: ["ModuleBuilder", "ValueType", "BlockType"],
       code: `// Data segments \u2014 pre-initialize memory with static data
-const mod = new webasmjs.ModuleBuilder('dataSegments');
+const mod = new ModuleBuilder('dataSegments');
 const mem = mod.defineMemory(1);
 mod.exportMemory(mem, 'memory');
 
@@ -10793,7 +11727,7 @@ const msg = new TextEncoder().encode('Hello from data segment!');
 mod.defineData(new Uint8Array([...msg, 0]), 64);
 
 // Read an i32 from the powers table: getPower(index)
-mod.defineFunction('getPower', [webasmjs.ValueType.Int32], [webasmjs.ValueType.Int32], (f, a) => {
+mod.defineFunction('getPower', [ValueType.Int32], [ValueType.Int32], (f, a) => {
   a.get_local(f.getParameter(0));
   a.const_i32(4);
   a.mul_i32();
@@ -10801,13 +11735,13 @@ mod.defineFunction('getPower', [webasmjs.ValueType.Int32], [webasmjs.ValueType.I
 }).withExport();
 
 // strlen starting at offset
-mod.defineFunction('strlen', [webasmjs.ValueType.Int32], [webasmjs.ValueType.Int32], (f, a) => {
+mod.defineFunction('strlen', [ValueType.Int32], [ValueType.Int32], (f, a) => {
   const ptr = f.getParameter(0);
-  const len = a.declareLocal(webasmjs.ValueType.Int32, 'len');
+  const len = a.declareLocal(ValueType.Int32, 'len');
   a.const_i32(0);
   a.set_local(len);
-  a.loop(webasmjs.BlockType.Void, (loopLabel) => {
-    a.block(webasmjs.BlockType.Void, (breakLabel) => {
+  a.loop(BlockType.Void, (loopLabel) => {
+    a.block(BlockType.Void, (breakLabel) => {
       a.get_local(ptr);
       a.get_local(len);
       a.add_i32();
@@ -10844,31 +11778,32 @@ log('Message from data segment: "' + str + '"');`
       description: "Grow memory at runtime with mem_grow and query size with mem_size.",
       target: "mvp",
       features: [],
+      imports: ["ModuleBuilder", "ValueType"],
       code: `// Memory growth \u2014 dynamically add pages at runtime
-const mod = new webasmjs.ModuleBuilder('memGrowth');
+const mod = new ModuleBuilder('memGrowth');
 const mem = mod.defineMemory(1); // start with 1 page (64KB)
 mod.exportMemory(mem, 'memory');
 
 // Return current memory size in pages
-mod.defineFunction('pages', [webasmjs.ValueType.Int32], [], (f, a) => {
+mod.defineFunction('pages', [ValueType.Int32], [], (f, a) => {
   a.mem_size(0);
 }).withExport();
 
 // Grow memory by N pages, return previous size (or -1 on failure)
-mod.defineFunction('grow', [webasmjs.ValueType.Int32], [webasmjs.ValueType.Int32], (f, a) => {
+mod.defineFunction('grow', [ValueType.Int32], [ValueType.Int32], (f, a) => {
   a.get_local(f.getParameter(0));
   a.mem_grow(0);
 }).withExport();
 
 // Store an i32 at a byte offset
-mod.defineFunction('store', null, [webasmjs.ValueType.Int32, webasmjs.ValueType.Int32], (f, a) => {
+mod.defineFunction('store', null, [ValueType.Int32, ValueType.Int32], (f, a) => {
   a.get_local(f.getParameter(0));
   a.get_local(f.getParameter(1));
   a.store_i32(2, 0);
 }).withExport();
 
 // Load an i32 from a byte offset
-mod.defineFunction('load', [webasmjs.ValueType.Int32], [webasmjs.ValueType.Int32], (f, a) => {
+mod.defineFunction('load', [ValueType.Int32], [ValueType.Int32], (f, a) => {
   a.get_local(f.getParameter(0));
   a.load_i32(2, 0);
 }).withExport();
@@ -10893,6 +11828,178 @@ log('Loaded: ' + load(offset));
 grow(1);
 log('After another grow(1): ' + pages() + ' pages');`
     },
+    "ring-buffer": {
+      label: "Ring Buffer",
+      group: "Memory",
+      description: "Circular buffer implementation in linear memory.",
+      target: "mvp",
+      features: [],
+      imports: ["ModuleBuilder", "ValueType"],
+      code: `// Ring Buffer \u2014 circular buffer in linear memory
+const mod = new ModuleBuilder('ringBuffer');
+const mem = mod.defineMemory(1);
+mod.exportMemory(mem, 'memory');
+
+// Layout: [writePtr:i32, readPtr:i32, size:i32, data...]
+// Offsets: writePtr=0, readPtr=4, capacity=8, data starts at 12
+
+mod.defineFunction('init', null, [ValueType.Int32], (f, a) => {
+  const cap = f.getParameter(0);
+  a.const_i32(0); a.const_i32(0); a.store_i32(0, 0);  // writePtr = 0
+  a.const_i32(4); a.const_i32(0); a.store_i32(0, 0);  // readPtr = 0
+  a.const_i32(8); a.get_local(cap); a.store_i32(0, 0); // capacity
+}).withExport();
+
+mod.defineFunction('push', null, [ValueType.Int32], (f, a) => {
+  const val = f.getParameter(0);
+  const wp = a.declareLocal(ValueType.Int32, 'wp');
+  a.const_i32(0); a.load_i32(0, 0); a.set_local(wp);
+  // data[wp] = val
+  a.get_local(wp);
+  a.const_i32(12);
+  a.add_i32();
+  a.get_local(val);
+  a.store_i32(0, 0);
+  // writePtr = (wp + 4) % (capacity * 4)
+  a.get_local(wp);
+  a.const_i32(4);
+  a.add_i32();
+  a.const_i32(8); a.load_i32(0, 0); a.const_i32(4); a.mul_i32();
+  a.rem_i32();
+  a.set_local(wp);
+  a.const_i32(0); a.get_local(wp); a.store_i32(0, 0);
+}).withExport();
+
+mod.defineFunction('pop', [ValueType.Int32], [], (f, a) => {
+  const rp = a.declareLocal(ValueType.Int32, 'rp');
+  const val = a.declareLocal(ValueType.Int32, 'val');
+  a.const_i32(4); a.load_i32(0, 0); a.set_local(rp);
+  a.get_local(rp); a.const_i32(12); a.add_i32();
+  a.load_i32(0, 0); a.set_local(val);
+  // readPtr = (rp + 4) % (capacity * 4)
+  a.get_local(rp); a.const_i32(4); a.add_i32();
+  a.const_i32(8); a.load_i32(0, 0); a.const_i32(4); a.mul_i32();
+  a.rem_i32();
+  a.set_local(rp);
+  a.const_i32(4); a.get_local(rp); a.store_i32(0, 0);
+  a.get_local(val);
+}).withExport();
+
+const instance = await mod.instantiate();
+const { init, push, pop } = instance.instance.exports;
+init(4); // capacity of 4
+push(10); push(20); push(30);
+log('pop: ' + pop()); // 10
+log('pop: ' + pop()); // 20
+push(40); push(50);
+log('pop: ' + pop()); // 30
+log('pop: ' + pop()); // 40
+log('pop: ' + pop()); // 50`
+    },
+    "memory-copy-fill": {
+      label: "Memory Copy & Fill",
+      group: "Memory",
+      description: "Bulk memory operations: memory.fill and memory.copy.",
+      target: "2.0",
+      features: ["bulk-memory"],
+      imports: ["ModuleBuilder", "ValueType"],
+      code: `// Memory Copy & Fill \u2014 bulk memory operations
+const mod = new ModuleBuilder('memCopyFill', { target: '2.0' });
+const mem = mod.defineMemory(1);
+mod.exportMemory(mem, 'memory');
+
+// Fill memory[offset..offset+len] with a byte value
+mod.defineFunction('fill', null, [ValueType.Int32, ValueType.Int32, ValueType.Int32], (f, a) => {
+  a.get_local(f.getParameter(0)); // dest
+  a.get_local(f.getParameter(1)); // value
+  a.get_local(f.getParameter(2)); // length
+  a.memory_fill(0);
+}).withExport();
+
+// Copy memory[src..src+len] to memory[dst..]
+mod.defineFunction('copy', null, [ValueType.Int32, ValueType.Int32, ValueType.Int32], (f, a) => {
+  a.get_local(f.getParameter(0)); // dest
+  a.get_local(f.getParameter(1)); // src
+  a.get_local(f.getParameter(2)); // length
+  a.memory_copy(0, 0);
+}).withExport();
+
+const instance = await mod.instantiate();
+const { fill, copy, memory } = instance.instance.exports;
+const view = new Uint8Array(memory.buffer);
+
+// Fill 10 bytes at offset 0 with 0xAA
+fill(0, 0xAA, 10);
+log('After fill(0, 0xAA, 10):');
+log('  [0..9] = ' + Array.from(view.slice(0, 10)).map(b => '0x' + b.toString(16)).join(', '));
+
+// Copy 5 bytes from offset 0 to offset 20
+copy(20, 0, 5);
+log('After copy(20, 0, 5):');
+log('  [20..24] = ' + Array.from(view.slice(20, 25)).map(b => '0x' + b.toString(16)).join(', '));`
+    },
+    "struct-in-memory": {
+      label: "Struct Layout",
+      group: "Memory",
+      description: "Manual struct layout in memory with offset calculations.",
+      target: "mvp",
+      features: [],
+      imports: ["ModuleBuilder", "ValueType"],
+      code: `// Struct Layout in Memory \u2014 manual offset calculations
+const mod = new ModuleBuilder('structLayout');
+const mem = mod.defineMemory(1);
+mod.exportMemory(mem, 'memory');
+
+// Simulate a struct: { x: i32, y: i32, z: f32 }
+// Offsets: x=0, y=4, z=8, total size=12
+
+mod.defineFunction('setPoint', null,
+  [ValueType.Int32, ValueType.Int32, ValueType.Int32, ValueType.Float32], (f, a) => {
+  const base = f.getParameter(0);
+  // x
+  a.get_local(base);
+  a.get_local(f.getParameter(1));
+  a.store_i32(0, 0);
+  // y
+  a.get_local(base); a.const_i32(4); a.add_i32();
+  a.get_local(f.getParameter(2));
+  a.store_i32(0, 0);
+  // z
+  a.get_local(base); a.const_i32(8); a.add_i32();
+  a.get_local(f.getParameter(3));
+  a.store_f32(0, 0);
+}).withExport();
+
+mod.defineFunction('getX', [ValueType.Int32], [ValueType.Int32], (f, a) => {
+  a.get_local(f.getParameter(0));
+  a.load_i32(0, 0);
+}).withExport();
+
+mod.defineFunction('getY', [ValueType.Int32], [ValueType.Int32], (f, a) => {
+  a.get_local(f.getParameter(0)); a.const_i32(4); a.add_i32();
+  a.load_i32(0, 0);
+}).withExport();
+
+mod.defineFunction('getZ', [ValueType.Float32], [ValueType.Int32], (f, a) => {
+  a.get_local(f.getParameter(0)); a.const_i32(8); a.add_i32();
+  a.load_f32(0, 0);
+}).withExport();
+
+const instance = await mod.instantiate();
+const { setPoint, getX, getY, getZ } = instance.instance.exports;
+
+setPoint(0, 10, 20, 3.14);
+log('Point at offset 0:');
+log('  x = ' + getX(0));
+log('  y = ' + getY(0));
+log('  z = ' + getZ(0).toFixed(2));
+
+setPoint(12, 100, 200, 9.81);
+log('Point at offset 12:');
+log('  x = ' + getX(12));
+log('  y = ' + getY(12));
+log('  z = ' + getZ(12).toFixed(2));`
+    },
     // ─── Globals & State ───
     globals: {
       label: "Global Counter",
@@ -10900,12 +12007,13 @@ log('After another grow(1): ' + pages() + ' pages');`
       description: "Mutable global variable used as a persistent counter.",
       target: "mvp",
       features: [],
+      imports: ["ModuleBuilder", "ValueType"],
       code: `// Globals: mutable counter
-const mod = new webasmjs.ModuleBuilder('globals');
+const mod = new ModuleBuilder('globals');
 
-const counter = mod.defineGlobal(webasmjs.ValueType.Int32, true, 0);
+const counter = mod.defineGlobal(ValueType.Int32, true, 0);
 
-mod.defineFunction('increment', [webasmjs.ValueType.Int32], [], (f, a) => {
+mod.defineFunction('increment', [ValueType.Int32], [], (f, a) => {
   a.get_global(counter);
   a.const_i32(1);
   a.add_i32();
@@ -10913,7 +12021,7 @@ mod.defineFunction('increment', [webasmjs.ValueType.Int32], [], (f, a) => {
   a.get_global(counter);
 }).withExport();
 
-mod.defineFunction('getCount', [webasmjs.ValueType.Int32], [], (f, a) => {
+mod.defineFunction('getCount', [ValueType.Int32], [], (f, a) => {
   a.get_global(counter);
 }).withExport();
 
@@ -10934,10 +12042,11 @@ log('After 7 more: ' + getCount());`
       description: "A function that runs automatically on module instantiation.",
       target: "mvp",
       features: [],
+      imports: ["ModuleBuilder", "ValueType"],
       code: `// Start function \u2014 runs automatically on instantiation
-const mod = new webasmjs.ModuleBuilder('startExample');
+const mod = new ModuleBuilder('startExample');
 
-const initialized = mod.defineGlobal(webasmjs.ValueType.Int32, true, 0);
+const initialized = mod.defineGlobal(ValueType.Int32, true, 0);
 
 // This function runs automatically at instantiation
 const initFn = mod.defineFunction('init', null, [], (f, a) => {
@@ -10947,7 +12056,7 @@ const initFn = mod.defineFunction('init', null, [], (f, a) => {
 mod.setStartFunction(initFn);
 
 // Exported getter
-mod.defineFunction('isInitialized', [webasmjs.ValueType.Int32], [], (f, a) => {
+mod.defineFunction('isInitialized', [ValueType.Int32], [], (f, a) => {
   a.get_global(initialized);
 }).withExport();
 
@@ -10963,18 +12072,19 @@ log('The start function ran automatically!');`
       description: "Multiple functions calling each other \u2014 square, double, compose.",
       target: "mvp",
       features: [],
+      imports: ["ModuleBuilder", "ValueType"],
       code: `// Multiple functions calling each other
-const mod = new webasmjs.ModuleBuilder('multiFn');
+const mod = new ModuleBuilder('multiFn');
 
 // Helper: square
-mod.defineFunction('square', [webasmjs.ValueType.Int32], [webasmjs.ValueType.Int32], (f, a) => {
+mod.defineFunction('square', [ValueType.Int32], [ValueType.Int32], (f, a) => {
   a.get_local(f.getParameter(0));
   a.get_local(f.getParameter(0));
   a.mul_i32();
 }).withExport();
 
 // Helper: double
-mod.defineFunction('double', [webasmjs.ValueType.Int32], [webasmjs.ValueType.Int32], (f, a) => {
+mod.defineFunction('double', [ValueType.Int32], [ValueType.Int32], (f, a) => {
   a.get_local(f.getParameter(0));
   a.const_i32(2);
   a.mul_i32();
@@ -10984,7 +12094,7 @@ mod.defineFunction('double', [webasmjs.ValueType.Int32], [webasmjs.ValueType.Int
 const squareFn = mod._functions[0];
 const doubleFn = mod._functions[1];
 
-mod.defineFunction('doubleSquare', [webasmjs.ValueType.Int32], [webasmjs.ValueType.Int32], (f, a) => {
+mod.defineFunction('doubleSquare', [ValueType.Int32], [ValueType.Int32], (f, a) => {
   a.get_local(f.getParameter(0));
   a.call(squareFn);
   a.call(doubleFn);
@@ -11003,14 +12113,15 @@ for (let x = 1; x <= 5; x++) {
       description: "Import host functions so WASM can call JavaScript.",
       target: "mvp",
       features: [],
+      imports: ["ModuleBuilder", "ValueType"],
       code: `// Importing host functions \u2014 WASM calling JavaScript
-const mod = new webasmjs.ModuleBuilder('imports');
+const mod = new ModuleBuilder('imports');
 
 // Declare an import: env.print takes an i32
-const printImport = mod.importFunction('env', 'print', null, [webasmjs.ValueType.Int32]);
+const printImport = mod.importFunction('env', 'print', null, [ValueType.Int32]);
 
 // Declare another import: env.getTime returns an i32
-const getTimeImport = mod.importFunction('env', 'getTime', [webasmjs.ValueType.Int32], []);
+const getTimeImport = mod.importFunction('env', 'getTime', [ValueType.Int32], []);
 
 mod.defineFunction('run', null, [], (f, a) => {
   // Call getTime, then print it
@@ -11045,34 +12156,35 @@ logged.forEach((v, i) => log('  [' + i + '] ' + v));`
       description: "Dispatch function calls through a table using call_indirect.",
       target: "mvp",
       features: [],
+      imports: ["ModuleBuilder", "ValueType", "ElementType"],
       code: `// Indirect calls via function table
-const mod = new webasmjs.ModuleBuilder('indirectCall');
+const mod = new ModuleBuilder('indirectCall');
 
-const add = mod.defineFunction('add', [webasmjs.ValueType.Int32], [webasmjs.ValueType.Int32, webasmjs.ValueType.Int32], (f, a) => {
+const add = mod.defineFunction('add', [ValueType.Int32], [ValueType.Int32, ValueType.Int32], (f, a) => {
   a.get_local(f.getParameter(0));
   a.get_local(f.getParameter(1));
   a.add_i32();
 });
 
-const sub = mod.defineFunction('sub', [webasmjs.ValueType.Int32], [webasmjs.ValueType.Int32, webasmjs.ValueType.Int32], (f, a) => {
+const sub = mod.defineFunction('sub', [ValueType.Int32], [ValueType.Int32, ValueType.Int32], (f, a) => {
   a.get_local(f.getParameter(0));
   a.get_local(f.getParameter(1));
   a.sub_i32();
 });
 
-const mul = mod.defineFunction('mul', [webasmjs.ValueType.Int32], [webasmjs.ValueType.Int32, webasmjs.ValueType.Int32], (f, a) => {
+const mul = mod.defineFunction('mul', [ValueType.Int32], [ValueType.Int32, ValueType.Int32], (f, a) => {
   a.get_local(f.getParameter(0));
   a.get_local(f.getParameter(1));
   a.mul_i32();
 });
 
 // Create a table with 3 entries
-const table = mod.defineTable(webasmjs.ElementType.AnyFunc, 3);
+const table = mod.defineTable(ElementType.AnyFunc, 3);
 mod.defineTableSegment(table, [add, sub, mul], 0);
 
 // Dispatcher: call function at table[opIndex](a, b)
-mod.defineFunction('dispatch', [webasmjs.ValueType.Int32],
-  [webasmjs.ValueType.Int32, webasmjs.ValueType.Int32, webasmjs.ValueType.Int32], (f, a) => {
+mod.defineFunction('dispatch', [ValueType.Int32],
+  [ValueType.Int32, ValueType.Int32, ValueType.Int32], (f, a) => {
   a.get_local(f.getParameter(1)); // a
   a.get_local(f.getParameter(2)); // b
   a.get_local(f.getParameter(0)); // table index
@@ -11093,18 +12205,19 @@ for (let op = 0; op < 3; op++) {
       description: "Use PackageBuilder to link two modules with imports.",
       target: "mvp",
       features: [],
+      imports: ["PackageBuilder", "ValueType"],
       code: `// Multi-module \u2014 PackageBuilder links modules with dependencies
-const pkg = new webasmjs.PackageBuilder();
+const pkg = new PackageBuilder();
 
 // Module "math": provides a double function
 const mathMod = pkg.defineModule('math');
-mathMod.defineFunction('double', [webasmjs.ValueType.Int32], [webasmjs.ValueType.Int32], (f, a) => {
+mathMod.defineFunction('double', [ValueType.Int32], [ValueType.Int32], (f, a) => {
   a.get_local(f.getParameter(0));
   a.const_i32(2);
   a.mul_i32();
 }).withExport();
 
-mathMod.defineFunction('square', [webasmjs.ValueType.Int32], [webasmjs.ValueType.Int32], (f, a) => {
+mathMod.defineFunction('square', [ValueType.Int32], [ValueType.Int32], (f, a) => {
   a.get_local(f.getParameter(0));
   a.get_local(f.getParameter(0));
   a.mul_i32();
@@ -11112,18 +12225,18 @@ mathMod.defineFunction('square', [webasmjs.ValueType.Int32], [webasmjs.ValueType
 
 // Module "main": imports from "math" and composes
 const mainMod = pkg.defineModule('main');
-const doubleFn = mainMod.importFunction('math', 'double', [webasmjs.ValueType.Int32], [webasmjs.ValueType.Int32]);
-const squareFn = mainMod.importFunction('math', 'square', [webasmjs.ValueType.Int32], [webasmjs.ValueType.Int32]);
+const doubleFn = mainMod.importFunction('math', 'double', [ValueType.Int32], [ValueType.Int32]);
+const squareFn = mainMod.importFunction('math', 'square', [ValueType.Int32], [ValueType.Int32]);
 
 // quadruple(x) = double(double(x))
-mainMod.defineFunction('quadruple', [webasmjs.ValueType.Int32], [webasmjs.ValueType.Int32], (f, a) => {
+mainMod.defineFunction('quadruple', [ValueType.Int32], [ValueType.Int32], (f, a) => {
   a.get_local(f.getParameter(0));
   a.call(doubleFn);
   a.call(doubleFn);
 }).withExport();
 
 // doubleSquare(x) = double(square(x)) = 2 * x^2
-mainMod.defineFunction('doubleSquare', [webasmjs.ValueType.Int32], [webasmjs.ValueType.Int32], (f, a) => {
+mainMod.defineFunction('doubleSquare', [ValueType.Int32], [ValueType.Int32], (f, a) => {
   a.get_local(f.getParameter(0));
   a.call(squareFn);
   a.call(doubleFn);
@@ -11144,18 +12257,19 @@ for (let x = 1; x <= 6; x++) {
       description: "Self-recursive power function using a.call(f).",
       target: "mvp",
       features: [],
+      imports: ["ModuleBuilder", "ValueType", "BlockType"],
       code: `// Recursive function \u2014 power(base, exp) calls itself
-const mod = new webasmjs.ModuleBuilder('recursion');
+const mod = new ModuleBuilder('recursion');
 
-mod.defineFunction('power', [webasmjs.ValueType.Int32],
-  [webasmjs.ValueType.Int32, webasmjs.ValueType.Int32], (f, a) => {
+mod.defineFunction('power', [ValueType.Int32],
+  [ValueType.Int32, ValueType.Int32], (f, a) => {
   const base = f.getParameter(0);
   const exp = f.getParameter(1);
 
   // if exp == 0 return 1
   a.get_local(exp);
   a.eqz_i32();
-  a.if(webasmjs.BlockType.Void, () => {
+  a.if(BlockType.Void, () => {
     a.const_i32(1);
     a.return();
   });
@@ -11180,6 +12294,86 @@ for (let b = 2; b <= 5; b++) {
   log('  ' + results.join(', '));
 }`
     },
+    "host-callback": {
+      label: "Host Callbacks",
+      group: "Functions",
+      description: "WASM calling JS functions that return values.",
+      target: "mvp",
+      features: [],
+      imports: ["ModuleBuilder", "ValueType"],
+      code: `// Host Callbacks \u2014 WASM calling JS functions that return values
+const mod = new ModuleBuilder('hostCallback');
+
+const getTime = mod.importFunction('env', 'getTime', [ValueType.Int32], []);
+const getRandom = mod.importFunction('env', 'getRandom', [ValueType.Int32], []);
+
+mod.defineFunction('timesPlusRandom', [ValueType.Int32], [ValueType.Int32], (f, a) => {
+  a.call(getTime);
+  a.get_local(f.getParameter(0));
+  a.mul_i32();
+  a.call(getRandom);
+  a.add_i32();
+}).withExport();
+
+const instance = await mod.instantiate({
+  env: {
+    getTime: () => 42,
+    getRandom: () => Math.floor(Math.random() * 100),
+  },
+});
+const { timesPlusRandom } = instance.instance.exports;
+log('timesPlusRandom(3) = ' + timesPlusRandom(3));
+log('timesPlusRandom(3) = ' + timesPlusRandom(3));
+log('timesPlusRandom(10) = ' + timesPlusRandom(10));`
+    },
+    "variadic-dispatch": {
+      label: "Table Dispatch",
+      group: "Functions",
+      description: "Call different functions via a table index using call_indirect.",
+      target: "mvp",
+      features: [],
+      imports: ["ModuleBuilder", "ValueType", "ElementType"],
+      code: `// Table Dispatch \u2014 call different functions via a table index
+const mod = new ModuleBuilder('dispatch');
+
+const fnType = mod.defineFuncType([ValueType.Int32], [ValueType.Int32, ValueType.Int32]);
+
+const add = mod.defineFunction('add', [ValueType.Int32], [ValueType.Int32, ValueType.Int32], (f, a) => {
+  a.get_local(f.getParameter(0));
+  a.get_local(f.getParameter(1));
+  a.add_i32();
+});
+
+const sub = mod.defineFunction('sub', [ValueType.Int32], [ValueType.Int32, ValueType.Int32], (f, a) => {
+  a.get_local(f.getParameter(0));
+  a.get_local(f.getParameter(1));
+  a.sub_i32();
+});
+
+const mul = mod.defineFunction('mul', [ValueType.Int32], [ValueType.Int32, ValueType.Int32], (f, a) => {
+  a.get_local(f.getParameter(0));
+  a.get_local(f.getParameter(1));
+  a.mul_i32();
+});
+
+const table = mod.defineTable(ElementType.AnyFunc, 3);
+table.defineTableSegment([add, sub, mul], 0);
+
+// dispatch(op, a, b) \u2014 calls table[op](a, b)
+mod.defineFunction('dispatch', [ValueType.Int32],
+  [ValueType.Int32, ValueType.Int32, ValueType.Int32], (f, a) => {
+  a.get_local(f.getParameter(1)); // a
+  a.get_local(f.getParameter(2)); // b
+  a.get_local(f.getParameter(0)); // table index
+  a.call_indirect(fnType);
+}).withExport();
+
+const instance = await mod.instantiate();
+const { dispatch } = instance.instance.exports;
+log('dispatch(0, 10, 3) = add = ' + dispatch(0, 10, 3));
+log('dispatch(1, 10, 3) = sub = ' + dispatch(1, 10, 3));
+log('dispatch(2, 10, 3) = mul = ' + dispatch(2, 10, 3));`
+    },
     // ─── Control Flow ───
     "br-table": {
       label: "Branch Table",
@@ -11187,17 +12381,18 @@ for (let b = 2; b <= 5; b++) {
       description: "Switch/case dispatch using the br_table instruction.",
       target: "mvp",
       features: [],
+      imports: ["ModuleBuilder", "ValueType", "BlockType"],
       code: `// br_table \u2014 switch/case dispatch to different blocks
-const mod = new webasmjs.ModuleBuilder('brTable');
+const mod = new ModuleBuilder('brTable');
 
 // dayType(day): 0-4 => "weekday" (return 1), 5-6 => "weekend" (return 2), else => "invalid" (return 0)
-mod.defineFunction('dayType', [webasmjs.ValueType.Int32], [webasmjs.ValueType.Int32], (f, a) => {
+mod.defineFunction('dayType', [ValueType.Int32], [ValueType.Int32], (f, a) => {
   const day = f.getParameter(0);
-  const result = a.declareLocal(webasmjs.ValueType.Int32, 'result');
+  const result = a.declareLocal(ValueType.Int32, 'result');
 
-  a.block(webasmjs.BlockType.Void, (invalidBlock) => {
-    a.block(webasmjs.BlockType.Void, (weekendBlock) => {
-      a.block(webasmjs.BlockType.Void, (weekdayBlock) => {
+  a.block(BlockType.Void, (invalidBlock) => {
+    a.block(BlockType.Void, (weekendBlock) => {
+      a.block(BlockType.Void, (weekdayBlock) => {
         // br_table: value 0-4 => weekdayBlock, 5-6 => weekendBlock, default => invalidBlock
         a.get_local(day);
         a.br_table(invalidBlock,
@@ -11237,12 +12432,13 @@ log('day 99: ' + types[dayType(99)]);`
       description: "Branchless conditional with select \u2014 like a ternary operator.",
       target: "mvp",
       features: [],
+      imports: ["ModuleBuilder", "ValueType"],
       code: `// select \u2014 branchless conditional (ternary operator)
-const mod = new webasmjs.ModuleBuilder('selectOp');
+const mod = new ModuleBuilder('selectOp');
 
 // max(a, b) = a > b ? a : b  (using select)
-mod.defineFunction('max', [webasmjs.ValueType.Int32],
-  [webasmjs.ValueType.Int32, webasmjs.ValueType.Int32], (f, a) => {
+mod.defineFunction('max', [ValueType.Int32],
+  [ValueType.Int32, ValueType.Int32], (f, a) => {
   const x = f.getParameter(0);
   const y = f.getParameter(1);
 
@@ -11255,8 +12451,8 @@ mod.defineFunction('max', [webasmjs.ValueType.Int32],
 }).withExport();
 
 // min(a, b) = a < b ? a : b
-mod.defineFunction('min', [webasmjs.ValueType.Int32],
-  [webasmjs.ValueType.Int32, webasmjs.ValueType.Int32], (f, a) => {
+mod.defineFunction('min', [ValueType.Int32],
+  [ValueType.Int32, ValueType.Int32], (f, a) => {
   const x = f.getParameter(0);
   const y = f.getParameter(1);
 
@@ -11269,12 +12465,12 @@ mod.defineFunction('min', [webasmjs.ValueType.Int32],
 }).withExport();
 
 // clamp(val, lo, hi)
-mod.defineFunction('clamp', [webasmjs.ValueType.Int32],
-  [webasmjs.ValueType.Int32, webasmjs.ValueType.Int32, webasmjs.ValueType.Int32], (f, a) => {
+mod.defineFunction('clamp', [ValueType.Int32],
+  [ValueType.Int32, ValueType.Int32, ValueType.Int32], (f, a) => {
   const val = f.getParameter(0);
   const lo = f.getParameter(1);
   const hi = f.getParameter(2);
-  const tmp = a.declareLocal(webasmjs.ValueType.Int32, 'tmp');
+  const tmp = a.declareLocal(ValueType.Int32, 'tmp');
 
   // tmp = val > hi ? hi : val
   a.get_local(hi);
@@ -11314,18 +12510,19 @@ log('clamp(10, 0, 10) = ' + clamp(10, 0, 10));`
       description: "Multi-level block nesting with early break and continue.",
       target: "mvp",
       features: [],
+      imports: ["ModuleBuilder", "ValueType", "BlockType"],
       code: `// Nested blocks \u2014 multi-level break and continue patterns
-const mod = new webasmjs.ModuleBuilder('nestedBlocks');
+const mod = new ModuleBuilder('nestedBlocks');
 
 // Find the first number in [start, start+limit) divisible by both 3 and 5
 // Returns -1 if not found
-mod.defineFunction('findFizzBuzz', [webasmjs.ValueType.Int32],
-  [webasmjs.ValueType.Int32, webasmjs.ValueType.Int32], (f, a) => {
+mod.defineFunction('findFizzBuzz', [ValueType.Int32],
+  [ValueType.Int32, ValueType.Int32], (f, a) => {
   const start = f.getParameter(0);
   const limit = f.getParameter(1);
-  const i = a.declareLocal(webasmjs.ValueType.Int32, 'i');
-  const end = a.declareLocal(webasmjs.ValueType.Int32, 'end');
-  const result = a.declareLocal(webasmjs.ValueType.Int32, 'result');
+  const i = a.declareLocal(ValueType.Int32, 'i');
+  const end = a.declareLocal(ValueType.Int32, 'end');
+  const result = a.declareLocal(ValueType.Int32, 'result');
 
   a.const_i32(-1);
   a.set_local(result);
@@ -11340,10 +12537,10 @@ mod.defineFunction('findFizzBuzz', [webasmjs.ValueType.Int32],
   a.set_local(i);
 
   // outer block \u2014 break here when found
-  a.block(webasmjs.BlockType.Void, (found) => {
-    a.loop(webasmjs.BlockType.Void, (cont) => {
+  a.block(BlockType.Void, (found) => {
+    a.loop(BlockType.Void, (cont) => {
       // if i >= end, exit loop
-      a.block(webasmjs.BlockType.Void, (skip) => {
+      a.block(BlockType.Void, (skip) => {
         a.get_local(i);
         a.get_local(end);
         a.ge_i32();
@@ -11395,24 +12592,25 @@ log('  findFizzBuzz(46, 10) = ' + findFizzBuzz(46, 10));`
       description: "Stack manipulation with drop() and tee_local().",
       target: "mvp",
       features: [],
+      imports: ["ModuleBuilder", "ValueType", "BlockType"],
       code: `// drop and tee_local \u2014 stack manipulation
-const mod = new webasmjs.ModuleBuilder('stackOps');
+const mod = new ModuleBuilder('stackOps');
 
 // tee_local: stores to local AND keeps value on stack
 // Equivalent to: set_local + get_local, but in one instruction
-mod.defineFunction('sumAndCount', [webasmjs.ValueType.Int32],
-  [webasmjs.ValueType.Int32], (f, a) => {
+mod.defineFunction('sumAndCount', [ValueType.Int32],
+  [ValueType.Int32], (f, a) => {
   const n = f.getParameter(0);
-  const sum = a.declareLocal(webasmjs.ValueType.Int32, 'sum');
-  const i = a.declareLocal(webasmjs.ValueType.Int32, 'i');
+  const sum = a.declareLocal(ValueType.Int32, 'sum');
+  const i = a.declareLocal(ValueType.Int32, 'i');
 
   a.const_i32(0);
   a.set_local(sum);
   a.const_i32(1);
   a.set_local(i);
 
-  a.loop(webasmjs.BlockType.Void, (cont) => {
-    a.block(webasmjs.BlockType.Void, (brk) => {
+  a.loop(BlockType.Void, (cont) => {
+    a.block(BlockType.Void, (brk) => {
       a.get_local(i);
       a.get_local(n);
       a.gt_i32();
@@ -11438,7 +12636,7 @@ mod.defineFunction('sumAndCount', [webasmjs.ValueType.Int32],
 }).withExport();
 
 // drop: discard an unwanted return value
-mod.defineFunction('callAndDiscard', [webasmjs.ValueType.Int32], [], (f, a) => {
+mod.defineFunction('callAndDiscard', [ValueType.Int32], [], (f, a) => {
   // Call sumAndCount but ignore its return value
   a.const_i32(10);
   a.call(mod._functions[0]); // calls sumAndCount(10)
@@ -11465,19 +12663,20 @@ log('  result = ' + callAndDiscard() + ' (dropped sumAndCount result, returned 4
       description: "Use unreachable as an assertion \u2014 traps if reached.",
       target: "mvp",
       features: [],
+      imports: ["ModuleBuilder", "ValueType", "BlockType"],
       code: `// unreachable \u2014 intentional trap for defensive programming
-const mod = new webasmjs.ModuleBuilder('trapDemo');
+const mod = new ModuleBuilder('trapDemo');
 
 // divide(a, b) \u2014 traps if b is zero
-mod.defineFunction('divide', [webasmjs.ValueType.Int32],
-  [webasmjs.ValueType.Int32, webasmjs.ValueType.Int32], (f, a) => {
+mod.defineFunction('divide', [ValueType.Int32],
+  [ValueType.Int32, ValueType.Int32], (f, a) => {
   const x = f.getParameter(0);
   const y = f.getParameter(1);
 
   // Guard: trap if divisor is zero
   a.get_local(y);
   a.eqz_i32();
-  a.if(webasmjs.BlockType.Void, () => {
+  a.if(BlockType.Void, () => {
     a.unreachable();  // trap!
   });
 
@@ -11502,6 +12701,85 @@ try {
   log('The unreachable instruction prevented division by zero!');
 }`
     },
+    "early-return": {
+      label: "Early Return",
+      group: "Control Flow",
+      description: "Exit from nested blocks using return instruction.",
+      target: "mvp",
+      features: [],
+      imports: ["ModuleBuilder", "ValueType", "BlockType"],
+      code: `// Early Return \u2014 exit from nested blocks
+const mod = new ModuleBuilder('earlyReturn');
+
+// Return early if n <= 0, otherwise compute n * 2
+mod.defineFunction('doublePositive', [ValueType.Int32], [ValueType.Int32], (f, a) => {
+  const n = f.getParameter(0);
+  a.get_local(n);
+  a.const_i32(0);
+  a.le_i32();
+  a.if(BlockType.Void, () => {
+    a.const_i32(-1);
+    a.return();
+  });
+  a.get_local(n);
+  a.const_i32(2);
+  a.mul_i32();
+}).withExport();
+
+const instance = await mod.instantiate();
+const { doublePositive } = instance.instance.exports;
+log('doublePositive(5) = ' + doublePositive(5));
+log('doublePositive(0) = ' + doublePositive(0));
+log('doublePositive(-3) = ' + doublePositive(-3));
+log('doublePositive(100) = ' + doublePositive(100));`
+    },
+    "switch-dispatch": {
+      label: "Switch via br_table",
+      group: "Control Flow",
+      description: "Pattern matching using br_table for switch/case dispatch.",
+      target: "mvp",
+      features: [],
+      imports: ["ModuleBuilder", "ValueType", "BlockType"],
+      code: `// Switch via br_table \u2014 pattern matching
+const mod = new ModuleBuilder('switchCase');
+
+// Map 0\u219210, 1\u219220, 2\u219230, default\u2192-1
+mod.defineFunction('lookup', [ValueType.Int32], [ValueType.Int32], (f, a) => {
+  const n = f.getParameter(0);
+  const result = a.declareLocal(ValueType.Int32, 'result');
+  a.block(BlockType.Void, (defaultBlock) => {
+    a.block(BlockType.Void, (case2) => {
+      a.block(BlockType.Void, (case1) => {
+        a.block(BlockType.Void, (case0) => {
+          a.get_local(n);
+          a.br_table(defaultBlock, case0, case1, case2);
+        });
+        // case 0
+        a.const_i32(10); a.set_local(result);
+        a.br(defaultBlock);
+      });
+      // case 1
+      a.const_i32(20); a.set_local(result);
+      a.br(defaultBlock);
+    });
+    // case 2
+    a.const_i32(30); a.set_local(result);
+    a.br(defaultBlock);
+  });
+  // After the blocks \u2014 either from a case or default
+  // For default, result stays 0; let's set it to -1 only if not set
+  // Actually with br_table, if n > 2, we fall to defaultBlock directly
+  a.get_local(result);
+  // If result is still 0 and n > 2, return -1
+}).withExport();
+
+const instance = await mod.instantiate();
+const { lookup } = instance.instance.exports;
+log('lookup(0) = ' + lookup(0));
+log('lookup(1) = ' + lookup(1));
+log('lookup(2) = ' + lookup(2));
+log('lookup(5) = ' + lookup(5) + ' (default)');`
+    },
     // ─── Numeric Types ───
     "float-math": {
       label: "Float Math",
@@ -11509,19 +12787,20 @@ try {
       description: "Floating-point distance, rounding, and sqrt with f64.",
       target: "mvp",
       features: [],
+      imports: ["ModuleBuilder", "ValueType"],
       code: `// Floating-point operations \u2014 f64 math functions
-const mod = new webasmjs.ModuleBuilder('floatMath');
+const mod = new ModuleBuilder('floatMath');
 
 // Distance: sqrt(dx*dx + dy*dy)
-mod.defineFunction('distance', [webasmjs.ValueType.Float64],
-  [webasmjs.ValueType.Float64, webasmjs.ValueType.Float64,
-   webasmjs.ValueType.Float64, webasmjs.ValueType.Float64], (f, a) => {
+mod.defineFunction('distance', [ValueType.Float64],
+  [ValueType.Float64, ValueType.Float64,
+   ValueType.Float64, ValueType.Float64], (f, a) => {
   const x1 = f.getParameter(0);
   const y1 = f.getParameter(1);
   const x2 = f.getParameter(2);
   const y2 = f.getParameter(3);
-  const dx = a.declareLocal(webasmjs.ValueType.Float64, 'dx');
-  const dy = a.declareLocal(webasmjs.ValueType.Float64, 'dy');
+  const dx = a.declareLocal(ValueType.Float64, 'dx');
+  const dy = a.declareLocal(ValueType.Float64, 'dy');
 
   // dx = x2 - x1
   a.get_local(x2);
@@ -11547,12 +12826,12 @@ mod.defineFunction('distance', [webasmjs.ValueType.Float64],
 }).withExport();
 
 // Rounding functions
-mod.defineFunction('roundUp', [webasmjs.ValueType.Float64], [webasmjs.ValueType.Float64], (f, a) => {
+mod.defineFunction('roundUp', [ValueType.Float64], [ValueType.Float64], (f, a) => {
   a.get_local(f.getParameter(0));
   a.ceil_f64();
 }).withExport();
 
-mod.defineFunction('roundDown', [webasmjs.ValueType.Float64], [webasmjs.ValueType.Float64], (f, a) => {
+mod.defineFunction('roundDown', [ValueType.Float64], [ValueType.Float64], (f, a) => {
   a.get_local(f.getParameter(0));
   a.floor_f64();
 }).withExport();
@@ -11574,36 +12853,37 @@ log('roundDown(2.7) = ' + roundDown(2.7));`
       description: "64-bit integers with BigInt interop \u2014 large factorial.",
       target: "mvp",
       features: [],
+      imports: ["ModuleBuilder", "ValueType", "BlockType"],
       code: `// 64-bit integers \u2014 BigInt interop
-const mod = new webasmjs.ModuleBuilder('i64ops');
+const mod = new ModuleBuilder('i64ops');
 
-mod.defineFunction('add64', [webasmjs.ValueType.Int64],
-  [webasmjs.ValueType.Int64, webasmjs.ValueType.Int64], (f, a) => {
+mod.defineFunction('add64', [ValueType.Int64],
+  [ValueType.Int64, ValueType.Int64], (f, a) => {
   a.get_local(f.getParameter(0));
   a.get_local(f.getParameter(1));
   a.add_i64();
 }).withExport();
 
-mod.defineFunction('mul64', [webasmjs.ValueType.Int64],
-  [webasmjs.ValueType.Int64, webasmjs.ValueType.Int64], (f, a) => {
+mod.defineFunction('mul64', [ValueType.Int64],
+  [ValueType.Int64, ValueType.Int64], (f, a) => {
   a.get_local(f.getParameter(0));
   a.get_local(f.getParameter(1));
   a.mul_i64();
 }).withExport();
 
 // Factorial with i64 \u2014 can handle larger numbers
-mod.defineFunction('factorial64', [webasmjs.ValueType.Int64], [webasmjs.ValueType.Int64], (f, a) => {
+mod.defineFunction('factorial64', [ValueType.Int64], [ValueType.Int64], (f, a) => {
   const n = f.getParameter(0);
-  const result = a.declareLocal(webasmjs.ValueType.Int64, 'result');
-  const i = a.declareLocal(webasmjs.ValueType.Int64, 'i');
+  const result = a.declareLocal(ValueType.Int64, 'result');
+  const i = a.declareLocal(ValueType.Int64, 'i');
 
   a.const_i64(1n);
   a.set_local(result);
   a.const_i64(1n);
   a.set_local(i);
 
-  a.loop(webasmjs.BlockType.Void, (loopLabel) => {
-    a.block(webasmjs.BlockType.Void, (breakLabel) => {
+  a.loop(BlockType.Void, (loopLabel) => {
+    a.block(BlockType.Void, (breakLabel) => {
       a.get_local(i);
       a.get_local(n);
       a.gt_i64();
@@ -11642,35 +12922,36 @@ for (let n = 0n; n <= 20n; n++) {
       description: "Convert between i32, i64, f32, and f64 types.",
       target: "mvp",
       features: [],
+      imports: ["ModuleBuilder", "ValueType"],
       code: `// Type conversions between numeric types
-const mod = new webasmjs.ModuleBuilder('conversions');
+const mod = new ModuleBuilder('conversions');
 
 // i32 to f64
-mod.defineFunction('i32_to_f64', [webasmjs.ValueType.Float64], [webasmjs.ValueType.Int32], (f, a) => {
+mod.defineFunction('i32_to_f64', [ValueType.Float64], [ValueType.Int32], (f, a) => {
   a.get_local(f.getParameter(0));
   a.convert_i32_s_f64();
 }).withExport();
 
 // f64 to i32 (truncate)
-mod.defineFunction('f64_to_i32', [webasmjs.ValueType.Int32], [webasmjs.ValueType.Float64], (f, a) => {
+mod.defineFunction('f64_to_i32', [ValueType.Int32], [ValueType.Float64], (f, a) => {
   a.get_local(f.getParameter(0));
   a.trunc_f64_s_i32();
 }).withExport();
 
 // i32 to i64 (sign extend)
-mod.defineFunction('i32_to_i64', [webasmjs.ValueType.Int64], [webasmjs.ValueType.Int32], (f, a) => {
+mod.defineFunction('i32_to_i64', [ValueType.Int64], [ValueType.Int32], (f, a) => {
   a.get_local(f.getParameter(0));
   a.extend_i32_s_i64();
 }).withExport();
 
 // i64 to i32 (wrap)
-mod.defineFunction('i64_to_i32', [webasmjs.ValueType.Int32], [webasmjs.ValueType.Int64], (f, a) => {
+mod.defineFunction('i64_to_i32', [ValueType.Int32], [ValueType.Int64], (f, a) => {
   a.get_local(f.getParameter(0));
   a.wrap_i64_i32();
 }).withExport();
 
 // f32 to f64 (promote)
-mod.defineFunction('f32_to_f64', [webasmjs.ValueType.Float64], [webasmjs.ValueType.Float32], (f, a) => {
+mod.defineFunction('f32_to_f64', [ValueType.Float64], [ValueType.Float32], (f, a) => {
   a.get_local(f.getParameter(0));
   a.promote_f32_f64();
 }).withExport();
@@ -11692,37 +12973,38 @@ log('f32(3.14) \u2192 f64: ' + f32_to_f64(3.140000104904175));`
       description: "Rotation, leading/trailing zeros, and popcount on i32.",
       target: "mvp",
       features: [],
+      imports: ["ModuleBuilder", "ValueType"],
       code: `// Bitwise operations \u2014 rotl, rotr, clz, ctz, popcnt
-const mod = new webasmjs.ModuleBuilder('bitwiseOps');
+const mod = new ModuleBuilder('bitwiseOps');
 
-mod.defineFunction('rotl', [webasmjs.ValueType.Int32],
-  [webasmjs.ValueType.Int32, webasmjs.ValueType.Int32], (f, a) => {
+mod.defineFunction('rotl', [ValueType.Int32],
+  [ValueType.Int32, ValueType.Int32], (f, a) => {
   a.get_local(f.getParameter(0));
   a.get_local(f.getParameter(1));
   a.rotl_i32();
 }).withExport();
 
-mod.defineFunction('rotr', [webasmjs.ValueType.Int32],
-  [webasmjs.ValueType.Int32, webasmjs.ValueType.Int32], (f, a) => {
+mod.defineFunction('rotr', [ValueType.Int32],
+  [ValueType.Int32, ValueType.Int32], (f, a) => {
   a.get_local(f.getParameter(0));
   a.get_local(f.getParameter(1));
   a.rotr_i32();
 }).withExport();
 
-mod.defineFunction('clz', [webasmjs.ValueType.Int32],
-  [webasmjs.ValueType.Int32], (f, a) => {
+mod.defineFunction('clz', [ValueType.Int32],
+  [ValueType.Int32], (f, a) => {
   a.get_local(f.getParameter(0));
   a.clz_i32();
 }).withExport();
 
-mod.defineFunction('ctz', [webasmjs.ValueType.Int32],
-  [webasmjs.ValueType.Int32], (f, a) => {
+mod.defineFunction('ctz', [ValueType.Int32],
+  [ValueType.Int32], (f, a) => {
   a.get_local(f.getParameter(0));
   a.ctz_i32();
 }).withExport();
 
-mod.defineFunction('popcnt', [webasmjs.ValueType.Int32],
-  [webasmjs.ValueType.Int32], (f, a) => {
+mod.defineFunction('popcnt', [ValueType.Int32],
+  [ValueType.Int32], (f, a) => {
   a.get_local(f.getParameter(0));
   a.popcnt_i32();
 }).withExport();
@@ -11752,27 +13034,28 @@ log('popcnt(0) = ' + popcnt(0));`
       description: "copysign, nearest, trunc \u2014 standalone float operations.",
       target: "mvp",
       features: [],
+      imports: ["ModuleBuilder", "ValueType"],
       code: `// Special float operations \u2014 copysign, nearest, trunc
-const mod = new webasmjs.ModuleBuilder('floatSpecial');
+const mod = new ModuleBuilder('floatSpecial');
 
 // copysign(a, b) \u2014 magnitude of a, sign of b
-mod.defineFunction('copysign', [webasmjs.ValueType.Float64],
-  [webasmjs.ValueType.Float64, webasmjs.ValueType.Float64], (f, a) => {
+mod.defineFunction('copysign', [ValueType.Float64],
+  [ValueType.Float64, ValueType.Float64], (f, a) => {
   a.get_local(f.getParameter(0));
   a.get_local(f.getParameter(1));
   a.copysign_f64();
 }).withExport();
 
 // nearest \u2014 round to nearest even (banker's rounding)
-mod.defineFunction('nearest', [webasmjs.ValueType.Float64],
-  [webasmjs.ValueType.Float64], (f, a) => {
+mod.defineFunction('nearest', [ValueType.Float64],
+  [ValueType.Float64], (f, a) => {
   a.get_local(f.getParameter(0));
   a.nearest_f64();
 }).withExport();
 
 // trunc \u2014 round towards zero (remove fractional part)
-mod.defineFunction('trunc', [webasmjs.ValueType.Float64],
-  [webasmjs.ValueType.Float64], (f, a) => {
+mod.defineFunction('trunc', [ValueType.Float64],
+  [ValueType.Float64], (f, a) => {
   a.get_local(f.getParameter(0));
   a.trunc_f64();
 }).withExport();
@@ -11806,33 +13089,34 @@ log('trunc(0.1) = ' + trunc(0.1));`
       description: "Reinterpret bits between float and int without conversion.",
       target: "mvp",
       features: [],
+      imports: ["ModuleBuilder", "ValueType"],
       code: `// Reinterpret \u2014 same bits, different type interpretation
-const mod = new webasmjs.ModuleBuilder('reinterpret');
+const mod = new ModuleBuilder('reinterpret');
 
 // View f32 bits as i32
-mod.defineFunction('f32_bits', [webasmjs.ValueType.Int32],
-  [webasmjs.ValueType.Float32], (f, a) => {
+mod.defineFunction('f32_bits', [ValueType.Int32],
+  [ValueType.Float32], (f, a) => {
   a.get_local(f.getParameter(0));
   a.reinterpret_f32_i32();
 }).withExport();
 
 // View i32 bits as f32
-mod.defineFunction('i32_as_f32', [webasmjs.ValueType.Float32],
-  [webasmjs.ValueType.Int32], (f, a) => {
+mod.defineFunction('i32_as_f32', [ValueType.Float32],
+  [ValueType.Int32], (f, a) => {
   a.get_local(f.getParameter(0));
   a.reinterpret_i32_f32();
 }).withExport();
 
 // View f64 bits as i64
-mod.defineFunction('f64_bits', [webasmjs.ValueType.Int64],
-  [webasmjs.ValueType.Float64], (f, a) => {
+mod.defineFunction('f64_bits', [ValueType.Int64],
+  [ValueType.Float64], (f, a) => {
   a.get_local(f.getParameter(0));
   a.reinterpret_f64_i64();
 }).withExport();
 
 // View i64 bits as f64
-mod.defineFunction('i64_as_f64', [webasmjs.ValueType.Float64],
-  [webasmjs.ValueType.Int64], (f, a) => {
+mod.defineFunction('i64_as_f64', [ValueType.Float64],
+  [ValueType.Int64], (f, a) => {
   a.get_local(f.getParameter(0));
   a.reinterpret_i64_f64();
 }).withExport();
@@ -11852,6 +13136,72 @@ log('=== f64 \\u2194 i64 reinterpret ===');
 log('f64_bits(1.0) = 0x' + f64_bits(1.0).toString(16) + '  (3FF0000000000000)');
 log('i64_as_f64(0x4009_21FB_5444_2D18n) = ' + i64_as_f64(0x400921FB54442D18n) + '  (pi)');`
     },
+    "clz-ctz-popcnt": {
+      label: "Bit Counting",
+      group: "Numeric",
+      description: "Count leading zeros, trailing zeros, and population count.",
+      target: "mvp",
+      features: [],
+      imports: ["ModuleBuilder", "ValueType"],
+      code: `// Bit Counting \u2014 clz, ctz, and popcnt
+const mod = new ModuleBuilder('bitCount');
+
+mod.defineFunction('clz', [ValueType.Int32], [ValueType.Int32], (f, a) => {
+  a.get_local(f.getParameter(0));
+  a.clz_i32();
+}).withExport();
+
+mod.defineFunction('ctz', [ValueType.Int32], [ValueType.Int32], (f, a) => {
+  a.get_local(f.getParameter(0));
+  a.ctz_i32();
+}).withExport();
+
+mod.defineFunction('popcnt', [ValueType.Int32], [ValueType.Int32], (f, a) => {
+  a.get_local(f.getParameter(0));
+  a.popcnt_i32();
+}).withExport();
+
+const instance = await mod.instantiate();
+const { clz, ctz, popcnt } = instance.instance.exports;
+log('clz(1) = ' + clz(1) + ' (31 leading zeros)');
+log('clz(256) = ' + clz(256) + ' (23 leading zeros)');
+log('ctz(8) = ' + ctz(8) + ' (3 trailing zeros)');
+log('ctz(12) = ' + ctz(12) + ' (2 trailing zeros)');
+log('popcnt(7) = ' + popcnt(7) + ' (3 bits set: 111)');
+log('popcnt(255) = ' + popcnt(255) + ' (8 bits set)');`
+    },
+    "integer-overflow": {
+      label: "Integer Overflow",
+      group: "Numeric",
+      description: "Wrapping behavior of i32 arithmetic on overflow.",
+      target: "mvp",
+      features: [],
+      imports: ["ModuleBuilder", "ValueType"],
+      code: `// Integer Overflow \u2014 wrapping behavior of i32 arithmetic
+const mod = new ModuleBuilder('overflow');
+
+mod.defineFunction('addWrap', [ValueType.Int32], [ValueType.Int32, ValueType.Int32], (f, a) => {
+  a.get_local(f.getParameter(0));
+  a.get_local(f.getParameter(1));
+  a.add_i32();
+}).withExport();
+
+mod.defineFunction('mulWrap', [ValueType.Int32], [ValueType.Int32, ValueType.Int32], (f, a) => {
+  a.get_local(f.getParameter(0));
+  a.get_local(f.getParameter(1));
+  a.mul_i32();
+}).withExport();
+
+const instance = await mod.instantiate();
+const { addWrap, mulWrap } = instance.instance.exports;
+
+const MAX = 2147483647;  // i32 max
+log('MAX_INT32 = ' + MAX);
+log('MAX + 1 = ' + addWrap(MAX, 1) + ' (wraps to MIN)');
+log('MAX + MAX = ' + addWrap(MAX, MAX) + ' (wraps)');
+log('1000000 * 1000000 = ' + mulWrap(1000000, 1000000) + ' (wraps)');
+log('-1 * -1 = ' + mulWrap(-1, -1) + ' (no overflow)');`
+    },
     // ─── Algorithms ───
     "bubble-sort": {
       label: "Bubble Sort",
@@ -11859,12 +13209,13 @@ log('i64_as_f64(0x4009_21FB_5444_2D18n) = ' + i64_as_f64(0x400921FB54442D18n) + 
       description: "Sort an array in linear memory with nested loops.",
       target: "mvp",
       features: [],
+      imports: ["ModuleBuilder", "ValueType", "BlockType"],
       code: `// Bubble sort in WASM memory
-const mod = new webasmjs.ModuleBuilder('bubbleSort');
+const mod = new ModuleBuilder('bubbleSort');
 mod.defineMemory(1);
 
 // Store i32 at index (index * 4)
-mod.defineFunction('set', null, [webasmjs.ValueType.Int32, webasmjs.ValueType.Int32], (f, a) => {
+mod.defineFunction('set', null, [ValueType.Int32, ValueType.Int32], (f, a) => {
   a.get_local(f.getParameter(0));
   a.const_i32(4);
   a.mul_i32();
@@ -11873,7 +13224,7 @@ mod.defineFunction('set', null, [webasmjs.ValueType.Int32, webasmjs.ValueType.In
 }).withExport();
 
 // Load i32 at index
-mod.defineFunction('get', [webasmjs.ValueType.Int32], [webasmjs.ValueType.Int32], (f, a) => {
+mod.defineFunction('get', [ValueType.Int32], [ValueType.Int32], (f, a) => {
   a.get_local(f.getParameter(0));
   a.const_i32(4);
   a.mul_i32();
@@ -11884,19 +13235,19 @@ const setFn = mod._functions[0];
 const getFn = mod._functions[1];
 
 // Bubble sort(length)
-mod.defineFunction('sort', null, [webasmjs.ValueType.Int32], (f, a) => {
+mod.defineFunction('sort', null, [ValueType.Int32], (f, a) => {
   const len = f.getParameter(0);
-  const i = a.declareLocal(webasmjs.ValueType.Int32, 'i');
-  const j = a.declareLocal(webasmjs.ValueType.Int32, 'j');
-  const temp = a.declareLocal(webasmjs.ValueType.Int32, 'temp');
-  const swapped = a.declareLocal(webasmjs.ValueType.Int32, 'swapped');
+  const i = a.declareLocal(ValueType.Int32, 'i');
+  const j = a.declareLocal(ValueType.Int32, 'j');
+  const temp = a.declareLocal(ValueType.Int32, 'temp');
+  const swapped = a.declareLocal(ValueType.Int32, 'swapped');
 
   a.const_i32(0);
   a.set_local(i);
 
   // Outer loop
-  a.loop(webasmjs.BlockType.Void, (outerLoop) => {
-    a.block(webasmjs.BlockType.Void, (outerBreak) => {
+  a.loop(BlockType.Void, (outerLoop) => {
+    a.block(BlockType.Void, (outerBreak) => {
       a.get_local(i);
       a.get_local(len);
       a.const_i32(1);
@@ -11910,8 +13261,8 @@ mod.defineFunction('sort', null, [webasmjs.ValueType.Int32], (f, a) => {
       a.set_local(j);
 
       // Inner loop
-      a.loop(webasmjs.BlockType.Void, (innerLoop) => {
-        a.block(webasmjs.BlockType.Void, (innerBreak) => {
+      a.loop(BlockType.Void, (innerLoop) => {
+        a.block(BlockType.Void, (innerBreak) => {
           a.get_local(j);
           a.get_local(len);
           a.const_i32(1);
@@ -11929,7 +13280,7 @@ mod.defineFunction('sort', null, [webasmjs.ValueType.Int32], (f, a) => {
           a.add_i32();
           a.call(getFn);
           a.gt_i32();
-          a.if(webasmjs.BlockType.Void, () => {
+          a.if(BlockType.Void, () => {
             // temp = arr[j]
             a.get_local(j);
             a.call(getFn);
@@ -11992,17 +13343,18 @@ log('After:  ' + sorted.join(', '));`
       description: "Greatest common divisor using the Euclidean algorithm.",
       target: "mvp",
       features: [],
+      imports: ["ModuleBuilder", "ValueType", "BlockType"],
       code: `// Greatest common divisor \u2014 Euclidean algorithm
-const mod = new webasmjs.ModuleBuilder('gcd');
+const mod = new ModuleBuilder('gcd');
 
-mod.defineFunction('gcd', [webasmjs.ValueType.Int32],
-  [webasmjs.ValueType.Int32, webasmjs.ValueType.Int32], (f, a) => {
+mod.defineFunction('gcd', [ValueType.Int32],
+  [ValueType.Int32, ValueType.Int32], (f, a) => {
   const x = f.getParameter(0);
   const y = f.getParameter(1);
-  const temp = a.declareLocal(webasmjs.ValueType.Int32, 'temp');
+  const temp = a.declareLocal(ValueType.Int32, 'temp');
 
-  a.loop(webasmjs.BlockType.Void, (loopLabel) => {
-    a.block(webasmjs.BlockType.Void, (breakLabel) => {
+  a.loop(BlockType.Void, (loopLabel) => {
+    a.block(BlockType.Void, (breakLabel) => {
       a.get_local(y);
       a.eqz_i32();
       a.br_if(breakLabel);
@@ -12040,18 +13392,19 @@ for (const [a, b] of pairs) {
       description: "Count steps to reach 1 using the 3n+1 conjecture.",
       target: "mvp",
       features: [],
+      imports: ["ModuleBuilder", "ValueType", "BlockType"],
       code: `// Collatz conjecture \u2014 count steps to reach 1
-const mod = new webasmjs.ModuleBuilder('collatz');
+const mod = new ModuleBuilder('collatz');
 
-mod.defineFunction('collatz', [webasmjs.ValueType.Int32], [webasmjs.ValueType.Int32], (f, a) => {
+mod.defineFunction('collatz', [ValueType.Int32], [ValueType.Int32], (f, a) => {
   const n = f.getParameter(0);
-  const steps = a.declareLocal(webasmjs.ValueType.Int32, 'steps');
+  const steps = a.declareLocal(ValueType.Int32, 'steps');
 
   a.const_i32(0);
   a.set_local(steps);
 
-  a.loop(webasmjs.BlockType.Void, (loopLabel) => {
-    a.block(webasmjs.BlockType.Void, (breakLabel) => {
+  a.loop(BlockType.Void, (loopLabel) => {
+    a.block(BlockType.Void, (breakLabel) => {
       a.get_local(n);
       a.const_i32(1);
       a.le_i32();
@@ -12066,7 +13419,7 @@ mod.defineFunction('collatz', [webasmjs.ValueType.Int32], [webasmjs.ValueType.In
       a.get_local(n);
       a.const_i32(1);
       a.and_i32();
-      a.if(webasmjs.BlockType.Void);
+      a.if(BlockType.Void);
         // odd: n = 3n + 1
         a.get_local(n);
         a.const_i32(3);
@@ -12102,18 +13455,19 @@ for (const n of [1, 2, 3, 6, 7, 9, 27, 97, 871]) {
       description: "Trial division to test and list prime numbers.",
       target: "mvp",
       features: [],
+      imports: ["ModuleBuilder", "ValueType", "BlockType"],
       code: `// Primality test \u2014 trial division
-const mod = new webasmjs.ModuleBuilder('prime');
+const mod = new ModuleBuilder('prime');
 
-mod.defineFunction('isPrime', [webasmjs.ValueType.Int32], [webasmjs.ValueType.Int32], (f, a) => {
+mod.defineFunction('isPrime', [ValueType.Int32], [ValueType.Int32], (f, a) => {
   const n = f.getParameter(0);
-  const i = a.declareLocal(webasmjs.ValueType.Int32, 'i');
+  const i = a.declareLocal(ValueType.Int32, 'i');
 
   // n <= 1 \u2192 not prime
   a.get_local(n);
   a.const_i32(1);
   a.le_i32();
-  a.if(webasmjs.BlockType.Void, () => {
+  a.if(BlockType.Void, () => {
     a.const_i32(0);
     a.return();
   });
@@ -12122,7 +13476,7 @@ mod.defineFunction('isPrime', [webasmjs.ValueType.Int32], [webasmjs.ValueType.In
   a.get_local(n);
   a.const_i32(3);
   a.le_i32();
-  a.if(webasmjs.BlockType.Void, () => {
+  a.if(BlockType.Void, () => {
     a.const_i32(1);
     a.return();
   });
@@ -12132,7 +13486,7 @@ mod.defineFunction('isPrime', [webasmjs.ValueType.Int32], [webasmjs.ValueType.In
   a.const_i32(2);
   a.rem_i32_u();
   a.eqz_i32();
-  a.if(webasmjs.BlockType.Void, () => {
+  a.if(BlockType.Void, () => {
     a.const_i32(0);
     a.return();
   });
@@ -12141,8 +13495,8 @@ mod.defineFunction('isPrime', [webasmjs.ValueType.Int32], [webasmjs.ValueType.In
   a.const_i32(3);
   a.set_local(i);
 
-  a.loop(webasmjs.BlockType.Void, (loopLabel) => {
-    a.block(webasmjs.BlockType.Void, (breakLabel) => {
+  a.loop(BlockType.Void, (loopLabel) => {
+    a.block(BlockType.Void, (breakLabel) => {
       // if i * i > n, break (is prime)
       a.get_local(i);
       a.get_local(i);
@@ -12156,7 +13510,7 @@ mod.defineFunction('isPrime', [webasmjs.ValueType.Int32], [webasmjs.ValueType.In
       a.get_local(i);
       a.rem_i32_u();
       a.eqz_i32();
-      a.if(webasmjs.BlockType.Void, () => {
+      a.if(BlockType.Void, () => {
         a.const_i32(0);
         a.return();
       });
@@ -12187,6 +13541,208 @@ for (const n of [997, 1000, 7919, 7920, 104729]) {
   log(n + ' is ' + (isPrime(n) ? 'prime' : 'not prime'));
 }`
     },
+    "binary-search": {
+      label: "Binary Search",
+      group: "Algorithms",
+      description: "Search a sorted array in linear memory using binary search.",
+      target: "mvp",
+      features: [],
+      imports: ["ModuleBuilder", "ValueType", "BlockType"],
+      code: `// Binary Search \u2014 search a sorted array in linear memory
+const mod = new ModuleBuilder('binarySearch');
+const mem = mod.defineMemory(1);
+mod.exportMemory(mem, 'memory');
+
+// binarySearch(ptr, len, target) \u2192 index or -1
+mod.defineFunction('search', [ValueType.Int32],
+  [ValueType.Int32, ValueType.Int32, ValueType.Int32], (f, a) => {
+  const ptr = f.getParameter(0);
+  const len = f.getParameter(1);
+  const target = f.getParameter(2);
+  const lo = a.declareLocal(ValueType.Int32, 'lo');
+  const hi = a.declareLocal(ValueType.Int32, 'hi');
+  const mid = a.declareLocal(ValueType.Int32, 'mid');
+  const val = a.declareLocal(ValueType.Int32, 'val');
+
+  a.const_i32(0); a.set_local(lo);
+  a.get_local(len); a.const_i32(1); a.sub_i32(); a.set_local(hi);
+
+  a.loop(BlockType.Void, (cont) => {
+    a.block(BlockType.Void, (done) => {
+      a.get_local(lo); a.get_local(hi); a.gt_i32(); a.br_if(done);
+      // mid = (lo + hi) / 2
+      a.get_local(lo); a.get_local(hi); a.add_i32();
+      a.const_i32(1); a.shr_i32_u(); a.set_local(mid);
+      // val = memory[ptr + mid * 4]
+      a.get_local(ptr); a.get_local(mid); a.const_i32(4); a.mul_i32(); a.add_i32();
+      a.load_i32(0, 0); a.set_local(val);
+      // if val == target, return mid
+      a.get_local(val); a.get_local(target); a.eq_i32();
+      a.if(BlockType.Void, () => { a.get_local(mid); a.return(); });
+      // if val < target, lo = mid + 1
+      a.get_local(val); a.get_local(target); a.lt_i32();
+      a.if(BlockType.Void, () => {
+        a.get_local(mid); a.const_i32(1); a.add_i32(); a.set_local(lo);
+      });
+      // if val > target, hi = mid - 1
+      a.get_local(val); a.get_local(target); a.gt_i32();
+      a.if(BlockType.Void, () => {
+        a.get_local(mid); a.const_i32(1); a.sub_i32(); a.set_local(hi);
+      });
+      a.br(cont);
+    });
+  });
+  a.const_i32(-1); // not found
+}).withExport();
+
+const instance = await mod.instantiate();
+const { search, memory } = instance.instance.exports;
+const view = new Int32Array(memory.buffer);
+
+// Store sorted array at offset 0
+const sorted = [2, 5, 8, 12, 16, 23, 38, 56, 72, 91];
+sorted.forEach((v, i) => view[i] = v);
+
+for (const target of [23, 2, 91, 50]) {
+  const idx = search(0, sorted.length, target);
+  log('search(' + target + ') = index ' + idx + (idx >= 0 ? ' (found)' : ' (not found)'));
+}`
+    },
+    "string-reverse": {
+      label: "String Reverse",
+      group: "Algorithms",
+      description: "Reverse a byte string in-place in linear memory.",
+      target: "mvp",
+      features: [],
+      imports: ["ModuleBuilder", "ValueType", "BlockType"],
+      code: `// String Reverse \u2014 reverse a byte string in-place in memory
+const mod = new ModuleBuilder('strReverse');
+const mem = mod.defineMemory(1);
+mod.exportMemory(mem, 'memory');
+
+// reverse(ptr, len) \u2014 in-place byte reversal
+mod.defineFunction('reverse', null, [ValueType.Int32, ValueType.Int32], (f, a) => {
+  const ptr = f.getParameter(0);
+  const len = f.getParameter(1);
+  const lo = a.declareLocal(ValueType.Int32, 'lo');
+  const hi = a.declareLocal(ValueType.Int32, 'hi');
+  const tmp = a.declareLocal(ValueType.Int32, 'tmp');
+
+  a.get_local(ptr); a.set_local(lo);
+  a.get_local(ptr); a.get_local(len); a.add_i32();
+  a.const_i32(1); a.sub_i32(); a.set_local(hi);
+
+  a.loop(BlockType.Void, (cont) => {
+    a.block(BlockType.Void, (done) => {
+      a.get_local(lo); a.get_local(hi); a.ge_i32_u(); a.br_if(done);
+      // swap mem[lo] and mem[hi]
+      a.get_local(lo); a.load8_i32_u(0, 0); a.set_local(tmp);
+      a.get_local(lo); a.get_local(hi); a.load8_i32_u(0, 0); a.store8_i32(0, 0);
+      a.get_local(hi); a.get_local(tmp); a.store8_i32(0, 0);
+      a.get_local(lo); a.const_i32(1); a.add_i32(); a.set_local(lo);
+      a.get_local(hi); a.const_i32(1); a.sub_i32(); a.set_local(hi);
+      a.br(cont);
+    });
+  });
+}).withExport();
+
+const instance = await mod.instantiate();
+const { reverse, memory } = instance.instance.exports;
+const view = new Uint8Array(memory.buffer);
+const encoder = new TextEncoder();
+const decoder = new TextDecoder();
+
+const str = 'Hello, WebAssembly!';
+const bytes = encoder.encode(str);
+view.set(bytes, 0);
+log('Before: ' + str);
+
+reverse(0, bytes.length);
+log('After:  ' + decoder.decode(view.slice(0, bytes.length)));`
+    },
+    "matrix-multiply": {
+      label: "Matrix Multiply",
+      group: "Algorithms",
+      description: "2x2 matrix multiplication using f32 values in memory.",
+      target: "mvp",
+      features: [],
+      imports: ["ModuleBuilder", "ValueType"],
+      code: `// Matrix Multiply \u2014 2x2 matrix multiplication in memory
+const mod = new ModuleBuilder('matrix');
+const mem = mod.defineMemory(1);
+mod.exportMemory(mem, 'memory');
+
+// 2x2 matrix stored as 4 floats: [a, b, c, d] = | a b |
+//                                                  | c d |
+// multiply(A_ptr, B_ptr, out_ptr)
+mod.defineFunction('multiply', null,
+  [ValueType.Int32, ValueType.Int32, ValueType.Int32], (f, a) => {
+  const A = f.getParameter(0);
+  const B = f.getParameter(1);
+  const O = f.getParameter(2);
+
+  // out[0] = A[0]*B[0] + A[1]*B[2]
+  a.get_local(O);
+  a.get_local(A); a.load_f32(0, 0);
+  a.get_local(B); a.load_f32(0, 0);
+  a.mul_f32();
+  a.get_local(A); a.load_f32(0, 4);
+  a.get_local(B); a.load_f32(0, 8);
+  a.mul_f32();
+  a.add_f32();
+  a.store_f32(0, 0);
+
+  // out[1] = A[0]*B[1] + A[1]*B[3]
+  a.get_local(O);
+  a.get_local(A); a.load_f32(0, 0);
+  a.get_local(B); a.load_f32(0, 4);
+  a.mul_f32();
+  a.get_local(A); a.load_f32(0, 4);
+  a.get_local(B); a.load_f32(0, 12);
+  a.mul_f32();
+  a.add_f32();
+  a.store_f32(0, 4);
+
+  // out[2] = A[2]*B[0] + A[3]*B[2]
+  a.get_local(O);
+  a.get_local(A); a.load_f32(0, 8);
+  a.get_local(B); a.load_f32(0, 0);
+  a.mul_f32();
+  a.get_local(A); a.load_f32(0, 12);
+  a.get_local(B); a.load_f32(0, 8);
+  a.mul_f32();
+  a.add_f32();
+  a.store_f32(0, 8);
+
+  // out[3] = A[2]*B[1] + A[3]*B[3]
+  a.get_local(O);
+  a.get_local(A); a.load_f32(0, 8);
+  a.get_local(B); a.load_f32(0, 4);
+  a.mul_f32();
+  a.get_local(A); a.load_f32(0, 12);
+  a.get_local(B); a.load_f32(0, 12);
+  a.mul_f32();
+  a.add_f32();
+  a.store_f32(0, 12);
+}).withExport();
+
+const instance = await mod.instantiate();
+const { multiply, memory } = instance.instance.exports;
+const view = new Float32Array(memory.buffer);
+
+// A = | 1 2 |  B = | 5 6 |
+//     | 3 4 |      | 7 8 |
+view.set([1, 2, 3, 4], 0);   // A at offset 0
+view.set([5, 6, 7, 8], 4);   // B at offset 16 (4 floats * 4 bytes)
+multiply(0, 16, 32);          // Result at offset 32
+
+log('A = | 1 2 |');
+log('    | 3 4 |');
+log('B = | 5 6 |');
+log('    | 7 8 |');
+log('A * B = | ' + view[8] + ' ' + view[9] + ' |');
+log('        | ' + view[10] + ' ' + view[11] + ' |');`
+    },
     // ─── WAT Parser ───
     "wat-parser": {
       label: "WAT Parser",
@@ -12194,6 +13750,7 @@ for (const n of [997, 1000, 7919, 7920, 104729]) {
       description: "Parse WebAssembly Text format and instantiate the module.",
       target: "mvp",
       features: [],
+      imports: ["parseWat"],
       code: `// Parse WAT text and instantiate
 const watSource = \`
 (module $parsed
@@ -12207,7 +13764,7 @@ const watSource = \`
 \`;
 
 log('Parsing WAT source...');
-const mod = webasmjs.parseWat(watSource);
+const mod = parseWat(watSource);
 log('WAT parsed successfully!');
 log('');
 
@@ -12223,6 +13780,7 @@ log('add(-5, 10) = ' + add(-5, 10));`
       description: "WAT with loop, block, and branch instructions.",
       target: "mvp",
       features: [],
+      imports: ["parseWat"],
       code: `// WAT with loop and branch instructions
 const watSource = \`
 (module $loops
@@ -12258,7 +13816,7 @@ const watSource = \`
 )
 \`;
 
-const mod = webasmjs.parseWat(watSource);
+const mod = parseWat(watSource);
 const instance = await mod.instantiate();
 const sum = instance.instance.exports.sum;
 
@@ -12273,6 +13831,7 @@ for (const n of [0, 1, 5, 10, 50, 100]) {
       description: "WAT with memory declarations, store/load, and exports.",
       target: "mvp",
       features: [],
+      imports: ["parseWat"],
       code: `// WAT with memory, data segments, and imports
 const watSource = \`
 (module $memTest
@@ -12292,7 +13851,7 @@ const watSource = \`
 )
 \`;
 
-const mod = webasmjs.parseWat(watSource);
+const mod = parseWat(watSource);
 const instance = await mod.instantiate();
 const { store, load, mem } = instance.instance.exports;
 
@@ -12318,6 +13877,7 @@ log('Raw bytes [0..15]: ' + Array.from(view.slice(0, 16)).join(', '));`
       description: "WAT with mutable globals, start function, and inc/dec.",
       target: "mvp",
       features: [],
+      imports: ["parseWat"],
       code: `// WAT with globals, start function, and if/else
 const watSource = \`
 (module $globalDemo
@@ -12355,7 +13915,7 @@ const watSource = \`
 )
 \`;
 
-const mod = webasmjs.parseWat(watSource);
+const mod = parseWat(watSource);
 const instance = await mod.instantiate();
 const { inc, dec, getCounter } = instance.instance.exports;
 
@@ -12372,6 +13932,7 @@ log('Final: ' + getCounter());`
       description: "WAT with function imports calling JavaScript host functions.",
       target: "mvp",
       features: [],
+      imports: ["parseWat"],
       code: `// WAT with imports \u2014 call JavaScript from WebAssembly text
 const watSource = \`
 (module $importDemo
@@ -12396,7 +13957,7 @@ const watSource = \`
 )
 \`;
 
-const mod = webasmjs.parseWat(watSource);
+const mod = parseWat(watSource);
 const results = [];
 const instance = await mod.instantiate({
   env: {
@@ -12412,6 +13973,77 @@ results.forEach((v, i) => log('  print[' + i + '] = ' + v));
 log('');
 log('First value is add(3, 4) = 7, then constants 100, 200');`
     },
+    "wat-multi-value": {
+      label: "WAT Multi-Value",
+      group: "WAT",
+      description: "WAT functions returning multiple values.",
+      target: "2.0",
+      features: [],
+      imports: ["parseWat"],
+      code: `// WAT Multi-Value \u2014 functions returning multiple values
+const wat = \`
+(module
+  (func $swap (param i32 i32) (result i32 i32)
+    local.get 1
+    local.get 0
+  )
+  (func $divmod (param i32 i32) (result i32 i32)
+    local.get 0
+    local.get 1
+    i32.div_s
+    local.get 0
+    local.get 1
+    i32.rem_s
+  )
+  (export "swap" (func $swap))
+  (export "divmod" (func $divmod))
+)\`;
+
+const mod = parseWat(wat);
+const instance = await mod.instantiate();
+const { swap, divmod } = instance.instance.exports;
+
+const swapped = swap(10, 20);
+log('swap(10, 20) = [' + swapped[0] + ', ' + swapped[1] + ']');
+
+const dm = divmod(17, 5);
+log('divmod(17, 5) = [' + dm[0] + ', ' + dm[1] + '] (quotient, remainder)');`
+    },
+    "wat-struct": {
+      label: "WAT with Structs",
+      group: "WAT",
+      description: "View generated WAT for GC struct and array types.",
+      target: "latest",
+      features: ["gc"],
+      imports: ["ModuleBuilder", "ValueType"],
+      code: `// WAT with GC Structs \u2014 view generated WAT for GC types
+// This example shows the text format for GC struct/array types
+const mod = new ModuleBuilder('watGC', {
+  target: 'latest',
+  disableVerification: true,
+});
+
+// A 2D point struct
+const Point = mod.defineStructType([
+  { name: 'x', type: ValueType.Float64, mutable: true },
+  { name: 'y', type: ValueType.Float64, mutable: true },
+]);
+
+// A mutable array of i32
+mod.defineArrayType(ValueType.Int32, true);
+
+// A simple function that creates a default point
+mod.defineFunction('origin', null, [], (f, a) => {
+  a.struct_new_default(Point.index);
+  a.drop();
+}).withExport();
+
+log('Generated WAT for GC types:');
+log(mod.toString());
+log('');
+const bytes = mod.toBytes();
+log('Binary valid: ' + WebAssembly.validate(bytes.buffer));`
+    },
     // ─── SIMD ───
     "simd-vec-add": {
       label: "SIMD Vector Add",
@@ -12419,13 +14051,14 @@ log('First value is add(3, 4) = 7, then constants 100, 200');`
       description: "Add two f32x4 vectors in memory using SIMD.",
       target: "3.0",
       features: ["simd"],
+      imports: ["ModuleBuilder", "ValueType"],
       code: `// SIMD: add two f32x4 vectors in memory
-const mod = new webasmjs.ModuleBuilder('simdAdd');
+const mod = new ModuleBuilder('simdAdd');
 mod.defineMemory(1);
 
 // vec4_add(srcA, srcB, dst) \u2014 adds two 4-float vectors
 mod.defineFunction('vec4_add', null,
-  [webasmjs.ValueType.Int32, webasmjs.ValueType.Int32, webasmjs.ValueType.Int32], (f, a) => {
+  [ValueType.Int32, ValueType.Int32, ValueType.Int32], (f, a) => {
   a.get_local(f.getParameter(2));  // push dest address first
   a.get_local(f.getParameter(0));
   a.load_v128(2, 0);
@@ -12436,14 +14069,14 @@ mod.defineFunction('vec4_add', null,
 }).withExport();
 
 mod.defineFunction('setF32', null,
-  [webasmjs.ValueType.Int32, webasmjs.ValueType.Float32], (f, a) => {
+  [ValueType.Int32, ValueType.Float32], (f, a) => {
   a.get_local(f.getParameter(0));
   a.get_local(f.getParameter(1));
   a.store_f32(2, 0);
 }).withExport();
 
-mod.defineFunction('getF32', [webasmjs.ValueType.Float32],
-  [webasmjs.ValueType.Int32], (f, a) => {
+mod.defineFunction('getF32', [ValueType.Float32],
+  [ValueType.Int32], (f, a) => {
   a.get_local(f.getParameter(0));
   a.load_f32(2, 0);
 }).withExport();
@@ -12473,13 +14106,14 @@ for (let i = 0; i < 4; i++) {
       description: "Element-wise multiply then sum lanes for dot product.",
       target: "3.0",
       features: ["simd"],
+      imports: ["ModuleBuilder", "ValueType"],
       code: `// SIMD dot product: multiply element-wise then sum lanes
-const mod = new webasmjs.ModuleBuilder('simdDot');
+const mod = new ModuleBuilder('simdDot');
 mod.defineMemory(1);
 
-mod.defineFunction('dot4', [webasmjs.ValueType.Float32],
-  [webasmjs.ValueType.Int32, webasmjs.ValueType.Int32], (f, a) => {
-  const products = a.declareLocal(webasmjs.ValueType.V128, 'products');
+mod.defineFunction('dot4', [ValueType.Float32],
+  [ValueType.Int32, ValueType.Int32], (f, a) => {
+  const products = a.declareLocal(ValueType.V128, 'products');
 
   a.get_local(f.getParameter(0));
   a.load_v128(2, 0);
@@ -12503,7 +14137,7 @@ mod.defineFunction('dot4', [webasmjs.ValueType.Float32],
 }).withExport();
 
 mod.defineFunction('setF32', null,
-  [webasmjs.ValueType.Int32, webasmjs.ValueType.Float32], (f, a) => {
+  [ValueType.Int32, ValueType.Float32], (f, a) => {
   a.get_local(f.getParameter(0));
   a.get_local(f.getParameter(1));
   a.store_f32(2, 0);
@@ -12531,13 +14165,14 @@ log('Expected: ' + (1*5 + 2*6 + 3*7 + 4*8));`
       description: "Broadcast a scalar to all lanes and multiply a vector.",
       target: "3.0",
       features: ["simd"],
+      imports: ["ModuleBuilder", "ValueType"],
       code: `// SIMD splat: broadcast a scalar to all lanes, then multiply
-const mod = new webasmjs.ModuleBuilder('simdScale');
+const mod = new ModuleBuilder('simdScale');
 mod.defineMemory(1);
 
 // scale_vec4(src, dst, scalar) \u2014 multiply a vector by a scalar
 mod.defineFunction('scale_vec4', null,
-  [webasmjs.ValueType.Int32, webasmjs.ValueType.Int32, webasmjs.ValueType.Float32], (f, a) => {
+  [ValueType.Int32, ValueType.Int32, ValueType.Float32], (f, a) => {
   a.get_local(f.getParameter(1));  // push dest address first
   a.get_local(f.getParameter(0));
   a.load_v128(2, 0);
@@ -12548,14 +14183,14 @@ mod.defineFunction('scale_vec4', null,
 }).withExport();
 
 mod.defineFunction('setF32', null,
-  [webasmjs.ValueType.Int32, webasmjs.ValueType.Float32], (f, a) => {
+  [ValueType.Int32, ValueType.Float32], (f, a) => {
   a.get_local(f.getParameter(0));
   a.get_local(f.getParameter(1));
   a.store_f32(2, 0);
 }).withExport();
 
-mod.defineFunction('getF32', [webasmjs.ValueType.Float32],
-  [webasmjs.ValueType.Int32], (f, a) => {
+mod.defineFunction('getF32', [ValueType.Float32],
+  [ValueType.Int32], (f, a) => {
   a.get_local(f.getParameter(0));
   a.load_f32(2, 0);
 }).withExport();
@@ -12582,14 +14217,15 @@ for (let i = 0; i < 4; i++) {
       description: "Fill and copy memory regions with bulk operations.",
       target: "2.0",
       features: ["bulk-memory"],
+      imports: ["ModuleBuilder", "ValueType"],
       code: `// Bulk memory: memory.fill and memory.copy
-const mod = new webasmjs.ModuleBuilder('bulkMem');
+const mod = new ModuleBuilder('bulkMem');
 const mem = mod.defineMemory(1);
 mod.exportMemory(mem, 'memory');
 
 // fill(dest, value, length)
 mod.defineFunction('fill', null,
-  [webasmjs.ValueType.Int32, webasmjs.ValueType.Int32, webasmjs.ValueType.Int32], (f, a) => {
+  [ValueType.Int32, ValueType.Int32, ValueType.Int32], (f, a) => {
   a.get_local(f.getParameter(0));
   a.get_local(f.getParameter(1));
   a.get_local(f.getParameter(2));
@@ -12598,7 +14234,7 @@ mod.defineFunction('fill', null,
 
 // copy(dest, src, length)
 mod.defineFunction('copy', null,
-  [webasmjs.ValueType.Int32, webasmjs.ValueType.Int32, webasmjs.ValueType.Int32], (f, a) => {
+  [ValueType.Int32, ValueType.Int32, ValueType.Int32], (f, a) => {
   a.get_local(f.getParameter(0));
   a.get_local(f.getParameter(1));
   a.get_local(f.getParameter(2));
@@ -12641,17 +14277,18 @@ log('  ' + Array.from(view.slice(128, 144)).join(', '));`
       description: "Interpret low bits as signed values with extend8/extend16.",
       target: "2.0",
       features: ["sign-extend"],
+      imports: ["ModuleBuilder", "ValueType"],
       code: `// Sign extension: interpret low bits as signed values
-const mod = new webasmjs.ModuleBuilder('signExt');
+const mod = new ModuleBuilder('signExt');
 
 // Treat low 8 bits as a signed byte
-mod.defineFunction('extend8', [webasmjs.ValueType.Int32], [webasmjs.ValueType.Int32], (f, a) => {
+mod.defineFunction('extend8', [ValueType.Int32], [ValueType.Int32], (f, a) => {
   a.get_local(f.getParameter(0));
   a.extend8_s_i32();
 }).withExport();
 
 // Treat low 16 bits as a signed i16
-mod.defineFunction('extend16', [webasmjs.ValueType.Int32], [webasmjs.ValueType.Int32], (f, a) => {
+mod.defineFunction('extend16', [ValueType.Int32], [ValueType.Int32], (f, a) => {
   a.get_local(f.getParameter(0));
   a.extend16_s_i32();
 }).withExport();
@@ -12676,16 +14313,17 @@ log('  extend16(0xFFFF) = ' + extend16(0xFFFF) + '  (65535 \u2192 -1)');`
       description: "Float-to-int conversion that clamps instead of trapping.",
       target: "2.0",
       features: ["sat-trunc"],
+      imports: ["ModuleBuilder", "ValueType"],
       code: `// Saturating truncation: float \u2192 int without trapping on overflow
-const mod = new webasmjs.ModuleBuilder('satTrunc');
+const mod = new ModuleBuilder('satTrunc');
 
 // Normal trunc would trap on overflow; saturating clamps instead
-mod.defineFunction('sat_f64_to_i32', [webasmjs.ValueType.Int32], [webasmjs.ValueType.Float64], (f, a) => {
+mod.defineFunction('sat_f64_to_i32', [ValueType.Int32], [ValueType.Float64], (f, a) => {
   a.get_local(f.getParameter(0));
   a.trunc_sat_f64_s_i32();
 }).withExport();
 
-mod.defineFunction('sat_f64_to_u32', [webasmjs.ValueType.Int32], [webasmjs.ValueType.Float64], (f, a) => {
+mod.defineFunction('sat_f64_to_u32', [ValueType.Int32], [ValueType.Float64], (f, a) => {
   a.get_local(f.getParameter(0));
   a.trunc_sat_f64_u_i32();
 }).withExport();
@@ -12712,24 +14350,25 @@ log('  1e20   \u2192 ' + sat_f64_to_u32(1e20) + '  (clamped to u32 max)');`
       description: "Use ref.null, ref.is_null, and ref.func instructions.",
       target: "2.0",
       features: ["reference-types"],
+      imports: ["ModuleBuilder", "ValueType"],
       code: `// Reference types: ref.null, ref.is_null, ref.func
-const mod = new webasmjs.ModuleBuilder('refTypes');
+const mod = new ModuleBuilder('refTypes');
 
-const double = mod.defineFunction('double', [webasmjs.ValueType.Int32],
-  [webasmjs.ValueType.Int32], (f, a) => {
+const double = mod.defineFunction('double', [ValueType.Int32],
+  [ValueType.Int32], (f, a) => {
   a.get_local(f.getParameter(0));
   a.const_i32(2);
   a.mul_i32();
 }).withExport();
 
 // Check if a null funcref is null \u2192 1
-mod.defineFunction('isRefNull', [webasmjs.ValueType.Int32], [], (f, a) => {
+mod.defineFunction('isRefNull', [ValueType.Int32], [], (f, a) => {
   a.ref_null(0x70);
   a.ref_is_null();
 }).withExport();
 
 // Check if a real function ref is null \u2192 0
-mod.defineFunction('isFuncNull', [webasmjs.ValueType.Int32], [], (f, a) => {
+mod.defineFunction('isFuncNull', [ValueType.Int32], [], (f, a) => {
   a.ref_func(double);
   a.ref_is_null();
 }).withExport();
@@ -12749,9 +14388,10 @@ log('double(21) = ' + instance.instance.exports.double(21));`
       description: "Choose WebAssembly targets and feature flags.",
       target: "mvp",
       features: [],
+      imports: ["ModuleBuilder", "ValueType"],
       code: `// Target system: control which features are available
 // Default is 'latest' \u2014 all features enabled
-const modLatest = new webasmjs.ModuleBuilder('latest');
+const modLatest = new ModuleBuilder('latest');
 log('latest features:');
 log('  threads: ' + modLatest.hasFeature('threads'));
 log('  simd: ' + modLatest.hasFeature('simd'));
@@ -12762,7 +14402,7 @@ log('  relaxed-simd: ' + modLatest.hasFeature('relaxed-simd'));
 log('');
 
 // WebAssembly 2.0 \u2014 only widely-deployed features
-const mod2 = new webasmjs.ModuleBuilder('compat', { target: '2.0' });
+const mod2 = new ModuleBuilder('compat', { target: '2.0' });
 log('2.0 features:');
 log('  sign-extend: ' + mod2.hasFeature('sign-extend'));
 log('  bulk-memory: ' + mod2.hasFeature('bulk-memory'));
@@ -12772,7 +14412,7 @@ log('  simd: ' + mod2.hasFeature('simd'));
 log('');
 
 // MVP with specific features
-const modCustom = new webasmjs.ModuleBuilder('custom', {
+const modCustom = new ModuleBuilder('custom', {
   target: 'mvp',
   features: ['simd', 'bulk-memory'],
 });
@@ -12784,8 +14424,8 @@ log('  threads: ' + modCustom.hasFeature('threads'));
 log('');
 
 // Build a simple module with 2.0 target
-mod2.defineFunction('add', [webasmjs.ValueType.Int32],
-  [webasmjs.ValueType.Int32, webasmjs.ValueType.Int32], (f, a) => {
+mod2.defineFunction('add', [ValueType.Int32],
+  [ValueType.Int32, ValueType.Int32], (f, a) => {
   a.get_local(f.getParameter(0));
   a.get_local(f.getParameter(1));
   a.add_i32();
@@ -12800,24 +14440,25 @@ log('2.0 module works: add(3, 4) = ' + instance.instance.exports.add(3, 4));`
       description: "Functions returning multiple values at once.",
       target: "2.0",
       features: ["multi-value"],
+      imports: ["ModuleBuilder", "ValueType"],
       code: `// Multi-value: functions can return more than one value
-const mod = new webasmjs.ModuleBuilder('multiValue');
+const mod = new ModuleBuilder('multiValue');
 
 // divmod returns both quotient and remainder
-mod.defineFunction('divmod', [webasmjs.ValueType.Int32, webasmjs.ValueType.Int32],
-  [webasmjs.ValueType.Int32, webasmjs.ValueType.Int32], (f, a) => {
+mod.defineFunction('divmod', [ValueType.Int32, ValueType.Int32],
+  [ValueType.Int32, ValueType.Int32], (f, a) => {
   const dividend = f.getParameter(0);
   const divisor = f.getParameter(1);
 
   // Push quotient
   a.get_local(dividend);
   a.get_local(divisor);
-  a.div_s_i32();
+  a.div_i32();
 
   // Push remainder
   a.get_local(dividend);
   a.get_local(divisor);
-  a.rem_s_i32();
+  a.rem_i32();
 }).withExport();
 
 const instance = await mod.instantiate();
@@ -12835,10 +14476,11 @@ for (const [a, b] of [[17, 5], [100, 7], [42, 6], [99, 10]]) {
       description: "Export a mutable global, read from JavaScript.",
       target: "2.0",
       features: ["mutable-globals"],
+      imports: ["ModuleBuilder", "ValueType"],
       code: `// Mutable global export: JS can read the global's value
-const mod = new webasmjs.ModuleBuilder('mutGlobal');
+const mod = new ModuleBuilder('mutGlobal');
 
-const counter = mod.defineGlobal(webasmjs.ValueType.Int32, true, 0);
+const counter = mod.defineGlobal(ValueType.Int32, true, 0);
 mod.exportGlobal(counter, 'counter');
 
 mod.defineFunction('increment', null, [], (f, a) => {
@@ -12848,7 +14490,7 @@ mod.defineFunction('increment', null, [], (f, a) => {
   a.set_global(counter);
 }).withExport();
 
-mod.defineFunction('add', null, [webasmjs.ValueType.Int32], (f, a) => {
+mod.defineFunction('add', null, [ValueType.Int32], (f, a) => {
   a.get_global(counter);
   a.get_local(f.getParameter(0));
   a.add_i32();
@@ -12874,20 +14516,27 @@ log('After add(-5): ' + g.value);`
       description: "Tail-recursive factorial \u2014 no stack overflow.",
       target: "3.0",
       features: ["tail-call"],
+      imports: ["ModuleBuilder", "ValueType", "BlockType"],
       code: `// Tail calls: return_call reuses the current frame
-const mod = new webasmjs.ModuleBuilder('tailCall');
+const mod = new ModuleBuilder('tailCall');
+
+// Declare both functions first (forward reference)
+const helper = mod.defineFunction('fact_helper', [ValueType.Int64],
+  [ValueType.Int64, ValueType.Int64]);
+const factorial = mod.defineFunction('factorial', [ValueType.Int64],
+  [ValueType.Int64]);
 
 // Tail-recursive helper: fact_helper(n, acc)
-const helper = mod.defineFunction('fact_helper', [webasmjs.ValueType.Int64],
-  [webasmjs.ValueType.Int64, webasmjs.ValueType.Int64], (f, a) => {
-  const n = f.getParameter(0);
-  const acc = f.getParameter(1);
+{
+  const a = helper.createEmitter();
+  const n = helper.getParameter(0);
+  const acc = helper.getParameter(1);
 
   // Base case: n <= 1
   a.get_local(n);
   a.const_i64(1n);
-  a.le_s_i64();
-  a.if(webasmjs.BlockType.Void, () => {
+  a.le_i64();
+  a.if(BlockType.Void, () => {
     a.get_local(acc);
     a.return();
   });
@@ -12900,22 +14549,25 @@ const helper = mod.defineFunction('fact_helper', [webasmjs.ValueType.Int64],
   a.get_local(acc);
   a.mul_i64();
   a.return_call(helper);
-});
+  a.end();
+}
 
 // Public entry: factorial(n)
-mod.defineFunction('factorial', [webasmjs.ValueType.Int64],
-  [webasmjs.ValueType.Int64], (f, a) => {
-  a.get_local(f.getParameter(0));
+{
+  const a = factorial.createEmitter();
+  a.get_local(factorial.getParameter(0));
   a.const_i64(1n);
   a.call(helper);
-}).withExport();
+  a.end();
+}
+factorial.withExport();
 
 const instance = await mod.instantiate();
-const factorial = instance.instance.exports.factorial;
+const fact = instance.instance.exports.factorial;
 
 log('Tail-recursive factorial (i64):');
 for (let n = 0n; n <= 20n; n++) {
-  log('  ' + n + '! = ' + factorial(n));
+  log('  ' + n + '! = ' + fact(n));
 }
 log('');
 log('No stack overflow \u2014 return_call reuses the frame!');`
@@ -12926,8 +14578,9 @@ log('No stack overflow \u2014 return_call reuses the frame!');`
       description: "Shared memory with atomic load/store/add.",
       target: "3.0",
       features: ["threads"],
+      imports: ["ModuleBuilder", "ValueType"],
       code: `// Shared memory + atomic operations
-const mod = new webasmjs.ModuleBuilder('atomics');
+const mod = new ModuleBuilder('atomics');
 
 // Shared memory requires both initial and maximum
 const mem = mod.defineMemory(1, 10, true); // shared=true
@@ -12935,30 +14588,30 @@ mod.exportMemory(mem, 'memory');
 
 // Atomic store
 mod.defineFunction('atomicStore', null,
-  [webasmjs.ValueType.Int32, webasmjs.ValueType.Int32], (f, a) => {
+  [ValueType.Int32, ValueType.Int32], (f, a) => {
   a.get_local(f.getParameter(0));
   a.get_local(f.getParameter(1));
   a.atomic_store_i32(2, 0);
 }).withExport();
 
 // Atomic load
-mod.defineFunction('atomicLoad', [webasmjs.ValueType.Int32],
-  [webasmjs.ValueType.Int32], (f, a) => {
+mod.defineFunction('atomicLoad', [ValueType.Int32],
+  [ValueType.Int32], (f, a) => {
   a.get_local(f.getParameter(0));
   a.atomic_load_i32(2, 0);
 }).withExport();
 
 // Atomic add (returns old value)
-mod.defineFunction('atomicAdd', [webasmjs.ValueType.Int32],
-  [webasmjs.ValueType.Int32, webasmjs.ValueType.Int32], (f, a) => {
+mod.defineFunction('atomicAdd', [ValueType.Int32],
+  [ValueType.Int32, ValueType.Int32], (f, a) => {
   a.get_local(f.getParameter(0));
   a.get_local(f.getParameter(1));
   a.atomic_rmw_add_i32(2, 0);
 }).withExport();
 
 // Atomic compare-and-swap
-mod.defineFunction('atomicCAS', [webasmjs.ValueType.Int32],
-  [webasmjs.ValueType.Int32, webasmjs.ValueType.Int32, webasmjs.ValueType.Int32], (f, a) => {
+mod.defineFunction('atomicCAS', [ValueType.Int32],
+  [ValueType.Int32, ValueType.Int32, ValueType.Int32], (f, a) => {
   a.get_local(f.getParameter(0)); // address
   a.get_local(f.getParameter(1)); // expected
   a.get_local(f.getParameter(2)); // replacement
@@ -12998,18 +14651,19 @@ log('atomicLoad(0) = ' + atomicLoad(0));`
       description: "Define tags and throw exceptions from WASM.",
       target: "3.0",
       features: ["exception-handling"],
+      imports: ["ModuleBuilder", "ValueType", "BlockType"],
       code: `// Exception handling: defineTag + throw
-const mod = new webasmjs.ModuleBuilder('exceptions', { disableVerification: true });
+const mod = new ModuleBuilder('exceptions', { disableVerification: true });
 
 // Define a tag with an i32 payload (like an error code)
-const errorTag = mod.defineTag([webasmjs.ValueType.Int32]);
+const errorTag = mod.defineTag([ValueType.Int32]);
 
 // Throws when input is negative
-mod.defineFunction('checkPositive', null, [webasmjs.ValueType.Int32], (f, a) => {
+mod.defineFunction('checkPositive', null, [ValueType.Int32], (f, a) => {
   a.get_local(f.getParameter(0));
   a.const_i32(0);
-  a.lt_s_i32();
-  a.if(webasmjs.BlockType.Void, () => {
+  a.lt_i32();
+  a.if(BlockType.Void, () => {
     a.get_local(f.getParameter(0));
     a.throw(errorTag._index);
   });
@@ -13031,8 +14685,9 @@ log('Valid WASM: ' + WebAssembly.validate(bytes.buffer));`
       description: "64-bit addressed memory for very large address spaces.",
       target: "3.0",
       features: ["memory64"],
+      imports: ["ModuleBuilder", "ValueType"],
       code: `// Memory64: 64-bit addressed memory
-const mod = new webasmjs.ModuleBuilder('memory64');
+const mod = new ModuleBuilder('memory64', { target: '3.0', disableVerification: true });
 
 // Define a 64-bit addressed memory
 const mem = mod.defineMemory(1, 100, false, true); // memory64=true
@@ -13040,15 +14695,15 @@ mod.exportMemory(mem, 'memory');
 
 // Store: address is i64 for memory64
 mod.defineFunction('store64', null,
-  [webasmjs.ValueType.Int64, webasmjs.ValueType.Int32], (f, a) => {
+  [ValueType.Int64, ValueType.Int32], (f, a) => {
   a.get_local(f.getParameter(0)); // i64 address
   a.get_local(f.getParameter(1)); // i32 value
   a.store_i32(2, 0);
 }).withExport();
 
 // Load: address is i64 for memory64
-mod.defineFunction('load64', [webasmjs.ValueType.Int32],
-  [webasmjs.ValueType.Int64], (f, a) => {
+mod.defineFunction('load64', [ValueType.Int32],
+  [ValueType.Int64], (f, a) => {
   a.get_local(f.getParameter(0)); // i64 address
   a.load_i32(2, 0);
 }).withExport();
@@ -13066,6 +14721,563 @@ log('');
 log('Note: memory64 uses i64 addresses instead of i32.');
 log('Runtime instantiation requires engine support for memory64.');`
     },
+    // ─── GC (Garbage Collection) ───
+    "gc-struct-basic": {
+      label: "Struct Basics",
+      group: "GC",
+      description: "Define a Point struct with x,y fields, create and read fields.",
+      target: "latest",
+      features: ["gc"],
+      imports: ["ModuleBuilder", "ValueType"],
+      code: `// GC Struct Basics \u2014 define a Point struct and access fields
+const mod = new ModuleBuilder('gcStruct', {
+  target: 'latest',
+  disableVerification: true,
+});
+
+// Define a struct type with two i32 fields
+const Point = mod.defineStructType([
+  { name: 'x', type: ValueType.Int32, mutable: true },
+  { name: 'y', type: ValueType.Int32, mutable: true },
+]);
+
+log('Struct type index: ' + Point.index);
+log('Fields: ' + Point.fields.map(f => f.name).join(', '));
+log('Field count: ' + Point.fields.length);
+
+// Create a function that makes a Point and reads the x field
+mod.defineFunction('getX', [ValueType.Int32], [], (f, a) => {
+  // Push field values onto stack then struct.new
+  a.const_i32(10); // x = 10
+  a.const_i32(20); // y = 20
+  a.struct_new(Point.index);
+  // Read the x field
+  a.struct_get(Point.index, Point.getFieldIndex('x'));
+}).withExport();
+
+// Create a function that reads the y field
+mod.defineFunction('getY', [ValueType.Int32], [], (f, a) => {
+  a.const_i32(10);
+  a.const_i32(20);
+  a.struct_new(Point.index);
+  a.struct_get(Point.index, Point.getFieldIndex('y'));
+}).withExport();
+
+log('');
+log('WAT output:');
+log(mod.toString());
+
+const bytes = mod.toBytes();
+log('');
+log('Binary size: ' + bytes.length + ' bytes');
+log('Binary valid: ' + WebAssembly.validate(bytes.buffer));`
+    },
+    "gc-struct-mutable": {
+      label: "Mutable Struct Fields",
+      group: "GC",
+      description: "Create a mutable struct and update fields with struct.set.",
+      target: "latest",
+      features: ["gc"],
+      imports: ["ModuleBuilder", "ValueType"],
+      code: `// Mutable Struct Fields \u2014 create, read, update a GC struct
+const mod = new ModuleBuilder('gcMutable', {
+  target: 'latest',
+  disableVerification: true,
+});
+
+const Counter = mod.defineStructType([
+  { name: 'count', type: ValueType.Int32, mutable: true },
+]);
+
+// Create a counter, increment it, return new value
+mod.defineFunction('incrementAndGet', [ValueType.Int32], [], (f, a) => {
+  // Create counter with count = 0
+  a.const_i32(0);
+  a.struct_new(Counter.index);
+  const ref = a.declareLocal(ValueType.AnyRef, 'ref');
+  a.set_local(ref);
+
+  // Set count = 42
+  a.get_local(ref);
+  a.const_i32(42);
+  a.struct_set(Counter.index, Counter.getFieldIndex('count'));
+
+  // Read count back
+  a.get_local(ref);
+  a.struct_get(Counter.index, Counter.getFieldIndex('count'));
+}).withExport();
+
+log('WAT output:');
+log(mod.toString());
+
+const bytes = mod.toBytes();
+log('');
+log('Binary size: ' + bytes.length + ' bytes');
+log('Binary valid: ' + WebAssembly.validate(bytes.buffer));`
+    },
+    "gc-struct-default": {
+      label: "Struct Default Values",
+      group: "GC",
+      description: "Zero-initialize a struct with struct.new_default.",
+      target: "latest",
+      features: ["gc"],
+      imports: ["ModuleBuilder", "ValueType"],
+      code: `// Struct Default Values \u2014 zero-init with struct.new_default
+const mod = new ModuleBuilder('gcDefault', {
+  target: 'latest',
+  disableVerification: true,
+});
+
+const Vec3 = mod.defineStructType([
+  { name: 'x', type: ValueType.Float32, mutable: true },
+  { name: 'y', type: ValueType.Float32, mutable: true },
+  { name: 'z', type: ValueType.Float32, mutable: true },
+]);
+
+// struct.new_default creates a struct with all fields zeroed
+mod.defineFunction('defaultX', [ValueType.Float32], [], (f, a) => {
+  a.struct_new_default(Vec3.index);
+  a.struct_get(Vec3.index, Vec3.getFieldIndex('x'));
+}).withExport();
+
+log('Fields: x, y, z (all f32, mutable)');
+log('struct.new_default zero-initializes all fields');
+log('');
+log('WAT:');
+log(mod.toString());
+
+const bytes = mod.toBytes();
+log('');
+log('Binary valid: ' + WebAssembly.validate(bytes.buffer));`
+    },
+    "gc-array-basic": {
+      label: "Array Basics",
+      group: "GC",
+      description: "Define a GC array type, create, read, write, and get length.",
+      target: "latest",
+      features: ["gc"],
+      imports: ["ModuleBuilder", "ValueType"],
+      code: `// GC Array Basics \u2014 create, read, write, measure length
+const mod = new ModuleBuilder('gcArray', {
+  target: 'latest',
+  disableVerification: true,
+});
+
+// Define a mutable array of i32
+const IntArray = mod.defineArrayType(ValueType.Int32, true);
+log('Array type index: ' + IntArray.index);
+
+// Create an array of 5 elements, all initialized to 0
+mod.defineFunction('createArray', null, [], (f, a) => {
+  a.const_i32(0);  // default value
+  a.const_i32(5);  // length
+  a.array_new(IntArray.index);
+  a.drop();
+}).withExport();
+
+// Get array length
+mod.defineFunction('getLen', [ValueType.Int32], [], (f, a) => {
+  a.const_i32(0);
+  a.const_i32(10);
+  a.array_new(IntArray.index);
+  a.array_len();
+}).withExport();
+
+// Set and get an element
+mod.defineFunction('setAndGet', [ValueType.Int32], [], (f, a) => {
+  // Create array of length 3
+  a.const_i32(0);
+  a.const_i32(3);
+  a.array_new(IntArray.index);
+  const arr = a.declareLocal(ValueType.AnyRef, 'arr');
+  a.set_local(arr);
+
+  // Set index 1 to 99
+  a.get_local(arr);
+  a.const_i32(1);  // index
+  a.const_i32(99); // value
+  a.array_set(IntArray.index);
+
+  // Get index 1
+  a.get_local(arr);
+  a.const_i32(1);
+  a.array_get(IntArray.index);
+}).withExport();
+
+log('');
+log('WAT:');
+log(mod.toString());
+
+const bytes = mod.toBytes();
+log('');
+log('Binary valid: ' + WebAssembly.validate(bytes.buffer));`
+    },
+    "gc-array-fixed": {
+      label: "Fixed-Size Array",
+      group: "GC",
+      description: "Create an array from fixed inline values with array.new_fixed.",
+      target: "latest",
+      features: ["gc"],
+      imports: ["ModuleBuilder", "ValueType"],
+      code: `// Fixed-Size Array \u2014 create from inline values
+const mod = new ModuleBuilder('gcFixed', {
+  target: 'latest',
+  disableVerification: true,
+});
+
+const IntArray = mod.defineArrayType(ValueType.Int32, false);
+
+// Create a fixed array [10, 20, 30] using array.new_fixed
+mod.defineFunction('sumFixed', [ValueType.Int32], [], (f, a) => {
+  // Push 3 values, then array.new_fixed(typeIndex, count)
+  a.const_i32(10);
+  a.const_i32(20);
+  a.const_i32(30);
+  a.array_new_fixed(IntArray.index, 3);
+
+  const arr = a.declareLocal(ValueType.AnyRef, 'arr');
+  a.set_local(arr);
+
+  // Sum: arr[0] + arr[1] + arr[2]
+  a.get_local(arr);
+  a.const_i32(0);
+  a.array_get(IntArray.index);
+
+  a.get_local(arr);
+  a.const_i32(1);
+  a.array_get(IntArray.index);
+  a.add_i32();
+
+  a.get_local(arr);
+  a.const_i32(2);
+  a.array_get(IntArray.index);
+  a.add_i32();
+}).withExport();
+
+log('WAT:');
+log(mod.toString());
+
+const bytes = mod.toBytes();
+log('');
+log('Binary valid: ' + WebAssembly.validate(bytes.buffer));`
+    },
+    "gc-i31-ref": {
+      label: "i31 References",
+      group: "GC",
+      description: "Pack/unpack small integers as i31ref.",
+      target: "latest",
+      features: ["gc"],
+      imports: ["ModuleBuilder", "ValueType"],
+      code: `// i31 References \u2014 box/unbox small integers
+// i31ref packs a 31-bit integer into a reference type,
+// useful for unboxed small values in GC type hierarchies.
+const mod = new ModuleBuilder('gcI31', {
+  target: 'latest',
+  disableVerification: true,
+});
+
+// Pack i32 \u2192 i31ref \u2192 unpack signed
+mod.defineFunction('roundtrip_s', [ValueType.Int32], [], (f, a) => {
+  a.const_i32(42);
+  a.ref_i31();      // box: i32 \u2192 i31ref
+  a.i31_get_s();    // unbox signed: i31ref \u2192 i32
+}).withExport();
+
+// Pack i32 \u2192 i31ref \u2192 unpack unsigned
+mod.defineFunction('roundtrip_u', [ValueType.Int32], [], (f, a) => {
+  a.const_i32(-1);   // negative value
+  a.ref_i31();
+  a.i31_get_u();     // unbox unsigned
+}).withExport();
+
+// Negative number signed roundtrip
+mod.defineFunction('negative_s', [ValueType.Int32], [], (f, a) => {
+  a.const_i32(-100);
+  a.ref_i31();
+  a.i31_get_s();
+}).withExport();
+
+log('WAT:');
+log(mod.toString());
+
+const bytes = mod.toBytes();
+log('');
+log('Binary valid: ' + WebAssembly.validate(bytes.buffer));`
+    },
+    "gc-rec-group": {
+      label: "Recursive Types",
+      group: "GC",
+      description: "Define mutually-recursive types using defineRecGroup.",
+      target: "latest",
+      features: ["gc"],
+      imports: ["ModuleBuilder", "ValueType"],
+      code: `// Recursive Types \u2014 mutually-recursive struct definitions
+// A rec group allows types to reference each other (forward references).
+// Classic example: a linked list node type.
+const mod = new ModuleBuilder('gcRec', {
+  target: 'latest',
+  disableVerification: true,
+});
+
+// Define a recursive group with two types that reference each other
+const recGroup = mod.defineRecGroup((builder) => {
+  // Type 0: ListNode { value: i32, next: ref null ListNode }
+  const listNodeRef = builder.refNull(0); // forward ref to type 0 (self)
+  builder.addStructType([
+    { name: 'value', type: ValueType.Int32, mutable: false },
+    { name: 'next', type: listNodeRef, mutable: true },
+  ]);
+
+  // Type 1: array of ListNode refs
+  builder.addArrayType(builder.refNull(0), true);
+});
+
+log('Recursive group created with ' + recGroup._types.length + ' types');
+log('Type 0: ListNode struct (value: i32, next: ref null ListNode)');
+log('Type 1: array of (ref null ListNode)');
+
+log('');
+log('WAT:');
+log(mod.toString());
+
+const bytes = mod.toBytes();
+log('');
+log('Binary valid: ' + WebAssembly.validate(bytes.buffer));`
+    },
+    "gc-subtyping": {
+      label: "Struct Subtyping",
+      group: "GC",
+      description: "Extend a base struct type with superTypes.",
+      target: "latest",
+      features: ["gc"],
+      imports: ["ModuleBuilder", "ValueType"],
+      code: `// Struct Subtyping \u2014 type hierarchy with superTypes
+// GC struct types can extend other struct types (adding fields at the end).
+const mod = new ModuleBuilder('gcSubtype', {
+  target: 'latest',
+  disableVerification: true,
+});
+
+// Base type: Shape { area: f32 }
+const Shape = mod.defineStructType([
+  { name: 'area', type: ValueType.Float32, mutable: false },
+]);
+
+// Subtype: Circle extends Shape, adds radius
+const Circle = mod.defineStructType([
+  { name: 'area', type: ValueType.Float32, mutable: false },
+  { name: 'radius', type: ValueType.Float32, mutable: false },
+], { superTypes: [Shape], final: false });
+
+// Final subtype: FilledCircle extends Circle, adds color
+const FilledCircle = mod.defineStructType([
+  { name: 'area', type: ValueType.Float32, mutable: false },
+  { name: 'radius', type: ValueType.Float32, mutable: false },
+  { name: 'color', type: ValueType.Int32, mutable: false },
+], { superTypes: [Circle], final: true });
+
+log('Type hierarchy:');
+log('  Shape (index ' + Shape.index + '): { area: f32 }');
+log('  Circle (index ' + Circle.index + ') extends Shape: { area, radius }');
+log('  FilledCircle (index ' + FilledCircle.index + ') extends Circle: { area, radius, color }');
+
+log('');
+log('WAT:');
+log(mod.toString());
+
+const bytes = mod.toBytes();
+log('');
+log('Binary valid: ' + WebAssembly.validate(bytes.buffer));`
+    },
+    "gc-ref-cast-test": {
+      label: "Runtime Type Checks",
+      group: "GC",
+      description: "Use ref.test and ref.cast to check and narrow reference types.",
+      target: "latest",
+      features: ["gc"],
+      imports: ["ModuleBuilder", "ValueType", "HeapType"],
+      code: `// Runtime Type Checks \u2014 ref.test and ref.cast
+// ref.test checks if a reference is a subtype (returns 0 or 1).
+// ref.cast narrows a reference type (traps if wrong type).
+const mod = new ModuleBuilder('gcCast', {
+  target: 'latest',
+  disableVerification: true,
+});
+
+// Test if a null anyref is an i31
+mod.defineFunction('testNull', [ValueType.Int32], [], (f, a) => {
+  a.ref_null(0x6e);          // null anyref
+  a.ref_test(HeapType.I31);  // is it an i31? \u2192 0
+}).withExport();
+
+// Test if an i31ref is an i31
+mod.defineFunction('testI31', [ValueType.Int32], [], (f, a) => {
+  a.const_i32(42);
+  a.ref_i31();               // create i31ref
+  a.ref_test(HeapType.I31);  // is it an i31? \u2192 1
+}).withExport();
+
+// Cast: narrow anyref to i31ref
+mod.defineFunction('castI31', null, [], (f, a) => {
+  a.const_i32(7);
+  a.ref_i31();
+  a.ref_cast(HeapType.I31);  // cast to i31ref (succeeds)
+  a.drop();
+}).withExport();
+
+log('WAT:');
+log(mod.toString());
+
+const bytes = mod.toBytes();
+log('');
+log('Binary valid: ' + WebAssembly.validate(bytes.buffer));`
+    },
+    "gc-extern-convert": {
+      label: "Extern/Any Conversions",
+      group: "GC",
+      description: "Convert between externref and anyref.",
+      target: "latest",
+      features: ["gc"],
+      imports: ["ModuleBuilder", "ValueType"],
+      code: `// Extern/Any Conversions
+// any.convert_extern: externref \u2192 anyref (internalize)
+// extern.convert_any: anyref \u2192 externref (externalize)
+const mod = new ModuleBuilder('gcConvert', {
+  target: 'latest',
+  disableVerification: true,
+});
+
+// Internalize then externalize a null externref
+mod.defineFunction('roundtrip', null, [], (f, a) => {
+  a.ref_null(0x6f);           // null externref
+  a.any_convert_extern();     // externref \u2192 anyref
+  a.extern_convert_any();     // anyref \u2192 externref
+  a.drop();
+}).withExport();
+
+log('any.convert_extern: externref \u2192 anyref (internalize)');
+log('extern.convert_any: anyref \u2192 externref (externalize)');
+log('');
+log('WAT:');
+log(mod.toString());
+
+const bytes = mod.toBytes();
+log('');
+log('Binary valid: ' + WebAssembly.validate(bytes.buffer));`
+    },
+    "gc-array-operations": {
+      label: "Array Fill & Copy",
+      group: "GC",
+      description: "Bulk array manipulation with array.fill and array.copy.",
+      target: "latest",
+      features: ["gc"],
+      imports: ["ModuleBuilder", "ValueType"],
+      code: `// Array Fill & Copy \u2014 bulk GC array operations
+const mod = new ModuleBuilder('gcArrayOps', {
+  target: 'latest',
+  disableVerification: true,
+});
+
+const IntArray = mod.defineArrayType(ValueType.Int32, true);
+
+// Fill a range of an array with a value
+mod.defineFunction('fillDemo', null, [], (f, a) => {
+  // Create array of 10 zeros
+  a.const_i32(0);
+  a.const_i32(10);
+  a.array_new(IntArray.index);
+  const arr = a.declareLocal(ValueType.AnyRef, 'arr');
+  a.set_local(arr);
+
+  // Fill indices 2..5 with value 99
+  a.get_local(arr);
+  a.const_i32(2);  // dest offset
+  a.const_i32(99); // fill value
+  a.const_i32(3);  // length (fill 3 elements)
+  a.array_fill(IntArray.index);
+}).withExport();
+
+// Copy between two arrays
+mod.defineFunction('copyDemo', null, [], (f, a) => {
+  // Source array with fixed values
+  a.const_i32(1);
+  a.const_i32(2);
+  a.const_i32(3);
+  a.array_new_fixed(IntArray.index, 3);
+  const src = a.declareLocal(ValueType.AnyRef, 'src');
+  a.set_local(src);
+
+  // Destination array of zeros
+  a.const_i32(0);
+  a.const_i32(5);
+  a.array_new(IntArray.index);
+  const dst = a.declareLocal(ValueType.AnyRef, 'dst');
+  a.set_local(dst);
+
+  // Copy src[0..3] \u2192 dst[1..4]
+  a.get_local(dst);
+  a.const_i32(1);  // dest offset
+  a.get_local(src);
+  a.const_i32(0);  // src offset
+  a.const_i32(3);  // length
+  a.array_copy(IntArray.index, IntArray.index);
+}).withExport();
+
+log('WAT:');
+log(mod.toString());
+
+const bytes = mod.toBytes();
+log('');
+log('Binary valid: ' + WebAssembly.validate(bytes.buffer));`
+    },
+    "gc-wat-output": {
+      label: "GC WAT Inspection",
+      group: "GC",
+      description: "Define struct and array types, inspect the generated WAT text.",
+      target: "latest",
+      features: ["gc"],
+      imports: ["ModuleBuilder", "ValueType", "TextModuleWriter"],
+      code: `// GC WAT Inspection \u2014 explore how GC types appear in text format
+const mod = new ModuleBuilder('gcWat', {
+  target: 'latest',
+  disableVerification: true,
+});
+
+// Struct type
+mod.defineStructType([
+  { name: 'x', type: ValueType.Int32, mutable: true },
+  { name: 'y', type: ValueType.Float64, mutable: false },
+]);
+
+// Immutable array
+mod.defineArrayType(ValueType.Float32, false);
+
+// Mutable array
+mod.defineArrayType(ValueType.Int32, true);
+
+// A function type (shows mixed type section)
+mod.defineFuncType(ValueType.Int32, [ValueType.Int32]);
+
+// A simple function using struct.new_default
+const structType = mod.defineStructType([
+  { name: 'val', type: ValueType.Int32, mutable: true },
+]);
+
+mod.defineFunction('demo', null, [], (f, a) => {
+  a.struct_new_default(structType.index);
+  a.drop();
+}).withExport();
+
+const writer = new TextModuleWriter(mod);
+const wat = writer.toString();
+log('Generated WAT:');
+log(wat);
+
+log('');
+const bytes = mod.toBytes();
+log('Binary size: ' + bytes.length + ' bytes');
+log('Binary valid: ' + WebAssembly.validate(bytes.buffer));`
+    },
     // ─── Debug & Inspection ───
     "debug-names": {
       label: "Debug Name Section",
@@ -13073,14 +15285,15 @@ log('Runtime instantiation requires engine support for memory64.');`
       description: "Inspect function, local, and global names in the binary.",
       target: "mvp",
       features: [],
+      imports: ["ModuleBuilder", "ValueType", "BinaryReader"],
       code: `// Inspect the debug name section in the binary
-const mod = new webasmjs.ModuleBuilder('debugExample');
+const mod = new ModuleBuilder('debugExample');
 
-const g = mod.defineGlobal(webasmjs.ValueType.Int32, true, 0);
+const g = mod.defineGlobal(ValueType.Int32, true, 0);
 g.withName('counter');
 
-mod.defineFunction('add', [webasmjs.ValueType.Int32],
-  [webasmjs.ValueType.Int32, webasmjs.ValueType.Int32], (f, a) => {
+mod.defineFunction('add', [ValueType.Int32],
+  [ValueType.Int32, ValueType.Int32], (f, a) => {
   f.getParameter(0).withName('x');
   f.getParameter(1).withName('y');
   a.get_local(f.getParameter(0));
@@ -13088,12 +15301,12 @@ mod.defineFunction('add', [webasmjs.ValueType.Int32],
   a.add_i32();
 }).withExport();
 
-mod.defineFunction('addThree', [webasmjs.ValueType.Int32],
-  [webasmjs.ValueType.Int32, webasmjs.ValueType.Int32, webasmjs.ValueType.Int32], (f, a) => {
+mod.defineFunction('addThree', [ValueType.Int32],
+  [ValueType.Int32, ValueType.Int32, ValueType.Int32], (f, a) => {
   f.getParameter(0).withName('a');
   f.getParameter(1).withName('b');
   f.getParameter(2).withName('c');
-  const temp = a.declareLocal(webasmjs.ValueType.Int32, 'temp');
+  const temp = a.declareLocal(ValueType.Int32, 'temp');
   a.get_local(f.getParameter(0));
   a.get_local(f.getParameter(1));
   a.add_i32();
@@ -13107,7 +15320,7 @@ log('Binary size: ' + bytes.length + ' bytes');
 log('');
 
 // Read back the name section
-const reader = new webasmjs.BinaryReader(bytes);
+const reader = new BinaryReader(bytes);
 const info = reader.read();
 const ns = info.nameSection;
 
@@ -13151,14 +15364,15 @@ if (ns) {
       description: "Read back the binary structure \u2014 types, functions, exports.",
       target: "mvp",
       features: [],
+      imports: ["ModuleBuilder", "ValueType", "BinaryReader"],
       code: `// Inspect the binary structure of a WASM module
-const mod = new webasmjs.ModuleBuilder('inspect');
+const mod = new ModuleBuilder('inspect');
 mod.defineMemory(1);
 
-const counter = mod.defineGlobal(webasmjs.ValueType.Int32, true, 0);
+const counter = mod.defineGlobal(ValueType.Int32, true, 0);
 
-mod.defineFunction('add', [webasmjs.ValueType.Int32],
-  [webasmjs.ValueType.Int32, webasmjs.ValueType.Int32], (f, a) => {
+mod.defineFunction('add', [ValueType.Int32],
+  [ValueType.Int32, ValueType.Int32], (f, a) => {
   a.get_local(f.getParameter(0));
   a.get_local(f.getParameter(1));
   a.add_i32();
@@ -13175,7 +15389,7 @@ log('Total size: ' + bytes.length + ' bytes');
 log('');
 
 // Read with BinaryReader
-const reader = new webasmjs.BinaryReader(bytes);
+const reader = new BinaryReader(bytes);
 const info = reader.read();
 
 log('WASM version: ' + info.version);
@@ -13216,34 +15430,33 @@ log('Valid: ' + WebAssembly.validate(bytes.buffer));`
       description: "Build a module, emit WAT, parse it back, and verify.",
       target: "mvp",
       features: [],
-      code: `// Build a module programmatically, inspect WAT, parse it back
-const mod = new webasmjs.ModuleBuilder('roundtrip');
+      imports: ["ModuleBuilder", "ValueType", "parseWat"],
+      code: `// Build a module with WAT text, parse it, verify correctness
+const watText = \`(module
+  (func $multiply (param i32 i32) (result i32)
+    local.get 0
+    local.get 1
+    i32.mul
+  )
+  (func $negate (param i32) (result i32)
+    i32.const 0
+    local.get 0
+    i32.sub
+  )
+  (export "multiply" (func $multiply))
+  (export "negate" (func $negate))
+)\`;
 
-mod.defineFunction('multiply', [webasmjs.ValueType.Int32],
-  [webasmjs.ValueType.Int32, webasmjs.ValueType.Int32], (f, a) => {
-  a.get_local(f.getParameter(0));
-  a.get_local(f.getParameter(1));
-  a.mul_i32();
-}).withExport();
-
-mod.defineFunction('negate', [webasmjs.ValueType.Int32], [webasmjs.ValueType.Int32], (f, a) => {
-  a.const_i32(0);
-  a.get_local(f.getParameter(0));
-  a.sub_i32();
-}).withExport();
-
-// Get WAT text
-const watText = mod.toString();
-log('=== Generated WAT ===');
+log('=== WAT Source ===');
 log(watText);
 
-// Parse it back
+// Parse it
 log('');
-log('=== Parsing WAT back... ===');
-const mod2 = webasmjs.parseWat(watText);
+log('=== Parsing WAT... ===');
+const mod = parseWat(watText);
 
 // Instantiate and test
-const instance = await mod2.instantiate();
+const instance = await mod.instantiate();
 const { multiply, negate } = instance.instance.exports;
 
 log('multiply(6, 7) = ' + multiply(6, 7));
@@ -13251,7 +15464,7 @@ log('multiply(100, -3) = ' + multiply(100, -3));
 log('negate(42) = ' + negate(42));
 log('negate(-10) = ' + negate(-10));
 log('');
-log('Roundtrip successful!');`
+log('Parse + instantiate successful!');`
     },
     "custom-section": {
       label: "Custom Section",
@@ -13259,8 +15472,9 @@ log('Roundtrip successful!');`
       description: "Add custom metadata to a module and read it back.",
       target: "mvp",
       features: [],
+      imports: ["ModuleBuilder", "BinaryReader"],
       code: `// Custom section \u2014 embed arbitrary metadata in the binary
-const mod = new webasmjs.ModuleBuilder('customSec');
+const mod = new ModuleBuilder('customSec');
 
 mod.defineFunction('nop', null, [], (f, a) => {
   a.nop();
@@ -13277,7 +15491,7 @@ const bytes = mod.toBytes();
 log('Module size: ' + bytes.length + ' bytes');
 
 // Read it back with BinaryReader
-const reader = new webasmjs.BinaryReader(bytes);
+const reader = new BinaryReader(bytes);
 const info = reader.read();
 
 log('');
@@ -13301,31 +15515,32 @@ log('  WebAssembly.validate() = ' + WebAssembly.validate(bytes.buffer));`
       description: "Arithmetic in global init expressions with extended-const.",
       target: "3.0",
       features: ["extended-const"],
+      imports: ["ModuleBuilder", "ValueType"],
       code: `// Extended constants: arithmetic in global initializers
-const mod = new webasmjs.ModuleBuilder('extConst', {
+const mod = new ModuleBuilder('extConst', {
   target: 'mvp',
   features: ['extended-const'],
 });
 
 // Base offset as an immutable global
-const base = mod.defineGlobal(webasmjs.ValueType.Int32, false, 100);
+const base = mod.defineGlobal(ValueType.Int32, false, 100);
 
 // Computed global: base + 50 (uses i32.add in init expression)
-const offset1 = mod.defineGlobal(webasmjs.ValueType.Int32, false, (asm) => {
+const offset1 = mod.defineGlobal(ValueType.Int32, false, (asm) => {
   asm.get_global(base);
   asm.const_i32(50);
   asm.add_i32();
 });
 
 // Computed global: base * 3 (uses i32.mul in init expression)
-const scaled = mod.defineGlobal(webasmjs.ValueType.Int32, false, (asm) => {
+const scaled = mod.defineGlobal(ValueType.Int32, false, (asm) => {
   asm.get_global(base);
   asm.const_i32(3);
   asm.mul_i32();
 });
 
 // Computed global: base * 2 + 7
-const combined = mod.defineGlobal(webasmjs.ValueType.Int32, false, (asm) => {
+const combined = mod.defineGlobal(ValueType.Int32, false, (asm) => {
   asm.get_global(base);
   asm.const_i32(2);
   asm.mul_i32();
@@ -13333,19 +15548,19 @@ const combined = mod.defineGlobal(webasmjs.ValueType.Int32, false, (asm) => {
   asm.add_i32();
 });
 
-mod.defineFunction('getBase', [webasmjs.ValueType.Int32], [], (f, a) => {
+mod.defineFunction('getBase', [ValueType.Int32], [], (f, a) => {
   a.get_global(base);
 }).withExport();
 
-mod.defineFunction('getOffset1', [webasmjs.ValueType.Int32], [], (f, a) => {
+mod.defineFunction('getOffset1', [ValueType.Int32], [], (f, a) => {
   a.get_global(offset1);
 }).withExport();
 
-mod.defineFunction('getScaled', [webasmjs.ValueType.Int32], [], (f, a) => {
+mod.defineFunction('getScaled', [ValueType.Int32], [], (f, a) => {
   a.get_global(scaled);
 }).withExport();
 
-mod.defineFunction('getCombined', [webasmjs.ValueType.Int32], [], (f, a) => {
+mod.defineFunction('getCombined', [ValueType.Int32], [], (f, a) => {
   a.get_global(combined);
 }).withExport();
 
@@ -13364,8 +15579,9 @@ log('base * 2 + 7 = ' + getCombined());`
       description: "Define and use multiple linear memories in one module.",
       target: "3.0",
       features: ["multi-memory"],
+      imports: ["ModuleBuilder", "ValueType"],
       code: `// Multi-memory: two separate linear memories
-const mod = new webasmjs.ModuleBuilder('multiMem', {
+const mod = new ModuleBuilder('multiMem', {
   target: 'mvp',
   features: ['multi-memory'],
 });
@@ -13377,30 +15593,30 @@ mod.exportMemory(mem1, 'mem1');
 
 // Store to memory 0
 mod.defineFunction('store0', null,
-  [webasmjs.ValueType.Int32, webasmjs.ValueType.Int32], (f, a) => {
+  [ValueType.Int32, ValueType.Int32], (f, a) => {
   a.get_local(f.getParameter(0));
   a.get_local(f.getParameter(1));
   a.store_i32(2, 0, 0); // memIndex=0
 }).withExport();
 
 // Load from memory 0
-mod.defineFunction('load0', [webasmjs.ValueType.Int32],
-  [webasmjs.ValueType.Int32], (f, a) => {
+mod.defineFunction('load0', [ValueType.Int32],
+  [ValueType.Int32], (f, a) => {
   a.get_local(f.getParameter(0));
   a.load_i32(2, 0, 0); // memIndex=0
 }).withExport();
 
 // Store to memory 1
 mod.defineFunction('store1', null,
-  [webasmjs.ValueType.Int32, webasmjs.ValueType.Int32], (f, a) => {
+  [ValueType.Int32, ValueType.Int32], (f, a) => {
   a.get_local(f.getParameter(0));
   a.get_local(f.getParameter(1));
   a.store_i32(2, 0, 1); // memIndex=1
 }).withExport();
 
 // Load from memory 1
-mod.defineFunction('load1', [webasmjs.ValueType.Int32],
-  [webasmjs.ValueType.Int32], (f, a) => {
+mod.defineFunction('load1', [ValueType.Int32],
+  [ValueType.Int32], (f, a) => {
   a.get_local(f.getParameter(0));
   a.load_i32(2, 0, 1); // memIndex=1
 }).withExport();
@@ -13420,39 +15636,40 @@ log('Valid WASM: ' + WebAssembly.validate(bytes.buffer));`
       description: "Define multiple function tables and dispatch through each.",
       target: "3.0",
       features: ["multi-table"],
+      imports: ["ModuleBuilder", "ValueType", "ElementType"],
       code: `// Multi-table: two function tables for different dispatch
-const mod = new webasmjs.ModuleBuilder('multiTable', {
+const mod = new ModuleBuilder('multiTable', {
   target: 'mvp',
   features: ['multi-table'],
 });
 
-const add = mod.defineFunction('add', [webasmjs.ValueType.Int32],
-  [webasmjs.ValueType.Int32, webasmjs.ValueType.Int32], (f, a) => {
+const add = mod.defineFunction('add', [ValueType.Int32],
+  [ValueType.Int32, ValueType.Int32], (f, a) => {
   a.get_local(f.getParameter(0));
   a.get_local(f.getParameter(1));
   a.add_i32();
 });
 
-const sub = mod.defineFunction('sub', [webasmjs.ValueType.Int32],
-  [webasmjs.ValueType.Int32, webasmjs.ValueType.Int32], (f, a) => {
+const sub = mod.defineFunction('sub', [ValueType.Int32],
+  [ValueType.Int32, ValueType.Int32], (f, a) => {
   a.get_local(f.getParameter(0));
   a.get_local(f.getParameter(1));
   a.sub_i32();
 });
 
-const mul = mod.defineFunction('mul', [webasmjs.ValueType.Int32],
-  [webasmjs.ValueType.Int32, webasmjs.ValueType.Int32], (f, a) => {
+const mul = mod.defineFunction('mul', [ValueType.Int32],
+  [ValueType.Int32, ValueType.Int32], (f, a) => {
   a.get_local(f.getParameter(0));
   a.get_local(f.getParameter(1));
   a.mul_i32();
 });
 
 // Table 0: math operations
-const table0 = mod.defineTable(webasmjs.ElementType.AnyFunc, 3);
+const table0 = mod.defineTable(ElementType.AnyFunc, 3);
 mod.defineTableSegment(table0, [add, sub, mul], 0);
 
 // Table 1: just add and mul (different arrangement)
-const table1 = mod.defineTable(webasmjs.ElementType.AnyFunc, 2);
+const table1 = mod.defineTable(ElementType.AnyFunc, 2);
 mod.defineTableSegment(table1, [mul, add], 0);
 
 // Show WAT with two tables
@@ -13470,14 +15687,15 @@ log('Valid WASM: ' + WebAssembly.validate(bytes.buffer));`
       description: "Relaxed SIMD operations for performance-sensitive code.",
       target: "latest",
       features: ["relaxed-simd"],
+      imports: ["ModuleBuilder", "ValueType"],
       code: `// Relaxed SIMD: relaxed_madd for fused multiply-add
-const mod = new webasmjs.ModuleBuilder('relaxedSimd');
+const mod = new ModuleBuilder('relaxedSimd');
 mod.defineMemory(1);
 
 // relaxed_madd: a * b + c (fused multiply-add, may use FMA instruction)
 mod.defineFunction('madd_f32x4', null,
-  [webasmjs.ValueType.Int32, webasmjs.ValueType.Int32,
-   webasmjs.ValueType.Int32, webasmjs.ValueType.Int32], (f, a) => {
+  [ValueType.Int32, ValueType.Int32,
+   ValueType.Int32, ValueType.Int32], (f, a) => {
   a.get_local(f.getParameter(3)); // dest address
   a.get_local(f.getParameter(0));
   a.load_v128(2, 0);  // load A
@@ -13490,14 +15708,14 @@ mod.defineFunction('madd_f32x4', null,
 }).withExport();
 
 mod.defineFunction('setF32', null,
-  [webasmjs.ValueType.Int32, webasmjs.ValueType.Float32], (f, a) => {
+  [ValueType.Int32, ValueType.Float32], (f, a) => {
   a.get_local(f.getParameter(0));
   a.get_local(f.getParameter(1));
   a.store_f32(2, 0);
 }).withExport();
 
-mod.defineFunction('getF32', [webasmjs.ValueType.Float32],
-  [webasmjs.ValueType.Int32], (f, a) => {
+mod.defineFunction('getF32', [ValueType.Float32],
+  [ValueType.Int32], (f, a) => {
   a.get_local(f.getParameter(0));
   a.load_f32(2, 0);
 }).withExport();
@@ -13517,8 +15735,9 @@ log('Valid WASM: ' + WebAssembly.validate(bytes.buffer));`
       description: "Atomic read-modify-write: sub, and, or, xor, exchange.",
       target: "3.0",
       features: ["threads"],
+      imports: ["ModuleBuilder", "ValueType"],
       code: `// Atomic read-modify-write operations
-const mod = new webasmjs.ModuleBuilder('atomicRMW');
+const mod = new ModuleBuilder('atomicRMW');
 
 // Shared memory for atomics
 const mem = mod.defineMemory(1, 10, true);
@@ -13526,54 +15745,54 @@ mod.exportMemory(mem, 'memory');
 
 // Atomic store
 mod.defineFunction('store', null,
-  [webasmjs.ValueType.Int32, webasmjs.ValueType.Int32], (f, a) => {
+  [ValueType.Int32, ValueType.Int32], (f, a) => {
   a.get_local(f.getParameter(0));
   a.get_local(f.getParameter(1));
   a.atomic_store_i32(2, 0);
 }).withExport();
 
 // Atomic load
-mod.defineFunction('load', [webasmjs.ValueType.Int32],
-  [webasmjs.ValueType.Int32], (f, a) => {
+mod.defineFunction('load', [ValueType.Int32],
+  [ValueType.Int32], (f, a) => {
   a.get_local(f.getParameter(0));
   a.atomic_load_i32(2, 0);
 }).withExport();
 
 // Atomic sub (returns old value)
-mod.defineFunction('atomicSub', [webasmjs.ValueType.Int32],
-  [webasmjs.ValueType.Int32, webasmjs.ValueType.Int32], (f, a) => {
+mod.defineFunction('atomicSub', [ValueType.Int32],
+  [ValueType.Int32, ValueType.Int32], (f, a) => {
   a.get_local(f.getParameter(0));
   a.get_local(f.getParameter(1));
   a.atomic_rmw_sub_i32(2, 0);
 }).withExport();
 
 // Atomic AND (returns old value)
-mod.defineFunction('atomicAnd', [webasmjs.ValueType.Int32],
-  [webasmjs.ValueType.Int32, webasmjs.ValueType.Int32], (f, a) => {
+mod.defineFunction('atomicAnd', [ValueType.Int32],
+  [ValueType.Int32, ValueType.Int32], (f, a) => {
   a.get_local(f.getParameter(0));
   a.get_local(f.getParameter(1));
   a.atomic_rmw_and_i32(2, 0);
 }).withExport();
 
 // Atomic OR (returns old value)
-mod.defineFunction('atomicOr', [webasmjs.ValueType.Int32],
-  [webasmjs.ValueType.Int32, webasmjs.ValueType.Int32], (f, a) => {
+mod.defineFunction('atomicOr', [ValueType.Int32],
+  [ValueType.Int32, ValueType.Int32], (f, a) => {
   a.get_local(f.getParameter(0));
   a.get_local(f.getParameter(1));
   a.atomic_rmw_or_i32(2, 0);
 }).withExport();
 
 // Atomic XOR (returns old value)
-mod.defineFunction('atomicXor', [webasmjs.ValueType.Int32],
-  [webasmjs.ValueType.Int32, webasmjs.ValueType.Int32], (f, a) => {
+mod.defineFunction('atomicXor', [ValueType.Int32],
+  [ValueType.Int32, ValueType.Int32], (f, a) => {
   a.get_local(f.getParameter(0));
   a.get_local(f.getParameter(1));
   a.atomic_rmw_xor_i32(2, 0);
 }).withExport();
 
 // Atomic exchange (returns old value, stores new)
-mod.defineFunction('atomicXchg', [webasmjs.ValueType.Int32],
-  [webasmjs.ValueType.Int32, webasmjs.ValueType.Int32], (f, a) => {
+mod.defineFunction('atomicXchg', [ValueType.Int32],
+  [ValueType.Int32, ValueType.Int32], (f, a) => {
   a.get_local(f.getParameter(0));
   a.get_local(f.getParameter(1));
   a.atomic_rmw_xchg_i32(2, 0);
@@ -13617,15 +15836,16 @@ log('atomicXchg(42, 99): old=' + oldXchg + ', new=' + load(0));`
       description: "Atomic wait/notify primitives and memory fence.",
       target: "3.0",
       features: ["threads"],
+      imports: ["ModuleBuilder", "ValueType"],
       code: `// Atomic wait, notify, and fence \u2014 thread synchronization primitives
-const mod = new webasmjs.ModuleBuilder('waitNotify', { disableVerification: true });
+const mod = new ModuleBuilder('waitNotify', { disableVerification: true });
 
 const mem = mod.defineMemory(1, 10, true);
 mod.exportMemory(mem, 'memory');
 
 // atomic.wait32(addr, expected, timeout) -> 0=ok, 1=not-equal, 2=timed-out
-mod.defineFunction('wait32', [webasmjs.ValueType.Int32],
-  [webasmjs.ValueType.Int32, webasmjs.ValueType.Int32, webasmjs.ValueType.Int64], (f, a) => {
+mod.defineFunction('wait32', [ValueType.Int32],
+  [ValueType.Int32, ValueType.Int32, ValueType.Int64], (f, a) => {
   a.get_local(f.getParameter(0)); // address
   a.get_local(f.getParameter(1)); // expected value
   a.get_local(f.getParameter(2)); // timeout in ns (-1 = infinite)
@@ -13633,8 +15853,8 @@ mod.defineFunction('wait32', [webasmjs.ValueType.Int32],
 }).withExport();
 
 // atomic.notify(addr, count) -> number of waiters woken
-mod.defineFunction('notify', [webasmjs.ValueType.Int32],
-  [webasmjs.ValueType.Int32, webasmjs.ValueType.Int32], (f, a) => {
+mod.defineFunction('notify', [ValueType.Int32],
+  [ValueType.Int32, ValueType.Int32], (f, a) => {
   a.get_local(f.getParameter(0)); // address
   a.get_local(f.getParameter(1)); // count of waiters to wake
   a.atomic_notify(2, 0);
@@ -13647,7 +15867,7 @@ mod.defineFunction('fence', null, [], (f, a) => {
 
 // Atomic store for setup
 mod.defineFunction('store', null,
-  [webasmjs.ValueType.Int32, webasmjs.ValueType.Int32], (f, a) => {
+  [ValueType.Int32, ValueType.Int32], (f, a) => {
   a.get_local(f.getParameter(0));
   a.get_local(f.getParameter(1));
   a.atomic_store_i32(2, 0);
@@ -13669,6 +15889,47 @@ log('  Thread A: wait32(addr, 0, -1n)  // sleep until value changes');
 log('  Thread B: store(addr, 1); notify(addr, 1)  // wake thread A');
 log('  fence() ensures memory operations are visible across threads.');`
     },
+    "opcode-inspector": {
+      label: "Opcode Inspector",
+      group: "Debug",
+      description: "Examine raw binary bytes and section layout of a module.",
+      target: "mvp",
+      features: [],
+      imports: ["ModuleBuilder", "ValueType"],
+      code: `// Opcode Inspector \u2014 examine raw binary bytes of a module
+const mod = new ModuleBuilder('inspector');
+
+mod.defineFunction('add', [ValueType.Int32], [ValueType.Int32, ValueType.Int32], (f, a) => {
+  a.get_local(f.getParameter(0));
+  a.get_local(f.getParameter(1));
+  a.add_i32();
+}).withExport();
+
+const bytes = mod.toBytes();
+
+// Parse the binary header
+log('Module size: ' + bytes.length + ' bytes');
+log('Magic: 0x' + Array.from(bytes.slice(0, 4)).map(b => b.toString(16).padStart(2, '0')).join(''));
+log('Version: ' + new DataView(bytes.buffer).getUint32(4, true));
+
+// Find and display sections
+let offset = 8;
+while (offset < bytes.length) {
+  const sectionId = bytes[offset];
+  const sectionNames = ['custom','type','import','function','table','memory','global','export','start','element','code','data','data count'];
+  const name = sectionNames[sectionId] || 'unknown(' + sectionId + ')';
+  // Read LEB128 size
+  let size = 0, shift = 0, byte;
+  do {
+    byte = bytes[++offset];
+    size |= (byte & 0x7f) << shift;
+    shift += 7;
+  } while (byte & 0x80);
+  offset++;
+  log('Section ' + sectionId + ' (' + name + '): ' + size + ' bytes at offset ' + offset);
+  offset += size;
+}`
+    },
     // ─── Additional SIMD ───
     "simd-integer": {
       label: "SIMD Integer Ops",
@@ -13676,13 +15937,14 @@ log('  fence() ensures memory operations are visible across threads.');`
       description: "Integer SIMD: i32x4 add, sub, mul, comparisons, and lane ops.",
       target: "3.0",
       features: ["simd"],
+      imports: ["ModuleBuilder", "ValueType"],
       code: `// Integer SIMD: i32x4 arithmetic, comparisons, lane extract/replace
-const mod = new webasmjs.ModuleBuilder('simdInt');
+const mod = new ModuleBuilder('simdInt');
 mod.defineMemory(1);
 
 // Add two i32x4 vectors
 mod.defineFunction('add_i32x4', null,
-  [webasmjs.ValueType.Int32, webasmjs.ValueType.Int32, webasmjs.ValueType.Int32], (f, a) => {
+  [ValueType.Int32, ValueType.Int32, ValueType.Int32], (f, a) => {
   a.get_local(f.getParameter(2));
   a.get_local(f.getParameter(0));
   a.load_v128(2, 0);
@@ -13694,7 +15956,7 @@ mod.defineFunction('add_i32x4', null,
 
 // Element-wise min (signed)
 mod.defineFunction('min_s_i32x4', null,
-  [webasmjs.ValueType.Int32, webasmjs.ValueType.Int32, webasmjs.ValueType.Int32], (f, a) => {
+  [ValueType.Int32, ValueType.Int32, ValueType.Int32], (f, a) => {
   a.get_local(f.getParameter(2));
   a.get_local(f.getParameter(0));
   a.load_v128(2, 0);
@@ -13705,8 +15967,8 @@ mod.defineFunction('min_s_i32x4', null,
 }).withExport();
 
 // Extract a single lane
-mod.defineFunction('extract', [webasmjs.ValueType.Int32],
-  [webasmjs.ValueType.Int32, webasmjs.ValueType.Int32], (f, a) => {
+mod.defineFunction('extract', [ValueType.Int32],
+  [ValueType.Int32, ValueType.Int32], (f, a) => {
   // Load vector, extract lane based on index using a br_table
   // For simplicity, extract lane 0 from the vector at the address
   a.get_local(f.getParameter(0));
@@ -13716,7 +15978,7 @@ mod.defineFunction('extract', [webasmjs.ValueType.Int32],
 
 // Splat a scalar to all 4 lanes
 mod.defineFunction('splat_i32x4', null,
-  [webasmjs.ValueType.Int32, webasmjs.ValueType.Int32], (f, a) => {
+  [ValueType.Int32, ValueType.Int32], (f, a) => {
   a.get_local(f.getParameter(0)); // dest
   a.get_local(f.getParameter(1)); // scalar
   a.splat_i32x4();
@@ -13724,14 +15986,14 @@ mod.defineFunction('splat_i32x4', null,
 }).withExport();
 
 mod.defineFunction('setI32', null,
-  [webasmjs.ValueType.Int32, webasmjs.ValueType.Int32], (f, a) => {
+  [ValueType.Int32, ValueType.Int32], (f, a) => {
   a.get_local(f.getParameter(0));
   a.get_local(f.getParameter(1));
   a.store_i32(2, 0);
 }).withExport();
 
-mod.defineFunction('getI32', [webasmjs.ValueType.Int32],
-  [webasmjs.ValueType.Int32], (f, a) => {
+mod.defineFunction('getI32', [ValueType.Int32],
+  [ValueType.Int32], (f, a) => {
   a.get_local(f.getParameter(0));
   a.load_i32(2, 0);
 }).withExport();
@@ -13763,14 +16025,15 @@ log('splat(7) = [' + [getI32(64), getI32(68), getI32(72), getI32(76)] + ']');`
       description: "Rearrange vector lanes with shuffle and swizzle.",
       target: "3.0",
       features: ["simd"],
+      imports: ["ModuleBuilder", "ValueType"],
       code: `// SIMD shuffle & swizzle: rearrange bytes across vectors
-const mod = new webasmjs.ModuleBuilder('simdShuffle');
+const mod = new ModuleBuilder('simdShuffle');
 mod.defineMemory(1);
 
 // shuffle: pick 16 bytes from two source vectors by index
 // Indices 0-15 = first vector, 16-31 = second vector
 mod.defineFunction('interleave', null,
-  [webasmjs.ValueType.Int32, webasmjs.ValueType.Int32, webasmjs.ValueType.Int32], (f, a) => {
+  [ValueType.Int32, ValueType.Int32, ValueType.Int32], (f, a) => {
   a.get_local(f.getParameter(2)); // dest
   a.get_local(f.getParameter(0));
   a.load_v128(2, 0); // vector A
@@ -13783,7 +16046,7 @@ mod.defineFunction('interleave', null,
 
 // Reverse bytes within a vector using shuffle
 mod.defineFunction('reverse', null,
-  [webasmjs.ValueType.Int32, webasmjs.ValueType.Int32], (f, a) => {
+  [ValueType.Int32, ValueType.Int32], (f, a) => {
   a.get_local(f.getParameter(1)); // dest
   a.get_local(f.getParameter(0));
   a.load_v128(2, 0);
@@ -13795,7 +16058,7 @@ mod.defineFunction('reverse', null,
 
 // swizzle: rearrange bytes using a dynamic index vector
 mod.defineFunction('swizzle', null,
-  [webasmjs.ValueType.Int32, webasmjs.ValueType.Int32, webasmjs.ValueType.Int32], (f, a) => {
+  [ValueType.Int32, ValueType.Int32, ValueType.Int32], (f, a) => {
   a.get_local(f.getParameter(2)); // dest
   a.get_local(f.getParameter(0));
   a.load_v128(2, 0); // data
@@ -13806,14 +16069,14 @@ mod.defineFunction('swizzle', null,
 }).withExport();
 
 mod.defineFunction('setByte', null,
-  [webasmjs.ValueType.Int32, webasmjs.ValueType.Int32], (f, a) => {
+  [ValueType.Int32, ValueType.Int32], (f, a) => {
   a.get_local(f.getParameter(0));
   a.get_local(f.getParameter(1));
   a.store8_i32(0, 0);
 }).withExport();
 
-mod.defineFunction('getByte', [webasmjs.ValueType.Int32],
-  [webasmjs.ValueType.Int32], (f, a) => {
+mod.defineFunction('getByte', [ValueType.Int32],
+  [ValueType.Int32], (f, a) => {
   a.get_local(f.getParameter(0));
   a.load8_i32_u(0, 0);
 }).withExport();
@@ -13853,13 +16116,14 @@ log('swizzle(A, reverse-within-groups) = [' + swizzled.join(', ') + ']');`
       description: "Convert between vector widths \u2014 narrow i16x8 to i8x16, extend i8x16 to i16x8.",
       target: "3.0",
       features: ["simd"],
+      imports: ["ModuleBuilder", "ValueType"],
       code: `// SIMD widening and narrowing: convert between lane sizes
-const mod = new webasmjs.ModuleBuilder('simdWidenNarrow');
+const mod = new ModuleBuilder('simdWidenNarrow');
 mod.defineMemory(1);
 
 // Narrow two i16x8 vectors into one i8x16 (saturating, unsigned)
 mod.defineFunction('narrow_u', null,
-  [webasmjs.ValueType.Int32, webasmjs.ValueType.Int32, webasmjs.ValueType.Int32], (f, a) => {
+  [ValueType.Int32, ValueType.Int32, ValueType.Int32], (f, a) => {
   a.get_local(f.getParameter(2));
   a.get_local(f.getParameter(0));
   a.load_v128(2, 0);
@@ -13871,7 +16135,7 @@ mod.defineFunction('narrow_u', null,
 
 // Extend low half of i8x16 to i16x8 (signed)
 mod.defineFunction('extend_low_s', null,
-  [webasmjs.ValueType.Int32, webasmjs.ValueType.Int32], (f, a) => {
+  [ValueType.Int32, ValueType.Int32], (f, a) => {
   a.get_local(f.getParameter(1));
   a.get_local(f.getParameter(0));
   a.load_v128(2, 0);
@@ -13880,29 +16144,29 @@ mod.defineFunction('extend_low_s', null,
 }).withExport();
 
 mod.defineFunction('setByte', null,
-  [webasmjs.ValueType.Int32, webasmjs.ValueType.Int32], (f, a) => {
+  [ValueType.Int32, ValueType.Int32], (f, a) => {
   a.get_local(f.getParameter(0));
   a.get_local(f.getParameter(1));
   a.store8_i32(0, 0);
 }).withExport();
 
-mod.defineFunction('getByte', [webasmjs.ValueType.Int32],
-  [webasmjs.ValueType.Int32], (f, a) => {
+mod.defineFunction('getByte', [ValueType.Int32],
+  [ValueType.Int32], (f, a) => {
   a.get_local(f.getParameter(0));
   a.load8_i32_u(0, 0);
 }).withExport();
 
 mod.defineFunction('setI16', null,
-  [webasmjs.ValueType.Int32, webasmjs.ValueType.Int32], (f, a) => {
+  [ValueType.Int32, ValueType.Int32], (f, a) => {
   a.get_local(f.getParameter(0));
   a.get_local(f.getParameter(1));
   a.store16_i32(1, 0);
 }).withExport();
 
-mod.defineFunction('getI16', [webasmjs.ValueType.Int32],
-  [webasmjs.ValueType.Int32], (f, a) => {
+mod.defineFunction('getI16', [ValueType.Int32],
+  [ValueType.Int32], (f, a) => {
   a.get_local(f.getParameter(0));
-  a.load16_i32_s(1, 0);
+  a.load16_i32(1, 0);
 }).withExport();
 
 const instance = await mod.instantiate();
@@ -13942,13 +16206,14 @@ log('(200\u2192-56, 128\u2192-128, 255\u2192-1 sign-extended)');`
       description: "Saturating add/sub that clamp instead of wrapping.",
       target: "3.0",
       features: ["simd"],
+      imports: ["ModuleBuilder", "ValueType"],
       code: `// SIMD saturating arithmetic: clamp on overflow instead of wrap
-const mod = new webasmjs.ModuleBuilder('simdSat');
+const mod = new ModuleBuilder('simdSat');
 mod.defineMemory(1);
 
 // Saturating unsigned add on i8x16
 mod.defineFunction('add_sat_u', null,
-  [webasmjs.ValueType.Int32, webasmjs.ValueType.Int32, webasmjs.ValueType.Int32], (f, a) => {
+  [ValueType.Int32, ValueType.Int32, ValueType.Int32], (f, a) => {
   a.get_local(f.getParameter(2));
   a.get_local(f.getParameter(0));
   a.load_v128(2, 0);
@@ -13960,7 +16225,7 @@ mod.defineFunction('add_sat_u', null,
 
 // Saturating unsigned sub on i8x16
 mod.defineFunction('sub_sat_u', null,
-  [webasmjs.ValueType.Int32, webasmjs.ValueType.Int32, webasmjs.ValueType.Int32], (f, a) => {
+  [ValueType.Int32, ValueType.Int32, ValueType.Int32], (f, a) => {
   a.get_local(f.getParameter(2));
   a.get_local(f.getParameter(0));
   a.load_v128(2, 0);
@@ -13972,7 +16237,7 @@ mod.defineFunction('sub_sat_u', null,
 
 // Regular (wrapping) add for comparison
 mod.defineFunction('add_wrap', null,
-  [webasmjs.ValueType.Int32, webasmjs.ValueType.Int32, webasmjs.ValueType.Int32], (f, a) => {
+  [ValueType.Int32, ValueType.Int32, ValueType.Int32], (f, a) => {
   a.get_local(f.getParameter(2));
   a.get_local(f.getParameter(0));
   a.load_v128(2, 0);
@@ -13983,14 +16248,14 @@ mod.defineFunction('add_wrap', null,
 }).withExport();
 
 mod.defineFunction('setByte', null,
-  [webasmjs.ValueType.Int32, webasmjs.ValueType.Int32], (f, a) => {
+  [ValueType.Int32, ValueType.Int32], (f, a) => {
   a.get_local(f.getParameter(0));
   a.get_local(f.getParameter(1));
   a.store8_i32(0, 0);
 }).withExport();
 
-mod.defineFunction('getByte', [webasmjs.ValueType.Int32],
-  [webasmjs.ValueType.Int32], (f, a) => {
+mod.defineFunction('getByte', [ValueType.Int32],
+  [ValueType.Int32], (f, a) => {
   a.get_local(f.getParameter(0));
   a.load8_i32_u(0, 0);
 }).withExport();
@@ -14023,6 +16288,93 @@ const subResult = [];
 for (let i = 0; i < 8; i++) subResult.push(getByte(64 + i));
 log('sub_sat_u = [' + subResult.join(', ') + ']  (clamped to 0)');`
     },
+    "simd-abs-neg": {
+      label: "SIMD Abs/Neg",
+      group: "SIMD",
+      description: "Absolute value and negation on f32x4 vectors.",
+      target: "3.0",
+      features: ["simd"],
+      imports: ["ModuleBuilder", "ValueType"],
+      code: `// SIMD Abs/Neg \u2014 absolute value and negation on f32x4 vectors
+const mod = new ModuleBuilder('simdAbsNeg', { target: '3.0' });
+const mem = mod.defineMemory(1);
+mod.exportMemory(mem, 'memory');
+
+// abs: compute |v| for each lane
+mod.defineFunction('absF32x4', null, [ValueType.Int32, ValueType.Int32], (f, a) => {
+  a.get_local(f.getParameter(1)); // dest
+  a.get_local(f.getParameter(0)); // src
+  a.load_v128(0, 0);
+  a.abs_f32x4();
+  a.store_v128(0, 0);
+}).withExport();
+
+// neg: compute -v for each lane
+mod.defineFunction('negF32x4', null, [ValueType.Int32, ValueType.Int32], (f, a) => {
+  a.get_local(f.getParameter(1));
+  a.get_local(f.getParameter(0));
+  a.load_v128(0, 0);
+  a.neg_f32x4();
+  a.store_v128(0, 0);
+}).withExport();
+
+const instance = await mod.instantiate();
+const { absF32x4, negF32x4, memory } = instance.instance.exports;
+const view = new Float32Array(memory.buffer);
+
+view.set([-1.5, 2.0, -3.5, 4.0], 0);
+log('Input: [' + Array.from(view.slice(0, 4)).join(', ') + ']');
+
+absF32x4(0, 16);
+log('abs:   [' + Array.from(view.slice(4, 8)).join(', ') + ']');
+
+negF32x4(0, 32);
+log('neg:   [' + Array.from(view.slice(8, 12)).join(', ') + ']');`
+    },
+    "simd-bitselect": {
+      label: "SIMD Bitwise Select",
+      group: "SIMD",
+      description: "Conditional lane selection using bitwise select.",
+      target: "3.0",
+      features: ["simd"],
+      imports: ["ModuleBuilder", "ValueType"],
+      code: `// SIMD Bitwise Select \u2014 conditional lane selection
+const mod = new ModuleBuilder('simdBitselect', { target: '3.0' });
+const mem = mod.defineMemory(1);
+mod.exportMemory(mem, 'memory');
+
+// bitselect(a, b, mask): for each bit, result = mask ? a : b
+mod.defineFunction('selectLanes', null,
+  [ValueType.Int32, ValueType.Int32, ValueType.Int32, ValueType.Int32], (f, a) => {
+  a.get_local(f.getParameter(3)); // dest
+  a.get_local(f.getParameter(0)); // a
+  a.load_v128(0, 0);
+  a.get_local(f.getParameter(1)); // b
+  a.load_v128(0, 0);
+  a.get_local(f.getParameter(2)); // mask
+  a.load_v128(0, 0);
+  a.bitselect_v128();
+  a.store_v128(0, 0);
+}).withExport();
+
+const instance = await mod.instantiate();
+const { selectLanes, memory } = instance.instance.exports;
+const i32View = new Int32Array(memory.buffer);
+const u32View = new Uint32Array(memory.buffer);
+
+// A = [1, 2, 3, 4], B = [10, 20, 30, 40]
+i32View.set([1, 2, 3, 4], 0);      // offset 0 = A
+i32View.set([10, 20, 30, 40], 4);   // offset 16 = B
+// Mask: all 1s for lanes 0,2 (select A), all 0s for lanes 1,3 (select B)
+u32View.set([0xFFFFFFFF, 0, 0xFFFFFFFF, 0], 8); // offset 32 = mask
+
+selectLanes(0, 16, 32, 48);
+log('A = [1, 2, 3, 4]');
+log('B = [10, 20, 30, 40]');
+log('mask = [all1, 0, all1, 0]');
+log('result = [' + Array.from(i32View.slice(12, 16)).join(', ') + ']');
+log('(selects A for lanes 0,2 and B for lanes 1,3)');`
+    },
     // ─── Additional Bulk Memory ───
     "passive-data": {
       label: "Passive Data Segments",
@@ -14030,21 +16382,22 @@ log('sub_sat_u = [' + subResult.join(', ') + ']  (clamped to 0)');`
       description: "Lazy-init memory with passive segments and memory.init.",
       target: "2.0",
       features: ["bulk-memory"],
+      imports: ["ModuleBuilder", "ValueType", "BlockType"],
       code: `// Passive data segments: lazy initialization with memory.init
-const mod = new webasmjs.ModuleBuilder('passiveData');
+const mod = new ModuleBuilder('passiveData');
 const mem = mod.defineMemory(1);
 mod.exportMemory(mem, 'memory');
 
 // Passive segment: not placed in memory until memory.init is called
 const greeting = new TextEncoder().encode('Hello, WebAssembly!');
 const dataSegment = mod.defineData(new Uint8Array([...greeting]));
-// dataSegment is passive because no offset was given
+dataSegment.passive();
 
 // Copy passive data into memory: init(destOffset)
-mod.defineFunction('init', null, [webasmjs.ValueType.Int32], (f, a) => {
+mod.defineFunction('init', null, [ValueType.Int32], (f, a) => {
   a.get_local(f.getParameter(0)); // destination offset
   a.const_i32(0);                  // source offset in data segment
-  a.const_i32(${greeting.length});                // length
+  a.const_i32(greeting.length);                // length
   a.memory_init(dataSegment._index, 0);
 }).withExport();
 
@@ -14054,13 +16407,13 @@ mod.defineFunction('drop', null, [], (f, a) => {
 }).withExport();
 
 // strlen
-mod.defineFunction('strlen', [webasmjs.ValueType.Int32], [webasmjs.ValueType.Int32], (f, a) => {
+mod.defineFunction('strlen', [ValueType.Int32], [ValueType.Int32], (f, a) => {
   const ptr = f.getParameter(0);
-  const len = a.declareLocal(webasmjs.ValueType.Int32, 'len');
+  const len = a.declareLocal(ValueType.Int32, 'len');
   a.const_i32(0);
   a.set_local(len);
-  a.loop(webasmjs.BlockType.Void, (cont) => {
-    a.block(webasmjs.BlockType.Void, (brk) => {
+  a.loop(BlockType.Void, (cont) => {
+    a.block(BlockType.Void, (brk) => {
       a.get_local(ptr);
       a.get_local(len);
       a.add_i32();
@@ -14112,25 +16465,26 @@ try {
       description: "table.copy and table.fill for bulk table manipulation.",
       target: "2.0",
       features: ["bulk-memory"],
+      imports: ["ModuleBuilder", "ValueType", "ElementType"],
       code: `// Bulk table operations: table.fill and table.copy
-const mod = new webasmjs.ModuleBuilder('bulkTable');
+const mod = new ModuleBuilder('bulkTable');
 
-const add = mod.defineFunction('add', [webasmjs.ValueType.Int32],
-  [webasmjs.ValueType.Int32, webasmjs.ValueType.Int32], (f, a) => {
+const add = mod.defineFunction('add', [ValueType.Int32],
+  [ValueType.Int32, ValueType.Int32], (f, a) => {
   a.get_local(f.getParameter(0));
   a.get_local(f.getParameter(1));
   a.add_i32();
 }).withExport();
 
-const mul = mod.defineFunction('mul', [webasmjs.ValueType.Int32],
-  [webasmjs.ValueType.Int32, webasmjs.ValueType.Int32], (f, a) => {
+const mul = mod.defineFunction('mul', [ValueType.Int32],
+  [ValueType.Int32, ValueType.Int32], (f, a) => {
   a.get_local(f.getParameter(0));
   a.get_local(f.getParameter(1));
   a.mul_i32();
 }).withExport();
 
 // Table with space for 8 entries
-const table = mod.defineTable(webasmjs.ElementType.AnyFunc, 8);
+const table = mod.defineTable(ElementType.AnyFunc, 8);
 mod.defineTableSegment(table, [add, mul], 0);
 
 // table.fill(start, ref, count) \u2014 fill slots 2-5 with the add function
@@ -14150,13 +16504,13 @@ mod.defineFunction('copySlots', null, [], (f, a) => {
 }).withExport();
 
 // table.size
-mod.defineFunction('tableSize', [webasmjs.ValueType.Int32], [], (f, a) => {
+mod.defineFunction('tableSize', [ValueType.Int32], [], (f, a) => {
   a.table_size(0);
 }).withExport();
 
 // Dispatch through table
-mod.defineFunction('dispatch', [webasmjs.ValueType.Int32],
-  [webasmjs.ValueType.Int32, webasmjs.ValueType.Int32, webasmjs.ValueType.Int32], (f, a) => {
+mod.defineFunction('dispatch', [ValueType.Int32],
+  [ValueType.Int32, ValueType.Int32, ValueType.Int32], (f, a) => {
   a.get_local(f.getParameter(1));
   a.get_local(f.getParameter(2));
   a.get_local(f.getParameter(0));
@@ -14194,65 +16548,66 @@ log('  slot 7: dispatch(7, 5, 6) = ' + dispatch(7, 5, 6) + ' (mul, copied from 1
       description: "Dynamic table manipulation with table.get, table.set, table.grow.",
       target: "2.0",
       features: ["reference-types"],
+      imports: ["ModuleBuilder", "ValueType", "ElementType"],
       code: `// Dynamic table operations: get, set, grow
-const mod = new webasmjs.ModuleBuilder('tableOps');
+const mod = new ModuleBuilder('tableOps');
 
-const double = mod.defineFunction('double', [webasmjs.ValueType.Int32],
-  [webasmjs.ValueType.Int32], (f, a) => {
+const double = mod.defineFunction('double', [ValueType.Int32],
+  [ValueType.Int32], (f, a) => {
   a.get_local(f.getParameter(0));
   a.const_i32(2);
   a.mul_i32();
 }).withExport();
 
-const triple = mod.defineFunction('triple', [webasmjs.ValueType.Int32],
-  [webasmjs.ValueType.Int32], (f, a) => {
+const triple = mod.defineFunction('triple', [ValueType.Int32],
+  [ValueType.Int32], (f, a) => {
   a.get_local(f.getParameter(0));
   a.const_i32(3);
   a.mul_i32();
 }).withExport();
 
-const negate = mod.defineFunction('negate', [webasmjs.ValueType.Int32],
-  [webasmjs.ValueType.Int32], (f, a) => {
+const negate = mod.defineFunction('negate', [ValueType.Int32],
+  [ValueType.Int32], (f, a) => {
   a.const_i32(0);
   a.get_local(f.getParameter(0));
   a.sub_i32();
 }).withExport();
 
 // Start with table of size 2
-const table = mod.defineTable(webasmjs.ElementType.AnyFunc, 2);
+const table = mod.defineTable(ElementType.AnyFunc, 2);
 mod.defineTableSegment(table, [double, triple], 0);
 
 // table.set: place a function ref at an index
-mod.defineFunction('setSlot', null, [webasmjs.ValueType.Int32], (f, a) => {
+mod.defineFunction('setSlot', null, [ValueType.Int32], (f, a) => {
   a.get_local(f.getParameter(0));
   a.ref_func(negate);
   a.table_set(0);
 }).withExport();
 
 // table.grow: add N slots (returns old size, or -1 on failure)
-mod.defineFunction('growTable', [webasmjs.ValueType.Int32],
-  [webasmjs.ValueType.Int32], (f, a) => {
+mod.defineFunction('growTable', [ValueType.Int32],
+  [ValueType.Int32], (f, a) => {
   a.ref_null(0x70); // fill new slots with null
   a.get_local(f.getParameter(0));
   a.table_grow(0);
 }).withExport();
 
 // table.size
-mod.defineFunction('size', [webasmjs.ValueType.Int32], [], (f, a) => {
+mod.defineFunction('size', [ValueType.Int32], [], (f, a) => {
   a.table_size(0);
 }).withExport();
 
 // Check if a slot is null
-mod.defineFunction('isNull', [webasmjs.ValueType.Int32],
-  [webasmjs.ValueType.Int32], (f, a) => {
+mod.defineFunction('isNull', [ValueType.Int32],
+  [ValueType.Int32], (f, a) => {
   a.get_local(f.getParameter(0));
   a.table_get(0);
   a.ref_is_null();
 }).withExport();
 
 // Call through table
-mod.defineFunction('call', [webasmjs.ValueType.Int32],
-  [webasmjs.ValueType.Int32, webasmjs.ValueType.Int32], (f, a) => {
+mod.defineFunction('call', [ValueType.Int32],
+  [ValueType.Int32, ValueType.Int32], (f, a) => {
   a.get_local(f.getParameter(1));
   a.get_local(f.getParameter(0));
   a.call_indirect(double.funcTypeBuilder);
@@ -14285,19 +16640,20 @@ log('slot 2 (negate): call(2, 5) = ' + fn.call(2, 5));`
       description: "Full try/catch exception handling with multiple tags.",
       target: "3.0",
       features: ["exception-handling"],
+      imports: ["ModuleBuilder", "ValueType", "BlockType"],
       code: `// Full try/catch exception handling
-const mod = new webasmjs.ModuleBuilder('tryCatch', { disableVerification: true });
+const mod = new ModuleBuilder('tryCatch', { disableVerification: true });
 
 // Define two exception tags with different payloads
-const errorTag = mod.defineTag([webasmjs.ValueType.Int32]);     // error code
-const overflowTag = mod.defineTag([webasmjs.ValueType.Int32]);  // overflow value
+const errorTag = mod.defineTag([ValueType.Int32]);     // error code
+const overflowTag = mod.defineTag([ValueType.Int32]);  // overflow value
 
 // Function that may throw
-mod.defineFunction('checkedAdd', [webasmjs.ValueType.Int32],
-  [webasmjs.ValueType.Int32, webasmjs.ValueType.Int32], (f, a) => {
+mod.defineFunction('checkedAdd', [ValueType.Int32],
+  [ValueType.Int32, ValueType.Int32], (f, a) => {
   const x = f.getParameter(0);
   const y = f.getParameter(1);
-  const result = a.declareLocal(webasmjs.ValueType.Int32, 'result');
+  const result = a.declareLocal(ValueType.Int32, 'result');
 
   a.get_local(x);
   a.get_local(y);
@@ -14308,7 +16664,7 @@ mod.defineFunction('checkedAdd', [webasmjs.ValueType.Int32],
   a.get_local(result);
   a.const_i32(1000);
   a.gt_i32();
-  a.if(webasmjs.BlockType.Void, () => {
+  a.if(BlockType.Void, () => {
     a.get_local(result);
     a.throw(overflowTag._index);
   });
@@ -14316,8 +16672,8 @@ mod.defineFunction('checkedAdd', [webasmjs.ValueType.Int32],
   // Check for negative input
   a.get_local(x);
   a.const_i32(0);
-  a.lt_s_i32();
-  a.if(webasmjs.BlockType.Void, () => {
+  a.lt_i32();
+  a.if(BlockType.Void, () => {
     a.const_i32(-1);
     a.throw(errorTag._index);
   });
@@ -14345,51 +16701,52 @@ log('  - checkedAdd: adds two numbers with validation');`
       description: "Single-precision float ops \u2014 f32 min, max, abs, neg, sqrt.",
       target: "mvp",
       features: [],
+      imports: ["ModuleBuilder", "ValueType"],
       code: `// f32 math \u2014 single-precision float operations
-const mod = new webasmjs.ModuleBuilder('f32math');
+const mod = new ModuleBuilder('f32math');
 
-mod.defineFunction('min', [webasmjs.ValueType.Float32],
-  [webasmjs.ValueType.Float32, webasmjs.ValueType.Float32], (f, a) => {
+mod.defineFunction('min', [ValueType.Float32],
+  [ValueType.Float32, ValueType.Float32], (f, a) => {
   a.get_local(f.getParameter(0));
   a.get_local(f.getParameter(1));
   a.min_f32();
 }).withExport();
 
-mod.defineFunction('max', [webasmjs.ValueType.Float32],
-  [webasmjs.ValueType.Float32, webasmjs.ValueType.Float32], (f, a) => {
+mod.defineFunction('max', [ValueType.Float32],
+  [ValueType.Float32, ValueType.Float32], (f, a) => {
   a.get_local(f.getParameter(0));
   a.get_local(f.getParameter(1));
   a.max_f32();
 }).withExport();
 
-mod.defineFunction('abs', [webasmjs.ValueType.Float32],
-  [webasmjs.ValueType.Float32], (f, a) => {
+mod.defineFunction('abs', [ValueType.Float32],
+  [ValueType.Float32], (f, a) => {
   a.get_local(f.getParameter(0));
   a.abs_f32();
 }).withExport();
 
-mod.defineFunction('neg', [webasmjs.ValueType.Float32],
-  [webasmjs.ValueType.Float32], (f, a) => {
+mod.defineFunction('neg', [ValueType.Float32],
+  [ValueType.Float32], (f, a) => {
   a.get_local(f.getParameter(0));
   a.neg_f32();
 }).withExport();
 
-mod.defineFunction('sqrt', [webasmjs.ValueType.Float32],
-  [webasmjs.ValueType.Float32], (f, a) => {
+mod.defineFunction('sqrt', [ValueType.Float32],
+  [ValueType.Float32], (f, a) => {
   a.get_local(f.getParameter(0));
   a.sqrt_f32();
 }).withExport();
 
 // Compare: f32 arithmetic vs f64 for precision
-mod.defineFunction('addF32', [webasmjs.ValueType.Float32],
-  [webasmjs.ValueType.Float32, webasmjs.ValueType.Float32], (f, a) => {
+mod.defineFunction('addF32', [ValueType.Float32],
+  [ValueType.Float32, ValueType.Float32], (f, a) => {
   a.get_local(f.getParameter(0));
   a.get_local(f.getParameter(1));
   a.add_f32();
 }).withExport();
 
-mod.defineFunction('addF64', [webasmjs.ValueType.Float64],
-  [webasmjs.ValueType.Float64, webasmjs.ValueType.Float64], (f, a) => {
+mod.defineFunction('addF64', [ValueType.Float64],
+  [ValueType.Float64, ValueType.Float64], (f, a) => {
   a.get_local(f.getParameter(0));
   a.get_local(f.getParameter(1));
   a.add_f64();
@@ -14411,8 +16768,94 @@ log('=== f32 vs f64 Precision ===');
 log('f32: 0.1 + 0.2 = ' + addF32(0.1, 0.2));
 log('f64: 0.1 + 0.2 = ' + addF64(0.1, 0.2));
 log('f32 uses 4 bytes, f64 uses 8 bytes per value.');`
+    },
+    "extended-const-globals": {
+      label: "Extended Const Globals",
+      group: "Post-MVP",
+      description: "Globals using arithmetic in init expressions with extended-const.",
+      target: "latest",
+      features: ["extended-const"],
+      imports: ["ModuleBuilder", "ValueType"],
+      code: `// Extended Const Globals \u2014 globals using arithmetic in init expressions
+const mod = new ModuleBuilder('extConst', { target: 'latest' });
+
+// With extended-const, global init expressions can use i32.add, i32.sub, i32.mul
+const base = mod.defineGlobal(ValueType.Int32, false, 100);
+const scale = mod.defineGlobal(ValueType.Int32, false, 3);
+
+// Computed global: base * scale
+const computed = mod.defineGlobal(ValueType.Int32, false, (asm) => {
+  asm.get_global(base);
+  asm.get_global(scale);
+  asm.mul_i32();
+});
+
+mod.defineFunction('getComputed', [ValueType.Int32], [], (f, a) => {
+  a.get_global(computed);
+}).withExport();
+
+mod.exportGlobal(base, 'base');
+mod.exportGlobal(scale, 'scale');
+
+log('WAT:');
+log(mod.toString());
+
+const bytes = mod.toBytes();
+log('');
+log('Binary valid: ' + WebAssembly.validate(bytes.buffer));
+log('(Extended const allows i32.add/sub/mul in global init expressions)');`
+    },
+    "multi-table-dispatch": {
+      label: "Multi-Table Dispatch",
+      group: "Post-MVP",
+      description: "Separate function tables with multi-table dispatch.",
+      target: "3.0",
+      features: [],
+      imports: ["ModuleBuilder", "ValueType", "ElementType"],
+      code: `// Multi-Table Dispatch \u2014 separate function tables
+const mod = new ModuleBuilder('multiTableDispatch', { target: '3.0', disableVerification: true });
+
+const fnType = mod.defineFuncType([ValueType.Int32], [ValueType.Int32]);
+
+// Math operations table
+const square = mod.defineFunction('square', [ValueType.Int32], [ValueType.Int32], (f, a) => {
+  a.get_local(f.getParameter(0));
+  a.get_local(f.getParameter(0));
+  a.mul_i32();
+});
+
+const dbl = mod.defineFunction('double', [ValueType.Int32], [ValueType.Int32], (f, a) => {
+  a.get_local(f.getParameter(0));
+  a.const_i32(2);
+  a.mul_i32();
+});
+
+const negate = mod.defineFunction('negate', [ValueType.Int32], [ValueType.Int32], (f, a) => {
+  a.const_i32(0);
+  a.get_local(f.getParameter(0));
+  a.sub_i32();
+});
+
+const mathTable = mod.defineTable(ElementType.AnyFunc, 3);
+mathTable.defineTableSegment([square, dbl, negate], 0);
+
+// Dispatch to math table
+mod.defineFunction('mathOp', [ValueType.Int32], [ValueType.Int32, ValueType.Int32], (f, a) => {
+  a.get_local(f.getParameter(1)); // value
+  a.get_local(f.getParameter(0)); // table index
+  a.call_indirect(fnType);
+}).withExport();
+
+log('WAT:');
+log(mod.toString());
+
+const bytes = mod.toBytes();
+log('');
+log('Binary valid: ' + WebAssembly.validate(bytes.buffer));`
     }
   };
+
+  // playground/playground.ts
   var GROUP_ICONS = {
     Basics: "\u{1F44B}",
     Memory: "\u{1F4BE}",
@@ -14425,7 +16868,8 @@ log('f32 uses 4 bytes, f64 uses 8 bytes per value.');`
     "Bulk Memory": "\u{1F4E6}",
     "Post-MVP": "\u{1F680}",
     WAT: "\u{1F4DD}",
-    Debug: "\u{1F50D}"
+    Debug: "\u{1F50D}",
+    GC: "\u267B"
   };
   var TARGET_ORDER = {
     mvp: 0,
@@ -14436,18 +16880,6 @@ log('f32 uses 4 bytes, f64 uses 8 bytes per value.');`
   function getEditor() {
     return document.getElementById("editor");
   }
-  function getWatOutput() {
-    return document.getElementById("watOutput");
-  }
-  function getRunOutput() {
-    return document.getElementById("runOutput");
-  }
-  function getConsoleOutput() {
-    return document.getElementById("consoleOutput");
-  }
-  function clearOutput(el) {
-    el.textContent = "";
-  }
   function appendOutput(el, text, className) {
     const line = document.createElement("div");
     line.textContent = text;
@@ -14455,49 +16887,88 @@ log('f32 uses 4 bytes, f64 uses 8 bytes per value.');`
     el.appendChild(line);
   }
   var currentExampleKey = "hello-wasm";
+  var currentLanguage = "js";
+  function getImportHeader(imports) {
+    if (!imports || imports.length === 0) return "";
+    const symbolList = imports.join(", ");
+    if (currentLanguage === "ts") {
+      return `import { ${symbolList} } from 'webasmjs';
+
+`;
+    } else {
+      return `const { ${symbolList} } = require('webasmjs');
+
+`;
+    }
+  }
   function loadExample(name) {
     const example = EXAMPLES[name];
     if (example) {
       currentExampleKey = name;
-      getEditor().value = example.code;
-      clearOutput(getWatOutput());
-      clearOutput(getRunOutput());
-      clearOutput(getConsoleOutput());
+      const header = getImportHeader(example.imports);
+      getEditor().value = header + example.code;
+      document.getElementById("watBody").textContent = "";
+      document.getElementById("outputBody").textContent = "";
       const label = document.getElementById("currentExample");
       if (label) label.textContent = example.label;
     }
   }
-  function switchTab(tabName) {
-    const tabs = document.querySelectorAll(".tab-bar .tab");
-    const panels = document.querySelectorAll(".tab-panel");
-    tabs.forEach((tab) => {
-      tab.classList.toggle("active", tab.dataset.tab === tabName);
-    });
-    panels.forEach((panel) => {
-      const isTarget = panel.id === (tabName === "wat" ? "watOutput" : "runOutput");
-      panel.classList.toggle("active", isTarget);
-    });
+  function downloadFile(filename, data, mime) {
+    const blob = new Blob([data], { type: mime });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    a.click();
+    URL.revokeObjectURL(url);
   }
-  function toggleConsole() {
-    const drawer = document.getElementById("consoleDrawer");
-    drawer.classList.toggle("open");
-  }
-  function clearConsole() {
-    getConsoleOutput().textContent = "";
-    updateConsoleBadge();
-  }
-  var consoleMessageCount = 0;
-  function updateConsoleBadge() {
-    const badge = document.getElementById("consoleBadge");
-    consoleMessageCount = getConsoleOutput().childElementCount;
-    badge.textContent = String(consoleMessageCount);
-    badge.classList.toggle("has-messages", consoleMessageCount > 0);
+  function renderWatPane(modules) {
+    const watBody = document.getElementById("watBody");
+    watBody.textContent = "";
+    for (const mod of modules) {
+      const card = document.createElement("div");
+      card.className = "module-card";
+      const header = document.createElement("div");
+      header.className = "module-card-header";
+      const name = document.createElement("span");
+      name.className = "module-card-name";
+      name.textContent = mod.name;
+      header.appendChild(name);
+      const actions = document.createElement("span");
+      actions.className = "module-card-actions";
+      const watBtn = document.createElement("button");
+      watBtn.className = "download-btn";
+      watBtn.textContent = "\u2193 .wat";
+      watBtn.addEventListener("click", () => {
+        downloadFile(mod.name + ".wat", mod.wat, "text/plain");
+      });
+      actions.appendChild(watBtn);
+      if (mod.bytes.length > 0) {
+        const wasmBtn = document.createElement("button");
+        wasmBtn.className = "download-btn";
+        wasmBtn.textContent = "\u2193 .wasm";
+        wasmBtn.addEventListener("click", () => {
+          downloadFile(mod.name + ".wasm", mod.bytes, "application/wasm");
+        });
+        actions.appendChild(wasmBtn);
+      }
+      header.appendChild(actions);
+      card.appendChild(header);
+      const watText = document.createElement("div");
+      watText.className = "module-card-wat";
+      if (mod.wat.startsWith("Error:")) {
+        watText.classList.add("error");
+      }
+      watText.textContent = mod.wat;
+      card.appendChild(watText);
+      watBody.appendChild(card);
+    }
   }
   function initResizeHandler() {
     const handle = document.getElementById("resizeHandle");
     const main = document.querySelector(".main");
     const editorPane = document.querySelector(".editor-pane");
-    const outputPane = document.querySelector(".output-pane");
+    const watPane = document.getElementById("watPane");
     let isResizing = false;
     handle.addEventListener("mousedown", (e) => {
       isResizing = true;
@@ -14510,12 +16981,10 @@ log('f32 uses 4 bytes, f64 uses 8 bytes per value.');`
       if (!isResizing) return;
       const rect = main.getBoundingClientRect();
       const x = e.clientX - rect.left;
-      const totalWidth = rect.width - 4;
       const leftPct = Math.max(20, Math.min(80, x / rect.width * 100));
       editorPane.style.flex = "none";
-      outputPane.style.flex = "none";
+      watPane.style.width = 100 - leftPct + "%";
       editorPane.style.width = leftPct + "%";
-      outputPane.style.width = 100 - leftPct + "%";
     });
     document.addEventListener("mouseup", () => {
       if (isResizing) {
@@ -14679,6 +17148,24 @@ log('f32 uses 4 bytes, f64 uses 8 bytes per value.');`
     document.addEventListener("keydown", onKey);
     setTimeout(() => searchInput.focus(), 50);
   }
+  var ALL_SYMBOLS = [
+    "ModuleBuilder",
+    "PackageBuilder",
+    "ValueType",
+    "BlockType",
+    "ElementType",
+    "TextModuleWriter",
+    "BinaryReader",
+    "parseWat",
+    "RefType",
+    "HeapType",
+    "StructTypeBuilder",
+    "ArrayTypeBuilder",
+    "RecGroupBuilder",
+    "refType",
+    "refNullType",
+    "OpCodes"
+  ];
   window.webasmjs = {
     ModuleBuilder,
     PackageBuilder,
@@ -14687,63 +17174,117 @@ log('f32 uses 4 bytes, f64 uses 8 bytes per value.');`
     ElementType,
     TextModuleWriter,
     BinaryReader,
-    parseWat
+    parseWat,
+    RefType,
+    HeapType,
+    StructTypeBuilder,
+    ArrayTypeBuilder,
+    RecGroupBuilder,
+    refType,
+    refNullType,
+    OpCodes: OpCodes_default
   };
   async function run() {
-    const watEl = getWatOutput();
-    const runEl = getRunOutput();
-    const consoleEl = getConsoleOutput();
-    clearOutput(watEl);
-    clearOutput(runEl);
-    clearOutput(consoleEl);
-    const code = getEditor().value;
-    const drawer = document.getElementById("consoleDrawer");
-    drawer.classList.add("open");
+    const outputBody = document.getElementById("outputBody");
+    const watBody = document.getElementById("watBody");
+    outputBody.textContent = "";
+    watBody.textContent = "";
+    let code = getEditor().value;
+    code = code.replace(/^(?:import\s+\{[^}]+\}\s+from\s+['"]webasmjs['"];\s*|const\s+\{[^}]+\}\s*=\s*require\(['"]webasmjs['"]\);\s*)\n*/m, "");
+    document.getElementById("outputPane").classList.remove("collapsed");
     const log = (msg) => {
-      appendOutput(consoleEl, String(msg));
-      updateConsoleBadge();
+      appendOutput(outputBody, String(msg));
     };
-    const OrigModuleBuilder = ModuleBuilder;
+    const wasm = window.webasmjs;
+    const OrigModuleBuilder = wasm.ModuleBuilder;
+    const captured = /* @__PURE__ */ new WeakSet();
+    const capturedModules = [];
+    function captureModule(mod) {
+      if (captured.has(mod)) return;
+      captured.add(mod);
+      const name = mod._name || "module";
+      try {
+        const wat = mod.toString();
+        let bytes = new Uint8Array();
+        try {
+          bytes = mod.toBytes();
+        } catch (_) {
+        }
+        capturedModules.push({ name, wat, bytes });
+      } catch (e) {
+        capturedModules.push({ name, wat: "Error: " + e.message, bytes: new Uint8Array() });
+      }
+    }
     const patchedClass = class extends OrigModuleBuilder {
       async instantiate(imports) {
-        try {
-          const wat = this.toString();
-          appendOutput(watEl, wat);
-        } catch (e) {
-          appendOutput(watEl, "Error generating WAT: " + e.message, "error");
-        }
+        captureModule(this);
         return super.instantiate(imports);
       }
+      toBytes() {
+        captureModule(this);
+        return super.toBytes();
+      }
     };
-    window.webasmjs.ModuleBuilder = patchedClass;
+    wasm.ModuleBuilder = patchedClass;
+    const origParseWat = wasm.parseWat;
+    wasm.parseWat = (...args) => {
+      const mod = origParseWat(...args);
+      const origInstantiate = mod.instantiate.bind(mod);
+      const origToBytes = mod.toBytes.bind(mod);
+      mod.instantiate = (imports) => {
+        captureModule(mod);
+        return origInstantiate(imports);
+      };
+      mod.toBytes = () => {
+        captureModule(mod);
+        return origToBytes();
+      };
+      return mod;
+    };
     try {
+      const destructure = `const { ${ALL_SYMBOLS.join(", ")} } = webasmjs;`;
       const asyncFn = new Function("log", "webasmjs", `return (async () => {
+${destructure}
 ${code}
 })();`);
-      await asyncFn(log, window.webasmjs);
-      appendOutput(runEl, "\n--- Done ---");
+      await asyncFn(log, wasm);
+      appendOutput(outputBody, "--- Done ---", "success");
     } catch (e) {
-      appendOutput(runEl, "Error: " + e.message, "error");
+      appendOutput(outputBody, "Error: " + e.message, "error");
       if (e.stack) {
-        appendOutput(runEl, e.stack, "error");
+        appendOutput(outputBody, e.stack, "error");
       }
     } finally {
-      window.webasmjs.ModuleBuilder = OrigModuleBuilder;
-      updateConsoleBadge();
+      wasm.ModuleBuilder = OrigModuleBuilder;
+      wasm.parseWat = origParseWat;
+      renderWatPane(capturedModules);
     }
   }
   document.addEventListener("DOMContentLoaded", () => {
     document.getElementById("examplesBtn").addEventListener("click", openExamplePicker);
     document.getElementById("runBtn").addEventListener("click", run);
-    document.querySelectorAll(".tab-bar .tab").forEach((tab) => {
-      tab.addEventListener("click", () => {
-        switchTab(tab.dataset.tab);
-      });
+    document.getElementById("watToggle").addEventListener("click", () => {
+      document.getElementById("watPane").classList.toggle("collapsed");
     });
-    document.getElementById("consoleToggle").addEventListener("click", toggleConsole);
-    document.getElementById("consoleClear").addEventListener("click", (e) => {
+    document.getElementById("outputToggle").addEventListener("click", () => {
+      document.getElementById("outputPane").classList.toggle("collapsed");
+    });
+    document.getElementById("outputClear").addEventListener("click", (e) => {
       e.stopPropagation();
-      clearConsole();
+      document.getElementById("outputBody").textContent = "";
+    });
+    document.querySelectorAll(".lang-btn").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const lang = btn.dataset.lang;
+        if (lang === currentLanguage) return;
+        currentLanguage = lang;
+        document.querySelectorAll(".lang-btn").forEach((b) => {
+          b.classList.toggle("active", b.dataset.lang === lang);
+        });
+        if (currentExampleKey) {
+          loadExample(currentExampleKey);
+        }
+      });
     });
     initResizeHandler();
     getEditor().addEventListener("keydown", (e) => {

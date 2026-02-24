@@ -147,4 +147,39 @@ export default class ImmediateEncoder {
       writer.writeByte(mask[i]);
     }
   }
+
+  static encodeTypeIndexField(writer: BinaryWriter, typeIndex: number, fieldIndex: number): void {
+    writer.writeVarUInt32(typeIndex);
+    writer.writeVarUInt32(fieldIndex);
+  }
+
+  static encodeTypeIndexIndex(writer: BinaryWriter, typeIndex: number, index: number): void {
+    writer.writeVarUInt32(typeIndex);
+    writer.writeVarUInt32(index);
+  }
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  static encodeHeapType(writer: BinaryWriter, heapType: any): void {
+    if (typeof heapType === 'number') {
+      // Concrete type index
+      writer.writeVarInt32(heapType);
+    } else if (heapType && typeof heapType.value === 'number') {
+      // Abstract heap type descriptor (from HeapType constant) or type builder
+      writer.writeVarInt7(heapType.value);
+    } else if (heapType && typeof heapType.index === 'number') {
+      // TypeEntry (StructTypeBuilder, ArrayTypeBuilder, FuncTypeBuilder)
+      writer.writeVarInt32(heapType.index);
+    } else {
+      throw new Error('Invalid heap type argument.');
+    }
+  }
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  static encodeBrOnCast(writer: BinaryWriter, flags: number, labelBuilder: any, heapType1: any, heapType2: any): void {
+    writer.writeByte(flags);
+    const relativeDepth = labelBuilder;
+    writer.writeVarUInt32(typeof relativeDepth === 'number' ? relativeDepth : 0);
+    ImmediateEncoder.encodeHeapType(writer, heapType1);
+    ImmediateEncoder.encodeHeapType(writer, heapType2);
+  }
 }

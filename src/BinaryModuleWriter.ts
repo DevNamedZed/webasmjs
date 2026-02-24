@@ -46,7 +46,7 @@ export default class BinaryModuleWriter {
   }
 
   writeTypeSection(writer: BinaryWriter): void {
-    BinaryModuleWriter.writeSection(writer, SectionType.Type, this.moduleBuilder._types);
+    BinaryModuleWriter.writeSection(writer, SectionType.Type, this.moduleBuilder._typeSectionEntries);
   }
 
   writeImportSection(writer: BinaryWriter): void {
@@ -108,6 +108,24 @@ export default class BinaryModuleWriter {
     BinaryModuleWriter.writeSection(writer, SectionType.Code, this.moduleBuilder._functions);
   }
 
+  writeDataCountSection(writer: BinaryWriter): void {
+    if (this.moduleBuilder._data.length === 0) {
+      return;
+    }
+
+    // DataCount section is required when memory.init or data.drop instructions are used
+    const hasPassiveSegment = this.moduleBuilder._data.some((d) => d._passive);
+    if (!hasPassiveSegment) {
+      return;
+    }
+
+    const sectionWriter = new BinaryWriter();
+    sectionWriter.writeVarUInt32(this.moduleBuilder._data.length);
+
+    BinaryModuleWriter.writeSectionHeader(writer, SectionType.DataCount, sectionWriter.length);
+    writer.writeBytes(sectionWriter);
+  }
+
   writeDataSection(writer: BinaryWriter): void {
     BinaryModuleWriter.writeSection(writer, SectionType.Data, this.moduleBuilder._data);
   }
@@ -118,8 +136,7 @@ export default class BinaryModuleWriter {
 
     // Sub-section 0: module name
     const moduleNameWriter = new BinaryWriter();
-    moduleNameWriter.writeVarUInt32(mod._name.length);
-    moduleNameWriter.writeString(mod._name);
+    moduleNameWriter.writeLenPrefixedString(mod._name);
     nameWriter.writeVarUInt7(0);
     nameWriter.writeVarUInt32(moduleNameWriter.length);
     nameWriter.writeBytes(moduleNameWriter);
@@ -135,8 +152,7 @@ export default class BinaryModuleWriter {
       allFunctions.forEach((f, i) => {
         const name = 'name' in f ? f.name : `${f.moduleName}.${f.fieldName}`;
         funcNameWriter.writeVarUInt32(i);
-        funcNameWriter.writeVarUInt32(name.length);
-        funcNameWriter.writeString(name);
+        funcNameWriter.writeLenPrefixedString(name);
       });
       nameWriter.writeVarUInt7(1);
       nameWriter.writeVarUInt32(funcNameWriter.length);
@@ -171,8 +187,7 @@ export default class BinaryModuleWriter {
         localNameWriter.writeVarUInt32(namedEntries.length);
         namedEntries.forEach((entry) => {
           localNameWriter.writeVarUInt32(entry.index);
-          localNameWriter.writeVarUInt32(entry.name.length);
-          localNameWriter.writeString(entry.name);
+          localNameWriter.writeLenPrefixedString(entry.name);
         });
       });
       nameWriter.writeVarUInt7(2);
@@ -197,8 +212,7 @@ export default class BinaryModuleWriter {
       globalNameWriter.writeVarUInt32(namedGlobals.length);
       namedGlobals.forEach((entry) => {
         globalNameWriter.writeVarUInt32(entry.index);
-        globalNameWriter.writeVarUInt32(entry.name.length);
-        globalNameWriter.writeString(entry.name);
+        globalNameWriter.writeLenPrefixedString(entry.name);
       });
       nameWriter.writeVarUInt7(7);
       nameWriter.writeVarUInt32(globalNameWriter.length);
@@ -208,8 +222,7 @@ export default class BinaryModuleWriter {
     // Write as custom section with name "name"
     const sectionWriter = new BinaryWriter();
     const sectionName = 'name';
-    sectionWriter.writeVarUInt32(sectionName.length);
-    sectionWriter.writeString(sectionName);
+    sectionWriter.writeLenPrefixedString(sectionName);
     sectionWriter.writeBytes(nameWriter);
 
     writer.writeVarUInt7(0); // custom section id
@@ -244,6 +257,7 @@ export default class BinaryModuleWriter {
     this.writeExportSection(writer);
     this.writeStartSection(writer);
     this.writeElementSection(writer);
+    this.writeDataCountSection(writer);
     this.writeCodeSection(writer);
     this.writeDataSection(writer);
     this.writeCustomSections(writer);

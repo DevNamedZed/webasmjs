@@ -2,23 +2,33 @@ export {
   BlockType,
   ElementType,
   ExternalKind,
+  HeapType,
   LanguageType,
+  RefType,
+  RefTypePrefix,
   SectionType,
   ValueType,
   ImmediateType,
   InitExpressionType,
   TypeForm,
+  isConcreteRefType,
+  refType,
+  refNullType,
+  writeValueType,
 } from './types';
 
 export type {
   BlockTypeDescriptor,
+  ConcreteRefTypeDescriptor,
   ElementTypeDescriptor,
   ExternalKindDescriptor,
   ExternalKindType,
+  HeapTypeDescriptor,
   LanguageTypeDescriptor,
   LanguageTypeKey,
   ModuleBuilderOptions,
   OpCodeDef,
+  RefTypeDescriptor,
   SectionTypeDescriptor,
   ValueTypeDescriptor,
   WasmFeature,
@@ -27,6 +37,8 @@ export type {
 } from './types';
 
 export { default as Arg } from './Arg';
+export { default as ArrayTypeBuilder } from './ArrayTypeBuilder';
+export type { ArrayTypeOptions } from './ArrayTypeBuilder';
 export { default as BinaryModuleWriter } from './BinaryModuleWriter';
 export { default as BinaryReader } from './BinaryReader';
 export type { ModuleInfo, NameSectionInfo } from './BinaryReader';
@@ -53,7 +65,11 @@ export { default as MemoryType } from './MemoryType';
 export { default as ModuleBuilder } from './ModuleBuilder';
 export { default as OpCodes } from './OpCodes';
 export { default as PackageBuilder } from './PackageBuilder';
+export { default as RecGroupBuilder } from './RecGroupBuilder';
+export type { TypeEntry } from './RecGroupBuilder';
 export { default as ResizableLimits } from './ResizableLimits';
+export { default as StructTypeBuilder } from './StructTypeBuilder';
+export type { StructField, StructTypeOptions } from './StructTypeBuilder';
 export { default as TableBuilder } from './TableBuilder';
 export { default as TableType } from './TableType';
 export { default as TextModuleWriter } from './TextModuleWriter';

@@ -77,6 +77,14 @@ function getOperandInfo(operand: string | null): OperandInfo | null {
       return { param: 'laneIndex: number', call: 'laneIndex' };
     case 'ShuffleMask':
       return { param: 'mask: Uint8Array', call: 'mask' };
+    case 'TypeIndexField':
+      return { param: 'typeIndex: number, fieldIndex: number', call: 'typeIndex, fieldIndex' };
+    case 'TypeIndexIndex':
+      return { param: 'typeIndex: number, index: number', call: 'typeIndex, index' };
+    case 'HeapType':
+      return { param: 'heapType: any', call: 'heapType' };
+    case 'BrOnCast':
+      return { param: 'flags: number, labelBuilder: any, heapType1: any, heapType2: any', call: 'flags, labelBuilder, heapType1, heapType2' };
     default:
       return null;
   }

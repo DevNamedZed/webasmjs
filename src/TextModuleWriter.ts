@@ -4,6 +4,8 @@ import ImportBuilder from './ImportBuilder';
 import GlobalBuilder from './GlobalBuilder';
 import { ExternalKind, ImmediateType, ValueTypeDescriptor } from './types';
 import FuncTypeBuilder from './FuncTypeBuilder';
+import StructTypeBuilder from './StructTypeBuilder';
+import ArrayTypeBuilder from './ArrayTypeBuilder';
 import GlobalType from './GlobalType';
 import MemoryType from './MemoryType';
 import TableType from './TableType';
@@ -43,13 +45,24 @@ export default class TextModuleWriter {
 
   private writeTypes(lines: string[], mod: ModuleBuilder): void {
     mod._types.forEach((type, i) => {
-      const params = type.parameterTypes.map((p) => p.name).join(' ');
-      const results = type.returnTypes.map((r) => r.name).join(' ');
-      let sig = `(func`;
-      if (params.length > 0) sig += ` (param ${params})`;
-      if (results.length > 0) sig += ` (result ${results})`;
-      sig += ')';
-      lines.push(`  (type (;${i};) ${sig})`);
+      if (type instanceof FuncTypeBuilder) {
+        const params = type.parameterTypes.map((p: ValueTypeDescriptor) => p.name).join(' ');
+        const results = type.returnTypes.map((r: ValueTypeDescriptor) => r.name).join(' ');
+        let sig = `(func`;
+        if (params.length > 0) sig += ` (param ${params})`;
+        if (results.length > 0) sig += ` (result ${results})`;
+        sig += ')';
+        lines.push(`  (type (;${i};) ${sig})`);
+      } else if (type instanceof StructTypeBuilder) {
+        const fields = type.fields.map((f) => {
+          const mut = f.mutable ? `(mut ${f.type.name})` : f.type.name;
+          return `(field $${f.name} ${mut})`;
+        }).join(' ');
+        lines.push(`  (type (;${i};) (struct ${fields}))`);
+      } else if (type instanceof ArrayTypeBuilder) {
+        const mut = type.mutable ? `(mut ${type.elementType.name})` : type.elementType.name;
+        lines.push(`  (type (;${i};) (array ${mut}))`);
+      }
     });
   }
 
@@ -232,6 +245,21 @@ export default class TextModuleWriter {
         }
         return text;
       }
+      case ImmediateType.VarUInt32:
+        return String(values[0]);
+      case ImmediateType.TypeIndexField:
+        return `${values[0]} ${values[1]}`;
+      case ImmediateType.TypeIndexIndex:
+        return `${values[0]} ${values[1]}`;
+      case ImmediateType.HeapType: {
+        const ht = values[0];
+        if (typeof ht === 'number') return String(ht);
+        if (ht && typeof ht.name === 'string') return ht.name;
+        if (ht && typeof ht.index === 'number') return String(ht.index);
+        return '';
+      }
+      case ImmediateType.BrOnCast:
+        return `${values[0]} ${values[1]} ${values[2]} ${values[3]}`;
       default:
         return '';
     }

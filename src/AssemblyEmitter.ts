@@ -300,6 +300,22 @@ export default class AssemblyEmitter extends OpCodeEmitter {
         validateParameters(immediateType, values, 1);
         return Immediate.createShuffleMask(values[0]);
 
+      case ImmediateType.TypeIndexField:
+        validateParameters(immediateType, values, 2);
+        return Immediate.createTypeIndexField(values[0], values[1]);
+
+      case ImmediateType.TypeIndexIndex:
+        validateParameters(immediateType, values, 2);
+        return Immediate.createTypeIndexIndex(values[0], values[1]);
+
+      case ImmediateType.HeapType:
+        validateParameters(immediateType, values, 1);
+        return Immediate.createHeapType(values[0]);
+
+      case ImmediateType.BrOnCast:
+        validateParameters(immediateType, values, 4);
+        return Immediate.createBrOnCast(values[0], values[1], values[2], values[3]);
+
       default:
         throw new Error('Unknown operand type.');
     }

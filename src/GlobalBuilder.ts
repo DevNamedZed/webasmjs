@@ -43,7 +43,8 @@ export default class GlobalBuilder {
     this._initExpressionEmitter = new InitExpressionEmitter(
       InitExpressionType.Global,
       this.valueType,
-      this._moduleBuilder.features
+      this._moduleBuilder.features,
+      this._moduleBuilder.disableVerification
     );
     if (callback) {
       callback(this._initExpressionEmitter);

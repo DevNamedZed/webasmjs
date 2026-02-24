@@ -26,4 +26,11 @@ export enum OperandStackType {
   Float32 = 'Float32',
   Float64 = 'Float64',
   V128 = 'V128',
+  FuncRef = 'FuncRef',
+  ExternRef = 'ExternRef',
+  AnyRef = 'AnyRef',
+  EqRef = 'EqRef',
+  I31Ref = 'I31Ref',
+  StructRef = 'StructRef',
+  ArrayRef = 'ArrayRef',
 }

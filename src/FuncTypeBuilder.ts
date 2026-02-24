@@ -1,5 +1,5 @@
 import BinaryWriter from './BinaryWriter';
-import { TypeForm, ValueTypeDescriptor } from './types';
+import { TypeForm, ValueTypeDescriptor, writeValueType } from './types';
 import FuncTypeSignature from './FuncTypeSignature';
 
 export default class FuncTypeBuilder {
@@ -49,12 +49,12 @@ export default class FuncTypeBuilder {
     writer.writeVarInt7(TypeForm.Func.value);
     writer.writeVarUInt32(this.parameterTypes.length);
     this.parameterTypes.forEach((x) => {
-      writer.writeVarInt7(x.value);
+      writeValueType(writer, x);
     });
 
     writer.writeVarUInt32(this.returnTypes.length);
     this.returnTypes.forEach((x) => {
-      writer.writeVarInt7(x.value);
+      writeValueType(writer, x);
     });
   }
 

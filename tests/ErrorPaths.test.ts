@@ -11,7 +11,7 @@ test('Duplicate function export throws', () => {
   const f1 = mod.defineFunction('f1', null, []);
   const f2 = mod.defineFunction('f2', null, []);
   mod.exportFunction(f1, 'myFunc');
-  expect(() => mod.exportFunction(f2, 'myFunc')).toThrow(/already existing/);
+  expect(() => mod.exportFunction(f2, 'myFunc')).toThrow(/already exists/);
 });
 
 test('Duplicate memory definition throws (mvp)', () => {

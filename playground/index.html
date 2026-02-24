@@ -91,6 +91,25 @@
     margin-left: auto;
   }
 
+  .github-link {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    color: #6c7086;
+    text-decoration: none;
+    font-size: 13px;
+    transition: color 0.15s;
+    padding: 4px 0;
+  }
+
+  .github-link:hover { color: #cdd6f4; }
+
+  .github-link svg {
+    width: 18px;
+    height: 18px;
+    fill: currentColor;
+  }
+
   /* ─── Main split view ─── */
 
   .main {
@@ -116,6 +135,36 @@
     background: #181825;
     border-bottom: 1px solid #313244;
     flex-shrink: 0;
+  }
+
+  .lang-toggle {
+    display: flex;
+    gap: 2px;
+    background: #313244;
+    border-radius: 4px;
+    padding: 2px;
+  }
+
+  .lang-btn {
+    padding: 2px 10px;
+    border-radius: 3px;
+    border: none;
+    background: transparent;
+    color: #6c7086;
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.8px;
+    cursor: pointer;
+    font-family: inherit;
+    transition: all 0.15s;
+  }
+
+  .lang-btn:hover { color: #a6adc8; }
+
+  .lang-btn.active {
+    background: #45475a;
+    color: #cdd6f4;
   }
 
   #editor {
@@ -148,103 +197,57 @@
     background: #89b4fa;
   }
 
-  /* ─── Output pane with tabs ─── */
+  /* ─── WAT pane (right, collapsible) ─── */
 
-  .output-pane {
-    flex: 1;
+  .wat-pane {
     display: flex;
     flex-direction: column;
-    min-width: 200px;
+    min-width: 0;
+    width: 40%;
+    max-width: 50%;
+    transition: width 0.15s;
   }
 
-  .tab-bar {
-    display: flex;
-    background: #181825;
-    border-bottom: 1px solid #313244;
-    flex-shrink: 0;
+  .wat-pane.collapsed {
+    width: auto;
+    max-width: none;
+    border-left: 1px solid #313244;
   }
 
-  .tab {
-    padding: 8px 16px;
-    font-size: 11px;
-    font-weight: 600;
-    text-transform: uppercase;
-    letter-spacing: 0.8px;
-    color: #6c7086;
-    background: transparent;
-    border: none;
-    border-bottom: 2px solid transparent;
-    cursor: pointer;
-    transition: all 0.15s;
-    font-family: inherit;
+  .wat-pane.collapsed .wat-body {
+    display: none;
   }
 
-  .tab:hover { color: #a6adc8; }
-  .tab.active {
-    color: #cdd6f4;
-    border-bottom-color: #89b4fa;
+  .main:has(.wat-pane.collapsed) > .resize-handle {
+    display: none;
   }
 
-  .tab-content {
-    flex: 1;
-    overflow: hidden;
-    display: flex;
-    flex-direction: column;
-  }
-
-  .output {
-    flex: 1;
-    overflow: auto;
-    padding: 16px;
-    font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
-    font-size: 13px;
-    line-height: 1.6;
-    white-space: pre-wrap;
-    word-break: break-all;
-  }
-
-  .output .error { color: #f38ba8; }
-
-  .tab-panel { display: none; }
-  .tab-panel.active { display: flex; flex-direction: column; flex: 1; }
-
-  #watOutput { color: #a6e3a1; }
-  #runOutput { color: #f9e2af; }
-
-  /* ─── Console drawer ─── */
-
-  .console-drawer {
-    flex-shrink: 0;
-    background: #181825;
-    border-top: 1px solid #313244;
-    display: flex;
-    flex-direction: column;
-  }
-
-  .console-header {
+  .pane-toggle {
     display: flex;
     align-items: center;
     gap: 8px;
     padding: 6px 16px;
+    background: #181825;
+    border-bottom: 1px solid #313244;
     cursor: pointer;
     user-select: none;
     flex-shrink: 0;
   }
 
-  .console-header:hover { background: #1e1e2e; }
+  .pane-toggle:hover { background: #1e1e2e; }
 
-  .console-chevron {
+  .pane-chevron {
     font-size: 10px;
     color: #6c7086;
     transition: transform 0.2s;
     display: inline-block;
   }
 
-  .console-drawer.open .console-chevron {
-    transform: rotate(180deg);
+  .collapsed .pane-chevron {
+    transform: rotate(-90deg);
   }
 
-  .console-label {
+  .pane-label {
     font-size: 11px;
     font-weight: 600;
     text-transform: uppercase;
@@ -252,20 +255,7 @@
     color: #a6adc8;
   }
 
-  .console-badge {
-    font-size: 10px;
-    padding: 0 6px;
-    border-radius: 8px;
-    background: #45475a;
-    color: #a6adc8;
-    display: none;
-  }
-
-  .console-drawer:not(.open) .console-badge.has-messages {
-    display: inline;
-  }
-
-  .console-clear {
+  .pane-clear {
     margin-left: auto;
     padding: 2px 8px;
     border-radius: 4px;
@@ -277,13 +267,87 @@
     font-family: inherit;
   }
 
-  .console-clear:hover {
+  .pane-clear:hover {
     background: #313244;
     color: #a6adc8;
   }
 
-  .console-body {
-    display: none;
+  .wat-body {
+    flex: 1;
+    overflow: auto;
+    padding: 0;
+  }
+
+  /* ─── Module cards inside WAT pane ─── */
+
+  .module-card {
+    border-bottom: 1px solid #313244;
+  }
+
+  .module-card:last-child { border-bottom: none; }
+
+  .module-card-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 12px;
+    background: #181825;
+  }
+
+  .module-card-name {
+    font-size: 12px;
+    font-weight: 600;
+    color: #cba6f7;
+    font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
+  }
+
+  .module-card-actions {
+    margin-left: auto;
+    display: flex;
+    gap: 4px;
+  }
+
+  .download-btn {
+    padding: 1px 6px;
+    border-radius: 3px;
+    border: 1px solid #45475a;
+    background: transparent;
+    color: #6c7086;
+    font-size: 10px;
+    cursor: pointer;
+    font-family: inherit;
+    transition: all 0.15s;
+  }
+
+  .download-btn:hover {
+    background: #313244;
+    color: #a6adc8;
+    border-color: #585b70;
+  }
+
+  .module-card-wat {
+    padding: 12px;
+    font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
+    font-size: 12px;
+    line-height: 1.5;
+    white-space: pre-wrap;
+    word-break: break-all;
+    color: #a6e3a1;
+  }
+
+  .module-card-wat.error { color: #f38ba8; }
+
+  /* ─── Output pane (bottom, collapsible) ─── */
+
+  .output-pane {
+    flex-shrink: 0;
+    background: #181825;
+    border-top: 1px solid #313244;
+    display: flex;
+    flex-direction: column;
+  }
+
+  .output-body {
     overflow: auto;
     padding: 8px 16px;
     font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
@@ -291,15 +355,16 @@
     line-height: 1.6;
     white-space: pre-wrap;
     word-break: break-all;
-    color: #f9e2af;
+    color: #cdd6f4;
     height: 180px;
   }
 
-  .console-drawer.open .console-body {
-    display: block;
+  .collapsed .output-body {
+    display: none;
   }
 
-  .console-body .error { color: #f38ba8; }
+  .output-body .error { color: #f38ba8; }
+  .output-body .success { color: #a6e3a1; }
 
   /* ─── Example Picker Dialog ─── */
 
@@ -484,32 +549,37 @@
     </button>
     <button id="runBtn">&#9654; Run</button>
     <span class="hint">Ctrl+Enter to run</span>
+    <a class="github-link" href="https://github.com/DevNamedZed/webasmjs" target="_blank" rel="noopener">
+      <svg viewBox="0 0 16 16"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
+      GitHub
+    </a>
   </header>
   <div class="main">
     <div class="editor-pane">
-      <div class="pane-header">JavaScript</div>
+      <div class="pane-header">
+        <div class="lang-toggle" id="langToggle">
+          <button class="lang-btn active" data-lang="js">JS</button>
+          <button class="lang-btn" data-lang="ts">TS</button>
+        </div>
+      </div>
       <textarea id="editor" spellcheck="false"></textarea>
     </div>
     <div class="resize-handle" id="resizeHandle"></div>
-    <div class="output-pane">
-      <div class="tab-bar">
-        <button class="tab active" data-tab="wat">WAT</button>
-        <button class="tab" data-tab="output">Output</button>
+    <div class="wat-pane" id="watPane">
+      <div class="pane-toggle" id="watToggle">
+        <span class="pane-chevron">&#9662;</span>
+        <span class="pane-label">WAT</span>
       </div>
-      <div class="tab-content">
-        <div id="watOutput" class="output tab-panel active"></div>
-        <div id="runOutput" class="output tab-panel"></div>
-      </div>
+      <div class="wat-body" id="watBody"></div>
     </div>
   </div>
-  <div class="console-drawer" id="consoleDrawer">
-    <div class="console-header" id="consoleToggle">
-      <span class="console-chevron">&#9662;</span>
-      <span class="console-label">Console</span>
-      <span class="console-badge" id="consoleBadge">0</span>
-      <button class="console-clear" id="consoleClear">Clear</button>
+  <div class="output-pane" id="outputPane">
+    <div class="pane-toggle" id="outputToggle">
+      <span class="pane-chevron">&#9662;</span>
+      <span class="pane-label">Output</span>
+      <button class="pane-clear" id="outputClear">Clear</button>
     </div>
-    <div class="console-body" id="consoleOutput"></div>
+    <div class="output-body" id="outputBody"></div>
   </div>
   <script src="playground.bundle.js"></script>
 </body>

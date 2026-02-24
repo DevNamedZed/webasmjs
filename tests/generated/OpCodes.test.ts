@@ -3,8 +3,8 @@ import OpCodes from '../../src/OpCodes';
 import OpCodeEmitter from '../../src/OpCodeEmitter';
 
 describe('OpCode definitions', () => {
-  test('total opcode count is 531', () => {
-    expect(Object.keys(OpCodes).length).toBe(531);
+  test('total opcode count is 562', () => {
+    expect(Object.keys(OpCodes).length).toBe(562);
   });
 
   describe('control-flow', () => {
@@ -4499,6 +4499,300 @@ describe('OpCode definitions', () => {
 
   });
 
+  describe('gc-struct', () => {
+    test('struct_new', () => {
+      const op = (OpCodes as any).struct_new;
+      expect(op).toBeDefined();
+      expect(op.value).toBe(0);
+      expect(op.mnemonic).toBe("struct.new");
+      expect(op.prefix).toBe(251);
+      expect(op.feature).toBe("gc");
+    });
+
+    test('struct_new_default', () => {
+      const op = (OpCodes as any).struct_new_default;
+      expect(op).toBeDefined();
+      expect(op.value).toBe(1);
+      expect(op.mnemonic).toBe("struct.new_default");
+      expect(op.prefix).toBe(251);
+      expect(op.feature).toBe("gc");
+    });
+
+    test('struct_get', () => {
+      const op = (OpCodes as any).struct_get;
+      expect(op).toBeDefined();
+      expect(op.value).toBe(2);
+      expect(op.mnemonic).toBe("struct.get");
+      expect(op.prefix).toBe(251);
+      expect(op.feature).toBe("gc");
+    });
+
+    test('struct_get_s', () => {
+      const op = (OpCodes as any).struct_get_s;
+      expect(op).toBeDefined();
+      expect(op.value).toBe(3);
+      expect(op.mnemonic).toBe("struct.get_s");
+      expect(op.prefix).toBe(251);
+      expect(op.feature).toBe("gc");
+    });
+
+    test('struct_get_u', () => {
+      const op = (OpCodes as any).struct_get_u;
+      expect(op).toBeDefined();
+      expect(op.value).toBe(4);
+      expect(op.mnemonic).toBe("struct.get_u");
+      expect(op.prefix).toBe(251);
+      expect(op.feature).toBe("gc");
+    });
+
+    test('struct_set', () => {
+      const op = (OpCodes as any).struct_set;
+      expect(op).toBeDefined();
+      expect(op.value).toBe(5);
+      expect(op.mnemonic).toBe("struct.set");
+      expect(op.prefix).toBe(251);
+      expect(op.feature).toBe("gc");
+    });
+
+  });
+
+  describe('gc-array', () => {
+    test('array_new', () => {
+      const op = (OpCodes as any).array_new;
+      expect(op).toBeDefined();
+      expect(op.value).toBe(6);
+      expect(op.mnemonic).toBe("array.new");
+      expect(op.prefix).toBe(251);
+      expect(op.feature).toBe("gc");
+    });
+
+    test('array_new_default', () => {
+      const op = (OpCodes as any).array_new_default;
+      expect(op).toBeDefined();
+      expect(op.value).toBe(7);
+      expect(op.mnemonic).toBe("array.new_default");
+      expect(op.prefix).toBe(251);
+      expect(op.feature).toBe("gc");
+    });
+
+    test('array_new_fixed', () => {
+      const op = (OpCodes as any).array_new_fixed;
+      expect(op).toBeDefined();
+      expect(op.value).toBe(8);
+      expect(op.mnemonic).toBe("array.new_fixed");
+      expect(op.prefix).toBe(251);
+      expect(op.feature).toBe("gc");
+    });
+
+    test('array_new_data', () => {
+      const op = (OpCodes as any).array_new_data;
+      expect(op).toBeDefined();
+      expect(op.value).toBe(9);
+      expect(op.mnemonic).toBe("array.new_data");
+      expect(op.prefix).toBe(251);
+      expect(op.feature).toBe("gc");
+    });
+
+    test('array_new_elem', () => {
+      const op = (OpCodes as any).array_new_elem;
+      expect(op).toBeDefined();
+      expect(op.value).toBe(10);
+      expect(op.mnemonic).toBe("array.new_elem");
+      expect(op.prefix).toBe(251);
+      expect(op.feature).toBe("gc");
+    });
+
+    test('array_get', () => {
+      const op = (OpCodes as any).array_get;
+      expect(op).toBeDefined();
+      expect(op.value).toBe(11);
+      expect(op.mnemonic).toBe("array.get");
+      expect(op.prefix).toBe(251);
+      expect(op.feature).toBe("gc");
+    });
+
+    test('array_get_s', () => {
+      const op = (OpCodes as any).array_get_s;
+      expect(op).toBeDefined();
+      expect(op.value).toBe(12);
+      expect(op.mnemonic).toBe("array.get_s");
+      expect(op.prefix).toBe(251);
+      expect(op.feature).toBe("gc");
+    });
+
+    test('array_get_u', () => {
+      const op = (OpCodes as any).array_get_u;
+      expect(op).toBeDefined();
+      expect(op.value).toBe(13);
+      expect(op.mnemonic).toBe("array.get_u");
+      expect(op.prefix).toBe(251);
+      expect(op.feature).toBe("gc");
+    });
+
+    test('array_set', () => {
+      const op = (OpCodes as any).array_set;
+      expect(op).toBeDefined();
+      expect(op.value).toBe(14);
+      expect(op.mnemonic).toBe("array.set");
+      expect(op.prefix).toBe(251);
+      expect(op.feature).toBe("gc");
+    });
+
+    test('array_len', () => {
+      const op = (OpCodes as any).array_len;
+      expect(op).toBeDefined();
+      expect(op.value).toBe(15);
+      expect(op.mnemonic).toBe("array.len");
+      expect(op.prefix).toBe(251);
+      expect(op.feature).toBe("gc");
+    });
+
+    test('array_fill', () => {
+      const op = (OpCodes as any).array_fill;
+      expect(op).toBeDefined();
+      expect(op.value).toBe(16);
+      expect(op.mnemonic).toBe("array.fill");
+      expect(op.prefix).toBe(251);
+      expect(op.feature).toBe("gc");
+    });
+
+    test('array_copy', () => {
+      const op = (OpCodes as any).array_copy;
+      expect(op).toBeDefined();
+      expect(op.value).toBe(17);
+      expect(op.mnemonic).toBe("array.copy");
+      expect(op.prefix).toBe(251);
+      expect(op.feature).toBe("gc");
+    });
+
+    test('array_init_data', () => {
+      const op = (OpCodes as any).array_init_data;
+      expect(op).toBeDefined();
+      expect(op.value).toBe(18);
+      expect(op.mnemonic).toBe("array.init_data");
+      expect(op.prefix).toBe(251);
+      expect(op.feature).toBe("gc");
+    });
+
+    test('array_init_elem', () => {
+      const op = (OpCodes as any).array_init_elem;
+      expect(op).toBeDefined();
+      expect(op.value).toBe(19);
+      expect(op.mnemonic).toBe("array.init_elem");
+      expect(op.prefix).toBe(251);
+      expect(op.feature).toBe("gc");
+    });
+
+  });
+
+  describe('gc-cast', () => {
+    test('ref_test', () => {
+      const op = (OpCodes as any).ref_test;
+      expect(op).toBeDefined();
+      expect(op.value).toBe(20);
+      expect(op.mnemonic).toBe("ref.test");
+      expect(op.prefix).toBe(251);
+      expect(op.feature).toBe("gc");
+    });
+
+    test('ref_test_null', () => {
+      const op = (OpCodes as any).ref_test_null;
+      expect(op).toBeDefined();
+      expect(op.value).toBe(21);
+      expect(op.mnemonic).toBe("ref.test null");
+      expect(op.prefix).toBe(251);
+      expect(op.feature).toBe("gc");
+    });
+
+    test('ref_cast', () => {
+      const op = (OpCodes as any).ref_cast;
+      expect(op).toBeDefined();
+      expect(op.value).toBe(22);
+      expect(op.mnemonic).toBe("ref.cast");
+      expect(op.prefix).toBe(251);
+      expect(op.feature).toBe("gc");
+    });
+
+    test('ref_cast_null', () => {
+      const op = (OpCodes as any).ref_cast_null;
+      expect(op).toBeDefined();
+      expect(op.value).toBe(23);
+      expect(op.mnemonic).toBe("ref.cast null");
+      expect(op.prefix).toBe(251);
+      expect(op.feature).toBe("gc");
+    });
+
+    test('br_on_cast', () => {
+      const op = (OpCodes as any).br_on_cast;
+      expect(op).toBeDefined();
+      expect(op.value).toBe(24);
+      expect(op.mnemonic).toBe("br_on_cast");
+      expect(op.prefix).toBe(251);
+      expect(op.feature).toBe("gc");
+    });
+
+    test('br_on_cast_fail', () => {
+      const op = (OpCodes as any).br_on_cast_fail;
+      expect(op).toBeDefined();
+      expect(op.value).toBe(25);
+      expect(op.mnemonic).toBe("br_on_cast_fail");
+      expect(op.prefix).toBe(251);
+      expect(op.feature).toBe("gc");
+    });
+
+  });
+
+  describe('gc-conversion', () => {
+    test('any_convert_extern', () => {
+      const op = (OpCodes as any).any_convert_extern;
+      expect(op).toBeDefined();
+      expect(op.value).toBe(26);
+      expect(op.mnemonic).toBe("any.convert_extern");
+      expect(op.prefix).toBe(251);
+      expect(op.feature).toBe("gc");
+    });
+
+    test('extern_convert_any', () => {
+      const op = (OpCodes as any).extern_convert_any;
+      expect(op).toBeDefined();
+      expect(op.value).toBe(27);
+      expect(op.mnemonic).toBe("extern.convert_any");
+      expect(op.prefix).toBe(251);
+      expect(op.feature).toBe("gc");
+    });
+
+  });
+
+  describe('gc-i31', () => {
+    test('ref_i31', () => {
+      const op = (OpCodes as any).ref_i31;
+      expect(op).toBeDefined();
+      expect(op.value).toBe(28);
+      expect(op.mnemonic).toBe("ref.i31");
+      expect(op.prefix).toBe(251);
+      expect(op.feature).toBe("gc");
+    });
+
+    test('i31_get_s', () => {
+      const op = (OpCodes as any).i31_get_s;
+      expect(op).toBeDefined();
+      expect(op.value).toBe(29);
+      expect(op.mnemonic).toBe("i31.get_s");
+      expect(op.prefix).toBe(251);
+      expect(op.feature).toBe("gc");
+    });
+
+    test('i31_get_u', () => {
+      const op = (OpCodes as any).i31_get_u;
+      expect(op).toBeDefined();
+      expect(op.value).toBe(30);
+      expect(op.mnemonic).toBe("i31.get_u");
+      expect(op.prefix).toBe(251);
+      expect(op.feature).toBe("gc");
+    });
+
+  });
+
   describe('feature groups', () => {
     test('exception-handling: 6 opcodes', () => {
       const ops = Object.values(OpCodes).filter((op: any) => op.feature === 'exception-handling');
@@ -4548,6 +4842,12 @@ describe('OpCode definitions', () => {
       const ops = Object.values(OpCodes).filter((op: any) => op.feature === 'relaxed-simd');
       expect(ops.length).toBe(20);
       ops.forEach((op: any) => expect(op.prefix).toBe(253));
+    });
+
+    test('gc: 31 opcodes', () => {
+      const ops = Object.values(OpCodes).filter((op: any) => op.feature === 'gc');
+      expect(ops.length).toBe(31);
+      ops.forEach((op: any) => expect(op.prefix).toBe(251));
     });
 
   });
@@ -6749,6 +7049,145 @@ describe('Emitter methods', () => {
 
     test('relaxed_dot_i8x16_i7x16_add_s_i32x4', () => {
       expect(typeof (OpCodeEmitter.prototype as any).relaxed_dot_i8x16_i7x16_add_s_i32x4).toBe('function');
+    });
+
+  });
+
+  describe('gc-struct', () => {
+    test('struct_new', () => {
+      expect(typeof (OpCodeEmitter.prototype as any).struct_new).toBe('function');
+    });
+
+    test('struct_new_default', () => {
+      expect(typeof (OpCodeEmitter.prototype as any).struct_new_default).toBe('function');
+    });
+
+    test('struct_get', () => {
+      expect(typeof (OpCodeEmitter.prototype as any).struct_get).toBe('function');
+    });
+
+    test('struct_get_s', () => {
+      expect(typeof (OpCodeEmitter.prototype as any).struct_get_s).toBe('function');
+    });
+
+    test('struct_get_u', () => {
+      expect(typeof (OpCodeEmitter.prototype as any).struct_get_u).toBe('function');
+    });
+
+    test('struct_set', () => {
+      expect(typeof (OpCodeEmitter.prototype as any).struct_set).toBe('function');
+    });
+
+  });
+
+  describe('gc-array', () => {
+    test('array_new', () => {
+      expect(typeof (OpCodeEmitter.prototype as any).array_new).toBe('function');
+    });
+
+    test('array_new_default', () => {
+      expect(typeof (OpCodeEmitter.prototype as any).array_new_default).toBe('function');
+    });
+
+    test('array_new_fixed', () => {
+      expect(typeof (OpCodeEmitter.prototype as any).array_new_fixed).toBe('function');
+    });
+
+    test('array_new_data', () => {
+      expect(typeof (OpCodeEmitter.prototype as any).array_new_data).toBe('function');
+    });
+
+    test('array_new_elem', () => {
+      expect(typeof (OpCodeEmitter.prototype as any).array_new_elem).toBe('function');
+    });
+
+    test('array_get', () => {
+      expect(typeof (OpCodeEmitter.prototype as any).array_get).toBe('function');
+    });
+
+    test('array_get_s', () => {
+      expect(typeof (OpCodeEmitter.prototype as any).array_get_s).toBe('function');
+    });
+
+    test('array_get_u', () => {
+      expect(typeof (OpCodeEmitter.prototype as any).array_get_u).toBe('function');
+    });
+
+    test('array_set', () => {
+      expect(typeof (OpCodeEmitter.prototype as any).array_set).toBe('function');
+    });
+
+    test('array_len', () => {
+      expect(typeof (OpCodeEmitter.prototype as any).array_len).toBe('function');
+    });
+
+    test('array_fill', () => {
+      expect(typeof (OpCodeEmitter.prototype as any).array_fill).toBe('function');
+    });
+
+    test('array_copy', () => {
+      expect(typeof (OpCodeEmitter.prototype as any).array_copy).toBe('function');
+    });
+
+    test('array_init_data', () => {
+      expect(typeof (OpCodeEmitter.prototype as any).array_init_data).toBe('function');
+    });
+
+    test('array_init_elem', () => {
+      expect(typeof (OpCodeEmitter.prototype as any).array_init_elem).toBe('function');
+    });
+
+  });
+
+  describe('gc-cast', () => {
+    test('ref_test', () => {
+      expect(typeof (OpCodeEmitter.prototype as any).ref_test).toBe('function');
+    });
+
+    test('ref_test_null', () => {
+      expect(typeof (OpCodeEmitter.prototype as any).ref_test_null).toBe('function');
+    });
+
+    test('ref_cast', () => {
+      expect(typeof (OpCodeEmitter.prototype as any).ref_cast).toBe('function');
+    });
+
+    test('ref_cast_null', () => {
+      expect(typeof (OpCodeEmitter.prototype as any).ref_cast_null).toBe('function');
+    });
+
+    test('br_on_cast', () => {
+      expect(typeof (OpCodeEmitter.prototype as any).br_on_cast).toBe('function');
+    });
+
+    test('br_on_cast_fail', () => {
+      expect(typeof (OpCodeEmitter.prototype as any).br_on_cast_fail).toBe('function');
+    });
+
+  });
+
+  describe('gc-conversion', () => {
+    test('any_convert_extern', () => {
+      expect(typeof (OpCodeEmitter.prototype as any).any_convert_extern).toBe('function');
+    });
+
+    test('extern_convert_any', () => {
+      expect(typeof (OpCodeEmitter.prototype as any).extern_convert_any).toBe('function');
+    });
+
+  });
+
+  describe('gc-i31', () => {
+    test('ref_i31', () => {
+      expect(typeof (OpCodeEmitter.prototype as any).ref_i31).toBe('function');
+    });
+
+    test('i31_get_s', () => {
+      expect(typeof (OpCodeEmitter.prototype as any).i31_get_s).toBe('function');
+    });
+
+    test('i31_get_u', () => {
+      expect(typeof (OpCodeEmitter.prototype as any).i31_get_u).toBe('function');
     });
 
   });

@@ -107,6 +107,13 @@ export default class BinaryWriter {
     this.writeBytes(utfBytes);
   }
 
+  writeLenPrefixedString(value: string): void {
+    const encoder = new TextEncoder();
+    const utfBytes = encoder.encode(value);
+    this.writeVarUInt32(utfBytes.length);
+    this.writeBytes(utfBytes);
+  }
+
   writeFloat32(value: number): void {
     const array = new Float32Array(1);
     array[0] = value;

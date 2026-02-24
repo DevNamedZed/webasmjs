@@ -14,10 +14,13 @@ export default class ElementSegmentBuilder {
   _passive: boolean = false;
   _features: Set<WasmFeature>;
 
-  constructor(table: TableBuilder | null, functions: (FunctionBuilder | ImportBuilder)[], features?: Set<WasmFeature>) {
+  _disableVerification: boolean;
+
+  constructor(table: TableBuilder | null, functions: (FunctionBuilder | ImportBuilder)[], features?: Set<WasmFeature>, disableVerification?: boolean) {
     this._table = table;
     this._functions = functions;
     this._features = features || new Set();
+    this._disableVerification = disableVerification || false;
   }
 
   passive(): this {
@@ -33,7 +36,8 @@ export default class ElementSegmentBuilder {
     this._initExpressionEmitter = new InitExpressionEmitter(
       InitExpressionType.Element,
       ValueType.Int32,
-      this._features
+      this._features,
+      this._disableVerification
     );
     if (callback) {
       callback(this._initExpressionEmitter);

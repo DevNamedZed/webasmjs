@@ -840,8 +840,8 @@ test('WAT Parser - named type defines type section entry', () => {
 
   const mod = parseWat(wat);
   expect(mod._types.length).toBeGreaterThanOrEqual(1);
-  expect(mod._types[0].parameterTypes).toEqual([ValueType.Int32]);
-  expect(mod._types[0].returnTypes).toEqual([ValueType.Int32]);
+  expect((mod._types[0] as any).parameterTypes).toEqual([ValueType.Int32]);
+  expect((mod._types[0] as any).returnTypes).toEqual([ValueType.Int32]);
 });
 
 test('WAT Parser - multiple named types', () => {
@@ -855,12 +855,12 @@ test('WAT Parser - multiple named types', () => {
 
   const mod = parseWat(wat);
   expect(mod._types.length).toBe(3);
-  expect(mod._types[0].parameterTypes).toEqual([]);
-  expect(mod._types[0].returnTypes).toEqual([]);
-  expect(mod._types[1].parameterTypes).toEqual([ValueType.Int32]);
-  expect(mod._types[1].returnTypes).toEqual([ValueType.Int32]);
-  expect(mod._types[2].parameterTypes).toEqual([ValueType.Int32, ValueType.Int32]);
-  expect(mod._types[2].returnTypes).toEqual([ValueType.Int32]);
+  expect((mod._types[0] as any).parameterTypes).toEqual([]);
+  expect((mod._types[0] as any).returnTypes).toEqual([]);
+  expect((mod._types[1] as any).parameterTypes).toEqual([ValueType.Int32]);
+  expect((mod._types[1] as any).returnTypes).toEqual([ValueType.Int32]);
+  expect((mod._types[2] as any).parameterTypes).toEqual([ValueType.Int32, ValueType.Int32]);
+  expect((mod._types[2] as any).returnTypes).toEqual([ValueType.Int32]);
 });
 
 test('WAT Parser - memory with initial and maximum', () => {

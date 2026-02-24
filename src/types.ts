@@ -8,6 +8,19 @@ export interface LanguageTypeDescriptor {
   readonly short: string;
 }
 
+/**
+ * Descriptor for concrete reference types: (ref $type) and (ref null $type).
+ * These require multi-byte encoding: prefix + LEB128 type index.
+ */
+export interface ConcreteRefTypeDescriptor extends LanguageTypeDescriptor {
+  readonly refPrefix: number;
+  readonly typeIndex: number;
+}
+
+export function isConcreteRefType(vt: LanguageTypeDescriptor): vt is ConcreteRefTypeDescriptor {
+  return 'refPrefix' in vt;
+}
+
 export const LanguageType = {
   Int32: { name: 'i32', value: 0x7f, short: 'i' } as const,
   Int64: { name: 'i64', value: 0x7e, short: 'l' } as const,
@@ -21,7 +34,77 @@ export const LanguageType = {
 export type LanguageTypeKey = keyof typeof LanguageType;
 
 /**
- * WASM value types (i32, i64, f32, f64, v128).
+ * GC reference type descriptors.
+ */
+export const RefType = {
+  FuncRef: { name: 'funcref', value: 0x70, short: 'F' } as const,
+  ExternRef: { name: 'externref', value: 0x6f, short: 'X' } as const,
+  AnyRef: { name: 'anyref', value: 0x6e, short: 'A' } as const,
+  EqRef: { name: 'eqref', value: 0x6d, short: 'E' } as const,
+  I31Ref: { name: 'i31ref', value: 0x6c, short: 'J' } as const,
+  StructRef: { name: 'structref', value: 0x6b, short: 'S' } as const,
+  ArrayRef: { name: 'arrayref', value: 0x6a, short: 'R' } as const,
+  NullRef: { name: 'nullref', value: 0x71, short: 'N' } as const,
+  NullFuncRef: { name: 'nullfuncref', value: 0x73, short: 'Z' } as const,
+  NullExternRef: { name: 'nullexternref', value: 0x72, short: 'W' } as const,
+} as const;
+
+export type RefTypeDescriptor = typeof RefType[keyof typeof RefType];
+
+/**
+ * Abstract heap types used as immediates in ref.test, ref.cast, br_on_cast, etc.
+ */
+export const HeapType = {
+  Func: { name: 'func', value: 0x70 } as const,
+  Extern: { name: 'extern', value: 0x6f } as const,
+  Any: { name: 'any', value: 0x6e } as const,
+  Eq: { name: 'eq', value: 0x6d } as const,
+  I31: { name: 'i31', value: 0x6c } as const,
+  Struct: { name: 'struct', value: 0x6b } as const,
+  Array: { name: 'array', value: 0x6a } as const,
+  None: { name: 'none', value: 0x71 } as const,
+  NoFunc: { name: 'nofunc', value: 0x73 } as const,
+  NoExtern: { name: 'noextern', value: 0x72 } as const,
+} as const;
+
+export type HeapTypeDescriptor = typeof HeapType[keyof typeof HeapType];
+
+/**
+ * Prefix bytes for concrete reference types: (ref $type) and (ref null $type).
+ */
+export const RefTypePrefix = {
+  Ref: 0x64,
+  RefNull: 0x63,
+} as const;
+
+/**
+ * Create a concrete non-nullable reference type: (ref $typeIndex).
+ */
+export function refType(typeIndex: number, name?: string): ConcreteRefTypeDescriptor {
+  return {
+    name: name || `(ref ${typeIndex})`,
+    value: RefTypePrefix.Ref,
+    short: `r${typeIndex}`,
+    refPrefix: RefTypePrefix.Ref,
+    typeIndex,
+  };
+}
+
+/**
+ * Create a concrete nullable reference type: (ref null $typeIndex).
+ */
+export function refNullType(typeIndex: number, name?: string): ConcreteRefTypeDescriptor {
+  return {
+    name: name || `(ref null ${typeIndex})`,
+    value: RefTypePrefix.RefNull,
+    short: `n${typeIndex}`,
+    refPrefix: RefTypePrefix.RefNull,
+    typeIndex,
+  };
+}
+
+/**
+ * WASM value types (i32, i64, f32, f64, v128, reference types).
  */
 export const ValueType = {
   Int32: LanguageType.Int32,
@@ -29,9 +112,19 @@ export const ValueType = {
   Float32: LanguageType.Float32,
   Float64: LanguageType.Float64,
   V128: { name: 'v128', value: 0x7b, short: 'v' } as const,
+  FuncRef: RefType.FuncRef,
+  ExternRef: RefType.ExternRef,
+  AnyRef: RefType.AnyRef,
+  EqRef: RefType.EqRef,
+  I31Ref: RefType.I31Ref,
+  StructRef: RefType.StructRef,
+  ArrayRef: RefType.ArrayRef,
+  NullRef: RefType.NullRef,
+  NullFuncRef: RefType.NullFuncRef,
+  NullExternRef: RefType.NullExternRef,
 } as const;
 
-export type ValueTypeDescriptor = typeof ValueType[keyof typeof ValueType];
+export type ValueTypeDescriptor = typeof ValueType[keyof typeof ValueType] | ConcreteRefTypeDescriptor;
 export type ValueTypeKey = keyof typeof ValueType;
 
 /**
@@ -44,6 +137,13 @@ export const BlockType = {
   Float64: LanguageType.Float64,
   V128: ValueType.V128,
   Void: LanguageType.Void,
+  FuncRef: RefType.FuncRef,
+  ExternRef: RefType.ExternRef,
+  AnyRef: RefType.AnyRef,
+  EqRef: RefType.EqRef,
+  I31Ref: RefType.I31Ref,
+  StructRef: RefType.StructRef,
+  ArrayRef: RefType.ArrayRef,
 } as const;
 
 export type BlockTypeDescriptor = typeof BlockType[keyof typeof BlockType];
@@ -53,6 +153,9 @@ export type BlockTypeDescriptor = typeof BlockType[keyof typeof BlockType];
  */
 export const ElementType = {
   AnyFunc: LanguageType.AnyFunc,
+  FuncRef: RefType.FuncRef,
+  ExternRef: RefType.ExternRef,
+  AnyRef: RefType.AnyRef,
 } as const;
 
 export type ElementTypeDescriptor = typeof ElementType[keyof typeof ElementType];
@@ -107,6 +210,11 @@ export const SectionType = {
 export const TypeForm = {
   Func: { name: 'func', value: 0x60 } as const,
   Block: { name: 'block', value: 0x40 } as const,
+  Struct: { name: 'struct', value: 0x5f } as const,
+  Array: { name: 'array', value: 0x5e } as const,
+  Rec: { name: 'rec', value: 0x4e } as const,
+  Sub: { name: 'sub', value: 0x50 } as const,
+  SubFinal: { name: 'sub_final', value: 0x4f } as const,
 } as const;
 
 /**
@@ -130,6 +238,10 @@ export enum ImmediateType {
   V128Const = 'V128Const',
   LaneIndex = 'LaneIndex',
   ShuffleMask = 'ShuffleMask',
+  TypeIndexField = 'TypeIndexField',
+  TypeIndexIndex = 'TypeIndexIndex',
+  HeapType = 'HeapType',
+  BrOnCast = 'BrOnCast',
 }
 
 /**
@@ -197,4 +309,17 @@ export interface OpCodeDef {
  */
 export interface Writable {
   write(writer: import('./BinaryWriter').default): void;
+}
+
+/**
+ * Write a value type to a BinaryWriter, handling both single-byte abstract types
+ * and multi-byte concrete reference types.
+ */
+export function writeValueType(writer: import('./BinaryWriter').default, vt: ValueTypeDescriptor): void {
+  if (isConcreteRefType(vt)) {
+    writer.writeVarInt7(vt.refPrefix);
+    writer.writeVarInt32(vt.typeIndex);
+  } else {
+    writer.writeVarInt7(vt.value);
+  }
 }
