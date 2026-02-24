@@ -25,6 +25,22 @@ export default abstract class OpCodeEmitter {
     return this.emit(OpCodes.else);
   }
 
+  try(blockType: any, label?: any): any {
+    return this.emit(OpCodes.try, blockType, label);
+  }
+
+  catch(varUInt32: number): any {
+    return this.emit(OpCodes.catch, varUInt32);
+  }
+
+  throw(varUInt32: number): any {
+    return this.emit(OpCodes.throw, varUInt32);
+  }
+
+  rethrow(varUInt32: number): any {
+    return this.emit(OpCodes.rethrow, varUInt32);
+  }
+
   end(): any {
     return this.emit(OpCodes.end);
   }
@@ -51,6 +67,22 @@ export default abstract class OpCodeEmitter {
 
   call_indirect(funcTypeBuilder: any): any {
     return this.emit(OpCodes.call_indirect, funcTypeBuilder);
+  }
+
+  return_call(functionBuilder: any): any {
+    return this.emit(OpCodes.return_call, functionBuilder);
+  }
+
+  return_call_indirect(funcTypeBuilder: any): any {
+    return this.emit(OpCodes.return_call_indirect, funcTypeBuilder);
+  }
+
+  delegate(varUInt32: number): any {
+    return this.emit(OpCodes.delegate, varUInt32);
+  }
+
+  catch_all(): any {
+    return this.emit(OpCodes.catch_all);
   }
 
   drop(): any {
@@ -1743,6 +1775,354 @@ export default abstract class OpCodeEmitter {
 
   promote_low_f32x4_f64x2(): any {
     return this.emit(OpCodes.f64x2_promote_low_f32x4);
+  }
+
+  atomic_notify(alignment: number, offset: number): any {
+    return this.emit(OpCodes.memory_atomic_notify, alignment, offset);
+  }
+
+  atomic_wait32(alignment: number, offset: number): any {
+    return this.emit(OpCodes.memory_atomic_wait32, alignment, offset);
+  }
+
+  atomic_wait64(alignment: number, offset: number): any {
+    return this.emit(OpCodes.memory_atomic_wait64, alignment, offset);
+  }
+
+  atomic_fence(varUInt1: number): any {
+    return this.emit(OpCodes.atomic_fence, varUInt1);
+  }
+
+  atomic_load_i32(alignment: number, offset: number): any {
+    return this.emit(OpCodes.i32_atomic_load, alignment, offset);
+  }
+
+  atomic_load_i64(alignment: number, offset: number): any {
+    return this.emit(OpCodes.i64_atomic_load, alignment, offset);
+  }
+
+  atomic_load8_u_i32(alignment: number, offset: number): any {
+    return this.emit(OpCodes.i32_atomic_load8_u, alignment, offset);
+  }
+
+  atomic_load16_u_i32(alignment: number, offset: number): any {
+    return this.emit(OpCodes.i32_atomic_load16_u, alignment, offset);
+  }
+
+  atomic_load8_u_i64(alignment: number, offset: number): any {
+    return this.emit(OpCodes.i64_atomic_load8_u, alignment, offset);
+  }
+
+  atomic_load16_u_i64(alignment: number, offset: number): any {
+    return this.emit(OpCodes.i64_atomic_load16_u, alignment, offset);
+  }
+
+  atomic_load32_u_i64(alignment: number, offset: number): any {
+    return this.emit(OpCodes.i64_atomic_load32_u, alignment, offset);
+  }
+
+  atomic_store_i32(alignment: number, offset: number): any {
+    return this.emit(OpCodes.i32_atomic_store, alignment, offset);
+  }
+
+  atomic_store_i64(alignment: number, offset: number): any {
+    return this.emit(OpCodes.i64_atomic_store, alignment, offset);
+  }
+
+  atomic_store8_i32(alignment: number, offset: number): any {
+    return this.emit(OpCodes.i32_atomic_store8, alignment, offset);
+  }
+
+  atomic_store16_i32(alignment: number, offset: number): any {
+    return this.emit(OpCodes.i32_atomic_store16, alignment, offset);
+  }
+
+  atomic_store8_i64(alignment: number, offset: number): any {
+    return this.emit(OpCodes.i64_atomic_store8, alignment, offset);
+  }
+
+  atomic_store16_i64(alignment: number, offset: number): any {
+    return this.emit(OpCodes.i64_atomic_store16, alignment, offset);
+  }
+
+  atomic_store32_i64(alignment: number, offset: number): any {
+    return this.emit(OpCodes.i64_atomic_store32, alignment, offset);
+  }
+
+  atomic_rmw_add_i32(alignment: number, offset: number): any {
+    return this.emit(OpCodes.i32_atomic_rmw_add, alignment, offset);
+  }
+
+  atomic_rmw_add_i64(alignment: number, offset: number): any {
+    return this.emit(OpCodes.i64_atomic_rmw_add, alignment, offset);
+  }
+
+  atomic_rmw8_add_u_i32(alignment: number, offset: number): any {
+    return this.emit(OpCodes.i32_atomic_rmw8_add_u, alignment, offset);
+  }
+
+  atomic_rmw16_add_u_i32(alignment: number, offset: number): any {
+    return this.emit(OpCodes.i32_atomic_rmw16_add_u, alignment, offset);
+  }
+
+  atomic_rmw8_add_u_i64(alignment: number, offset: number): any {
+    return this.emit(OpCodes.i64_atomic_rmw8_add_u, alignment, offset);
+  }
+
+  atomic_rmw16_add_u_i64(alignment: number, offset: number): any {
+    return this.emit(OpCodes.i64_atomic_rmw16_add_u, alignment, offset);
+  }
+
+  atomic_rmw32_add_u_i64(alignment: number, offset: number): any {
+    return this.emit(OpCodes.i64_atomic_rmw32_add_u, alignment, offset);
+  }
+
+  atomic_rmw_sub_i32(alignment: number, offset: number): any {
+    return this.emit(OpCodes.i32_atomic_rmw_sub, alignment, offset);
+  }
+
+  atomic_rmw_sub_i64(alignment: number, offset: number): any {
+    return this.emit(OpCodes.i64_atomic_rmw_sub, alignment, offset);
+  }
+
+  atomic_rmw8_sub_u_i32(alignment: number, offset: number): any {
+    return this.emit(OpCodes.i32_atomic_rmw8_sub_u, alignment, offset);
+  }
+
+  atomic_rmw16_sub_u_i32(alignment: number, offset: number): any {
+    return this.emit(OpCodes.i32_atomic_rmw16_sub_u, alignment, offset);
+  }
+
+  atomic_rmw8_sub_u_i64(alignment: number, offset: number): any {
+    return this.emit(OpCodes.i64_atomic_rmw8_sub_u, alignment, offset);
+  }
+
+  atomic_rmw16_sub_u_i64(alignment: number, offset: number): any {
+    return this.emit(OpCodes.i64_atomic_rmw16_sub_u, alignment, offset);
+  }
+
+  atomic_rmw32_sub_u_i64(alignment: number, offset: number): any {
+    return this.emit(OpCodes.i64_atomic_rmw32_sub_u, alignment, offset);
+  }
+
+  atomic_rmw_and_i32(alignment: number, offset: number): any {
+    return this.emit(OpCodes.i32_atomic_rmw_and, alignment, offset);
+  }
+
+  atomic_rmw_and_i64(alignment: number, offset: number): any {
+    return this.emit(OpCodes.i64_atomic_rmw_and, alignment, offset);
+  }
+
+  atomic_rmw8_and_u_i32(alignment: number, offset: number): any {
+    return this.emit(OpCodes.i32_atomic_rmw8_and_u, alignment, offset);
+  }
+
+  atomic_rmw16_and_u_i32(alignment: number, offset: number): any {
+    return this.emit(OpCodes.i32_atomic_rmw16_and_u, alignment, offset);
+  }
+
+  atomic_rmw8_and_u_i64(alignment: number, offset: number): any {
+    return this.emit(OpCodes.i64_atomic_rmw8_and_u, alignment, offset);
+  }
+
+  atomic_rmw16_and_u_i64(alignment: number, offset: number): any {
+    return this.emit(OpCodes.i64_atomic_rmw16_and_u, alignment, offset);
+  }
+
+  atomic_rmw32_and_u_i64(alignment: number, offset: number): any {
+    return this.emit(OpCodes.i64_atomic_rmw32_and_u, alignment, offset);
+  }
+
+  atomic_rmw_or_i32(alignment: number, offset: number): any {
+    return this.emit(OpCodes.i32_atomic_rmw_or, alignment, offset);
+  }
+
+  atomic_rmw_or_i64(alignment: number, offset: number): any {
+    return this.emit(OpCodes.i64_atomic_rmw_or, alignment, offset);
+  }
+
+  atomic_rmw8_or_u_i32(alignment: number, offset: number): any {
+    return this.emit(OpCodes.i32_atomic_rmw8_or_u, alignment, offset);
+  }
+
+  atomic_rmw16_or_u_i32(alignment: number, offset: number): any {
+    return this.emit(OpCodes.i32_atomic_rmw16_or_u, alignment, offset);
+  }
+
+  atomic_rmw8_or_u_i64(alignment: number, offset: number): any {
+    return this.emit(OpCodes.i64_atomic_rmw8_or_u, alignment, offset);
+  }
+
+  atomic_rmw16_or_u_i64(alignment: number, offset: number): any {
+    return this.emit(OpCodes.i64_atomic_rmw16_or_u, alignment, offset);
+  }
+
+  atomic_rmw32_or_u_i64(alignment: number, offset: number): any {
+    return this.emit(OpCodes.i64_atomic_rmw32_or_u, alignment, offset);
+  }
+
+  atomic_rmw_xor_i32(alignment: number, offset: number): any {
+    return this.emit(OpCodes.i32_atomic_rmw_xor, alignment, offset);
+  }
+
+  atomic_rmw_xor_i64(alignment: number, offset: number): any {
+    return this.emit(OpCodes.i64_atomic_rmw_xor, alignment, offset);
+  }
+
+  atomic_rmw8_xor_u_i32(alignment: number, offset: number): any {
+    return this.emit(OpCodes.i32_atomic_rmw8_xor_u, alignment, offset);
+  }
+
+  atomic_rmw16_xor_u_i32(alignment: number, offset: number): any {
+    return this.emit(OpCodes.i32_atomic_rmw16_xor_u, alignment, offset);
+  }
+
+  atomic_rmw8_xor_u_i64(alignment: number, offset: number): any {
+    return this.emit(OpCodes.i64_atomic_rmw8_xor_u, alignment, offset);
+  }
+
+  atomic_rmw16_xor_u_i64(alignment: number, offset: number): any {
+    return this.emit(OpCodes.i64_atomic_rmw16_xor_u, alignment, offset);
+  }
+
+  atomic_rmw32_xor_u_i64(alignment: number, offset: number): any {
+    return this.emit(OpCodes.i64_atomic_rmw32_xor_u, alignment, offset);
+  }
+
+  atomic_rmw_xchg_i32(alignment: number, offset: number): any {
+    return this.emit(OpCodes.i32_atomic_rmw_xchg, alignment, offset);
+  }
+
+  atomic_rmw_xchg_i64(alignment: number, offset: number): any {
+    return this.emit(OpCodes.i64_atomic_rmw_xchg, alignment, offset);
+  }
+
+  atomic_rmw8_xchg_u_i32(alignment: number, offset: number): any {
+    return this.emit(OpCodes.i32_atomic_rmw8_xchg_u, alignment, offset);
+  }
+
+  atomic_rmw16_xchg_u_i32(alignment: number, offset: number): any {
+    return this.emit(OpCodes.i32_atomic_rmw16_xchg_u, alignment, offset);
+  }
+
+  atomic_rmw8_xchg_u_i64(alignment: number, offset: number): any {
+    return this.emit(OpCodes.i64_atomic_rmw8_xchg_u, alignment, offset);
+  }
+
+  atomic_rmw16_xchg_u_i64(alignment: number, offset: number): any {
+    return this.emit(OpCodes.i64_atomic_rmw16_xchg_u, alignment, offset);
+  }
+
+  atomic_rmw32_xchg_u_i64(alignment: number, offset: number): any {
+    return this.emit(OpCodes.i64_atomic_rmw32_xchg_u, alignment, offset);
+  }
+
+  atomic_rmw_cmpxchg_i32(alignment: number, offset: number): any {
+    return this.emit(OpCodes.i32_atomic_rmw_cmpxchg, alignment, offset);
+  }
+
+  atomic_rmw_cmpxchg_i64(alignment: number, offset: number): any {
+    return this.emit(OpCodes.i64_atomic_rmw_cmpxchg, alignment, offset);
+  }
+
+  atomic_rmw8_cmpxchg_u_i32(alignment: number, offset: number): any {
+    return this.emit(OpCodes.i32_atomic_rmw8_cmpxchg_u, alignment, offset);
+  }
+
+  atomic_rmw16_cmpxchg_u_i32(alignment: number, offset: number): any {
+    return this.emit(OpCodes.i32_atomic_rmw16_cmpxchg_u, alignment, offset);
+  }
+
+  atomic_rmw8_cmpxchg_u_i64(alignment: number, offset: number): any {
+    return this.emit(OpCodes.i64_atomic_rmw8_cmpxchg_u, alignment, offset);
+  }
+
+  atomic_rmw16_cmpxchg_u_i64(alignment: number, offset: number): any {
+    return this.emit(OpCodes.i64_atomic_rmw16_cmpxchg_u, alignment, offset);
+  }
+
+  atomic_rmw32_cmpxchg_u_i64(alignment: number, offset: number): any {
+    return this.emit(OpCodes.i64_atomic_rmw32_cmpxchg_u, alignment, offset);
+  }
+
+  relaxed_swizzle_i8x16(): any {
+    return this.emit(OpCodes.i8x16_relaxed_swizzle);
+  }
+
+  relaxed_trunc_f32x4_s_i32x4(): any {
+    return this.emit(OpCodes.i32x4_relaxed_trunc_f32x4_s);
+  }
+
+  relaxed_trunc_f32x4_u_i32x4(): any {
+    return this.emit(OpCodes.i32x4_relaxed_trunc_f32x4_u);
+  }
+
+  relaxed_trunc_f64x2_s_zero_i32x4(): any {
+    return this.emit(OpCodes.i32x4_relaxed_trunc_f64x2_s_zero);
+  }
+
+  relaxed_trunc_f64x2_u_zero_i32x4(): any {
+    return this.emit(OpCodes.i32x4_relaxed_trunc_f64x2_u_zero);
+  }
+
+  relaxed_madd_f32x4(): any {
+    return this.emit(OpCodes.f32x4_relaxed_madd);
+  }
+
+  relaxed_nmadd_f32x4(): any {
+    return this.emit(OpCodes.f32x4_relaxed_nmadd);
+  }
+
+  relaxed_madd_f64x2(): any {
+    return this.emit(OpCodes.f64x2_relaxed_madd);
+  }
+
+  relaxed_nmadd_f64x2(): any {
+    return this.emit(OpCodes.f64x2_relaxed_nmadd);
+  }
+
+  relaxed_laneselect_i8x16(): any {
+    return this.emit(OpCodes.i8x16_relaxed_laneselect);
+  }
+
+  relaxed_laneselect_i16x8(): any {
+    return this.emit(OpCodes.i16x8_relaxed_laneselect);
+  }
+
+  relaxed_laneselect_i32x4(): any {
+    return this.emit(OpCodes.i32x4_relaxed_laneselect);
+  }
+
+  relaxed_laneselect_i64x2(): any {
+    return this.emit(OpCodes.i64x2_relaxed_laneselect);
+  }
+
+  relaxed_min_f32x4(): any {
+    return this.emit(OpCodes.f32x4_relaxed_min);
+  }
+
+  relaxed_max_f32x4(): any {
+    return this.emit(OpCodes.f32x4_relaxed_max);
+  }
+
+  relaxed_min_f64x2(): any {
+    return this.emit(OpCodes.f64x2_relaxed_min);
+  }
+
+  relaxed_max_f64x2(): any {
+    return this.emit(OpCodes.f64x2_relaxed_max);
+  }
+
+  relaxed_q15mulr_s_i16x8(): any {
+    return this.emit(OpCodes.i16x8_relaxed_q15mulr_s);
+  }
+
+  relaxed_dot_i8x16_i7x16_s_i16x8(): any {
+    return this.emit(OpCodes.i16x8_relaxed_dot_i8x16_i7x16_s);
+  }
+
+  relaxed_dot_i8x16_i7x16_add_s_i32x4(): any {
+    return this.emit(OpCodes.i32x4_relaxed_dot_i8x16_i7x16_add_s);
   }
 
   abstract emit(opCode: any, ...args: any[]): any;

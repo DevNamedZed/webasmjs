@@ -76,6 +76,7 @@ The `end` instruction is automatically added when using the callback form.
 | `i64` | `ValueType.Int64` | 64-bit integer (uses BigInt in JS) |
 | `f32` | `ValueType.Float32` | 32-bit float |
 | `f64` | `ValueType.Float64` | 64-bit float |
+| `v128` | `ValueType.V128` | 128-bit SIMD vector |
 
 ## Control Flow
 
@@ -108,6 +109,31 @@ a.loop(BlockType.Void, (loopLabel) => {
 });
 ```
 
+## Target System
+
+webasmjs supports WebAssembly feature proposals through a target system. Each target enables a set of features automatically:
+
+```typescript
+// Default: 'latest' — all standardized features enabled
+const mod = new ModuleBuilder('myModule');
+
+// Target a specific version for compatibility
+const mod2 = new ModuleBuilder('compat', { target: '2.0' });
+
+// MVP with specific features added
+const mod3 = new ModuleBuilder('custom', {
+  target: 'mvp',
+  features: ['simd', 'bulk-memory'],
+});
+```
+
+| Target | Features Included |
+|--------|-------------------|
+| `mvp` | None — WebAssembly 1.0 only |
+| `2.0` | sign-extend, sat-trunc, bulk-memory, reference-types, multi-value, mutable-globals |
+| `3.0` | All of 2.0 + simd, tail-call, exception-handling, threads, multi-memory, multi-table, memory64, extended-const |
+| `latest` | All of 3.0 + relaxed-simd, gc |
+
 ## WAT Output
 
 Every module can be converted to WAT text format for debugging:
@@ -121,4 +147,5 @@ console.log(wat);
 
 - [API Reference](api.md) — complete documentation of all builders and emitters
 - [Examples](examples.md) — annotated examples covering common patterns
+- [Feature Spec](../spec/FEATURES.md) — detailed specification of all supported WebAssembly features
 - [Playground](https://devnamedzed.github.io/webasmjs/) — try webasmjs in the browser

@@ -16,6 +16,8 @@ new ModuleBuilder(name: string, options?: ModuleBuilderOptions)
 |--------|------|---------|-------------|
 | `generateNameSection` | `boolean` | `true` | Include debug name section in output |
 | `disableVerification` | `boolean` | `false` | Skip control flow and operand stack verification |
+| `target` | `WasmTarget` | `'latest'` | WebAssembly target: `'mvp'`, `'2.0'`, `'3.0'`, or `'latest'` |
+| `features` | `WasmFeature[]` | `[]` | Additional feature flags beyond those included by the target |
 
 ### Methods
 
@@ -49,7 +51,7 @@ importFunction(
 ): ImportBuilder
 
 // Import memory
-importMemory(module: string, name: string, initial: number, maximum?: number): void
+importMemory(module: string, name: string, initial: number, maximum?: number, shared?: boolean): ImportBuilder
 
 // Import a table
 importTable(
@@ -69,6 +71,13 @@ importGlobal(
 ): ImportBuilder
 ```
 
+#### Tags
+
+```typescript
+// Define an exception tag
+defineTag(parameters: ValueType[]): TagBuilder
+```
+
 #### Exports
 
 ```typescript
@@ -81,7 +90,7 @@ exportGlobal(global: GlobalBuilder, name: string): void
 #### Memory
 
 ```typescript
-defineMemory(initial: number, maximum?: number): MemoryBuilder
+defineMemory(initial: number, maximum?: number, shared?: boolean, memory64?: boolean): MemoryBuilder
 defineData(data: Uint8Array, offset: number): DataSegmentBuilder
 ```
 
@@ -94,6 +103,13 @@ defineTableSegment(
   functions: FunctionBuilder[],
   offset: number
 ): ElementSegmentBuilder
+```
+
+#### Passive Element Segments
+
+```typescript
+// Define a passive element segment (for use with table.init)
+definePassiveElementSegment(elements: FunctionBuilder[]): ElementSegmentBuilder
 ```
 
 #### Globals
@@ -119,6 +135,13 @@ instantiate(imports?: WebAssembly.Imports): Promise<WebAssembly.WebAssemblyInsta
 
 // Generate WAT text
 toString(): string
+```
+
+#### Feature Checking
+
+```typescript
+// Check if a feature is enabled for this module
+hasFeature(feature: WasmFeature): boolean
 ```
 
 ---
@@ -281,6 +304,50 @@ select(): void
 nop(): void
 ```
 
+### Tail Calls
+
+```typescript
+return_call(target: FunctionBuilder | ImportBuilder): void
+return_call_indirect(funcType: FuncTypeBuilder): void
+```
+
+### Atomic Operations
+
+```typescript
+// Load/store (alignment and offset immediates)
+atomic_load_i32(align: number, offset: number): void
+atomic_load_i64(align: number, offset: number): void
+atomic_store_i32(align: number, offset: number): void
+atomic_store_i64(align: number, offset: number): void
+
+// Read-modify-write
+atomic_rmw_add_i32(align: number, offset: number): void
+atomic_rmw_sub_i32(align: number, offset: number): void
+atomic_rmw_and_i32(align: number, offset: number): void
+atomic_rmw_or_i32(align: number, offset: number): void
+atomic_rmw_xor_i32(align: number, offset: number): void
+atomic_rmw_xchg_i32(align: number, offset: number): void
+atomic_rmw_cmpxchg_i32(align: number, offset: number): void
+// Same patterns for i64 variants
+
+// Synchronization
+atomic_fence(flags: number): void
+atomic_notify(align: number, offset: number): void
+atomic_wait32(align: number, offset: number): void
+atomic_wait64(align: number, offset: number): void
+```
+
+### Exception Handling
+
+```typescript
+throw(tagIndex: number): void
+try(blockType: BlockType): void
+catch(tagIndex: number): void
+catch_all(): void
+rethrow(depth: number): void
+delegate(depth: number): void
+```
+
 ---
 
 ## GlobalBuilder
@@ -378,6 +445,7 @@ ValueType.Int32    // i32
 ValueType.Int64    // i64
 ValueType.Float32  // f32
 ValueType.Float64  // f64
+ValueType.V128     // v128 (128-bit SIMD vector)
 ```
 
 ### BlockType
@@ -388,6 +456,7 @@ BlockType.Int32    // block produces an i32
 BlockType.Int64    // block produces an i64
 BlockType.Float32  // block produces an f32
 BlockType.Float64  // block produces an f64
+BlockType.V128     // block produces a v128
 ```
 
 ### ElementType
@@ -403,4 +472,22 @@ ExternalKind.Function
 ExternalKind.Table
 ExternalKind.Memory
 ExternalKind.Global
+```
+
+### WasmTarget
+
+```typescript
+'mvp'     // WebAssembly 1.0 — no extensions
+'2.0'     // WebAssembly 2.0 — widely deployed post-MVP features
+'3.0'     // WebAssembly 3.0 — all standardized features
+'latest'  // Everything in 3.0 + newly standardized extensions (default)
+```
+
+### WasmFeature
+
+```typescript
+'sign-extend' | 'sat-trunc' | 'bulk-memory' | 'reference-types' | 'simd'
+| 'multi-value' | 'mutable-globals' | 'tail-call' | 'extended-const'
+| 'threads' | 'exception-handling' | 'multi-memory' | 'multi-table'
+| 'relaxed-simd' | 'memory64' | 'gc'
 ```

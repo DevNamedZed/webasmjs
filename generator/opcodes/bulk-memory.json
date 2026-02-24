@@ -1,0 +1,120 @@
+[
+  {
+    "value": 8,
+    "name": "memory_init",
+    "mnemonic": "memory.init",
+    "friendlyName": "memory_init",
+    "immediate": "MemoryImmediate",
+    "controlFlow": null,
+    "pop": [
+      "Int32",
+      "Int32",
+      "Int32"
+    ],
+    "push": null,
+    "prefix": 252,
+    "feature": "bulk-memory",
+    "group": "bulk-memory",
+    "order": 193
+  },
+  {
+    "value": 9,
+    "name": "data_drop",
+    "mnemonic": "data.drop",
+    "friendlyName": "data_drop",
+    "immediate": "VarUInt32",
+    "controlFlow": null,
+    "pop": null,
+    "push": null,
+    "prefix": 252,
+    "feature": "bulk-memory",
+    "group": "bulk-memory",
+    "order": 194
+  },
+  {
+    "value": 10,
+    "name": "memory_copy",
+    "mnemonic": "memory.copy",
+    "friendlyName": "memory_copy",
+    "immediate": "MemoryImmediate",
+    "controlFlow": null,
+    "pop": [
+      "Int32",
+      "Int32",
+      "Int32"
+    ],
+    "push": null,
+    "prefix": 252,
+    "feature": "bulk-memory",
+    "group": "bulk-memory",
+    "order": 195
+  },
+  {
+    "value": 11,
+    "name": "memory_fill",
+    "mnemonic": "memory.fill",
+    "friendlyName": "memory_fill",
+    "immediate": "VarUInt1",
+    "controlFlow": null,
+    "pop": [
+      "Int32",
+      "Int32",
+      "Int32"
+    ],
+    "push": null,
+    "prefix": 252,
+    "feature": "bulk-memory",
+    "group": "bulk-memory",
+    "order": 196
+  },
+  {
+    "value": 12,
+    "name": "table_init",
+    "mnemonic": "table.init",
+    "friendlyName": "table_init",
+    "immediate": "MemoryImmediate",
+    "controlFlow": null,
+    "pop": [
+      "Int32",
+      "Int32",
+      "Int32"
+    ],
+    "push": null,
+    "prefix": 252,
+    "feature": "bulk-memory",
+    "group": "bulk-memory",
+    "order": 197
+  },
+  {
+    "value": 13,
+    "name": "elem_drop",
+    "mnemonic": "elem.drop",
+    "friendlyName": "elem_drop",
+    "immediate": "VarUInt32",
+    "controlFlow": null,
+    "pop": null,
+    "push": null,
+    "prefix": 252,
+    "feature": "bulk-memory",
+    "group": "bulk-memory",
+    "order": 198
+  },
+  {
+    "value": 14,
+    "name": "table_copy",
+    "mnemonic": "table.copy",
+    "friendlyName": "table_copy",
+    "immediate": "MemoryImmediate",
+    "controlFlow": null,
+    "pop": [
+      "Int32",
+      "Int32",
+      "Int32"
+    ],
+    "push": null,
+    "prefix": 252,
+    "feature": "bulk-memory",
+    "group": "bulk-memory",
+    "order": 199
+  }
+]

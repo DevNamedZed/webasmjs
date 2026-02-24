@@ -31,6 +31,7 @@ export default class TextModuleWriter {
     this.writeTables(lines, mod);
     this.writeMemories(lines, mod);
     this.writeGlobals(lines, mod);
+    this.writeTags(lines, mod);
     this.writeExports(lines, mod);
     this.writeStart(lines, mod);
     this.writeElements(lines, mod);
@@ -248,7 +249,9 @@ export default class TextModuleWriter {
     mod._memories.forEach((mem) => {
       const limits = mem._memoryType.resizableLimits;
       const max = limits.maximum !== null ? ` ${limits.maximum}` : '';
-      lines.push(`  (memory (;${mem._index};) ${limits.initial}${max})`);
+      const shared = mem._memoryType.shared ? ' shared' : '';
+      const m64 = mem._memoryType.memory64 ? ' i64' : '';
+      lines.push(`  (memory (;${mem._index};)${m64} ${limits.initial}${max}${shared})`);
     });
   }
 
@@ -272,6 +275,15 @@ export default class TextModuleWriter {
       }
 
       lines.push(`  (global (;${g._index};) ${typeStr} (${initExpr}))`);
+    });
+  }
+
+  private writeTags(lines: string[], mod: ModuleBuilder): void {
+    mod._tags.forEach((tag, i) => {
+      const params = tag._funcType.parameterTypes.map((p) => p.name).join(' ');
+      let sig = '';
+      if (params.length > 0) sig = ` (param ${params})`;
+      lines.push(`  (tag (;${i};) (type ${tag._funcType.index})${sig})`);
     });
   }
 
@@ -305,6 +317,19 @@ export default class TextModuleWriter {
 
   private writeElements(lines: string[], mod: ModuleBuilder): void {
     mod._elements.forEach((elem, i) => {
+      const funcIndices = elem._functions
+        .map((f) => {
+          if (f instanceof FunctionBuilder) return f._index;
+          if (f instanceof ImportBuilder) return f.index;
+          return 0;
+        })
+        .join(' ');
+
+      if (elem._passive) {
+        lines.push(`  (elem (;${i};) func ${funcIndices})`);
+        return;
+      }
+
       let offsetExpr = '';
       if (elem._initExpressionEmitter) {
         const instrs = elem._initExpressionEmitter._instructions;
@@ -318,20 +343,24 @@ export default class TextModuleWriter {
         }
       }
 
-      const funcIndices = elem._functions
-        .map((f) => {
-          if (f instanceof FunctionBuilder) return f._index;
-          if (f instanceof ImportBuilder) return f.index;
-          return 0;
-        })
-        .join(' ');
-
-      lines.push(`  (elem (;${i};) (${offsetExpr}) func ${funcIndices})`);
+      const tableIndex = elem._table ? elem._table._index : 0;
+      if (tableIndex !== 0) {
+        lines.push(`  (elem (;${i};) (table ${tableIndex}) (${offsetExpr}) func ${funcIndices})`);
+      } else {
+        lines.push(`  (elem (;${i};) (${offsetExpr}) func ${funcIndices})`);
+      }
     });
   }
 
   private writeData(lines: string[], mod: ModuleBuilder): void {
     mod._data.forEach((seg, i) => {
+      const dataStr = this.bytesToWatString(seg._data);
+
+      if (seg._passive) {
+        lines.push(`  (data (;${i};) "${dataStr}")`);
+        return;
+      }
+
       let offsetExpr = '';
       if (seg._initExpressionEmitter) {
         const instrs = seg._initExpressionEmitter._instructions;
@@ -345,8 +374,11 @@ export default class TextModuleWriter {
         }
       }
 
-      const dataStr = this.bytesToWatString(seg._data);
-      lines.push(`  (data (;${i};) (${offsetExpr}) "${dataStr}")`);
+      if (seg._memoryIndex !== 0) {
+        lines.push(`  (data (;${i};) (memory ${seg._memoryIndex}) (${offsetExpr}) "${dataStr}")`);
+      } else {
+        lines.push(`  (data (;${i};) (${offsetExpr}) "${dataStr}")`);
+      }
     });
   }
 

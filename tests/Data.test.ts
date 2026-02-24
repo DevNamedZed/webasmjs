@@ -1,4 +1,5 @@
-import { ModuleBuilder, ValueType } from '../src/index';
+import { ModuleBuilder, ValueType, BinaryReader, DataSegmentBuilder } from '../src/index';
+import BinaryWriter from '../src/BinaryWriter';
 
 test('Data - read data segment', async () => {
   const moduleBuilder = new ModuleBuilder('testModule');
@@ -70,4 +71,76 @@ test('Data - string data', async () => {
   expect(read(0)).toBe(72); // 'H'
   expect(read(1)).toBe(101); // 'e'
   expect(read(4)).toBe(111); // 'o'
+});
+
+describe('DataSegmentBuilder', () => {
+  test('toBytes() returns valid bytes', () => {
+    const seg = new DataSegmentBuilder(new Uint8Array([1, 2, 3]));
+    seg.offset(0);
+    const bytes = seg.toBytes();
+    expect(bytes).toBeInstanceOf(Uint8Array);
+    expect(bytes.length).toBeGreaterThan(0);
+  });
+
+  test('unsupported offset type throws', () => {
+    const seg = new DataSegmentBuilder(new Uint8Array([1]));
+    expect(() => (seg as any).offset(true)).toThrow('Unsupported offset');
+  });
+});
+
+describe('DataSegmentBuilder offsets', () => {
+  test('GlobalBuilder as data segment offset', () => {
+    const mod = new ModuleBuilder('test');
+    // Use a defined immutable global as the data segment offset via the
+    // GlobalBuilder overload of DataSegmentBuilder.offset().
+    const g = mod.defineGlobal(ValueType.Int32, false, 0);
+    mod.defineMemory(1);
+    mod.defineData(new Uint8Array([42]), g);
+    mod.defineFunction('noop', null, [], (f, a) => {}).withExport();
+
+    // Verify the binary roundtrip encodes a global.get init expression
+    const bytes = mod.toBytes();
+    const reader = new BinaryReader(bytes);
+    const info = reader.read();
+    expect(info.data).toHaveLength(1);
+    expect(Array.from(info.data[0].data)).toEqual([42]);
+    // The offset expression should contain a global.get (opcode 0x23)
+    expect(info.data[0].offsetExpr[0]).toBe(0x23);
+  });
+
+  test('Callback offset for data segment', async () => {
+    const mod = new ModuleBuilder('test');
+    mod.defineMemory(1);
+    mod.defineData(new Uint8Array([99]), (asm: any) => {
+      asm.const_i32(10);
+    });
+    mod.defineFunction('read', [ValueType.Int32], [ValueType.Int32], (f, a) => {
+      a.get_local(0);
+      a.load8_i32_u(0, 0);
+    }).withExport();
+
+    const instance = await mod.instantiate();
+    const exports = instance.instance.exports as any;
+    expect(exports.read(10)).toBe(99);
+  });
+
+  test('createInitEmitter called twice throws', () => {
+    const seg = new DataSegmentBuilder(new Uint8Array([1, 2, 3]));
+    seg.createInitEmitter((asm) => {
+      asm.const_i32(0);
+    });
+    expect(() => {
+      seg.createInitEmitter((asm) => {
+        asm.const_i32(0);
+      });
+    }).toThrow('Initialization expression emitter has already been created.');
+  });
+
+  test('write() without init expression throws', () => {
+    const seg = new DataSegmentBuilder(new Uint8Array([1, 2, 3]));
+    const writer = new BinaryWriter();
+    expect(() => seg.write(writer)).toThrow(
+      'The initialization expression was not defined.'
+    );
+  });
 });

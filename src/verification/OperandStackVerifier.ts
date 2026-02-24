@@ -147,8 +147,8 @@ export default class OperandStackVerifier {
     for (let index = 0; index < remaining.length; index++) {
       if (remaining[index] !== this._funcType.returnTypes[index]) {
         errorMessage =
-          `A ${this._funcType.returnTypes[index]} was expected at ${remaining.length - index} ` +
-          `but a ${remaining[index]} was found. `;
+          `A ${this._funcType.returnTypes[index].name} was expected at ${remaining.length - index} ` +
+          `but a ${remaining[index].name} was found. `;
       }
     }
 
@@ -213,32 +213,43 @@ export default class OperandStackVerifier {
     opCode: OpCodeDef,
     funcType: FuncTypeBuilder | null
   ): OperandStack {
-    if (funcType) {
-      stack = funcType.parameterTypes.reduce((i, x) => {
-        if (x !== i.valueType) {
-          throw new VerificationError(
-            `Unexpected type found on stack at offset ${this._instructionCount + 1}. ` +
-              `A ${x} was expected but a ${i.valueType} was found.`
-          );
-        }
-        return i.pop();
-      }, stack);
-    }
-
-    stack = (opCode.popOperands || []).reduce((i, x) => {
+    // Pop popOperands first (e.g. call_indirect's table index sits on top of params).
+    // Iterate in reverse because the array is in push order (bottom-to-top)
+    // but we pop from the top of the stack.
+    const pops = opCode.popOperands || [];
+    for (let idx = pops.length - 1; idx >= 0; idx--) {
+      const x = pops[idx];
       if (x === OperandStackType.Any) {
-        return i.pop();
+        stack = stack.pop();
+        continue;
       }
 
       const valueType = (ValueType as any)[x] as ValueTypeDescriptor;
-      if (valueType !== i.valueType) {
+      if (valueType !== stack.valueType) {
         throw new VerificationError(
           `Unexpected type found on stack at offset ${this._instructionCount + 1}. ` +
-            `A ${valueType} was expected but a ${i.valueType} was found.`
+            `A ${valueType.name} was expected but a ${stack.valueType.name} was found.`
         );
       }
-      return i.pop();
-    }, stack);
+      stack = stack.pop();
+    }
+
+    // Then pop function parameter types (for call / call_indirect).
+    // Iterate in reverse because parameters are pushed in declaration order
+    // (param 0 at bottom, last param on top).
+    if (funcType) {
+      const params = funcType.parameterTypes;
+      for (let idx = params.length - 1; idx >= 0; idx--) {
+        const x = params[idx];
+        if (x !== stack.valueType) {
+          throw new VerificationError(
+            `Unexpected type found on stack at offset ${this._instructionCount + 1}. ` +
+              `A ${x.name} was expected but a ${stack.valueType.name} was found.`
+          );
+        }
+        stack = stack.pop();
+      }
+    }
 
     return stack;
   }
@@ -274,7 +285,7 @@ export default class OperandStackVerifier {
   _getFuncType(opCode: OpCodeDef, immediate: Immediate | null): FuncTypeBuilder | null {
     let funcType: FuncTypeBuilder | null = null;
 
-    if (opCode === (OpCodes as any).call) {
+    if (opCode === (OpCodes as any).call || opCode === (OpCodes as any).return_call) {
       if (immediate!.values[0] instanceof ImportBuilder) {
         funcType = immediate!.values[0].data as FuncTypeBuilder;
       } else if (immediate!.values[0] && 'funcTypeBuilder' in immediate!.values[0]) {
@@ -282,7 +293,7 @@ export default class OperandStackVerifier {
       } else {
         throw new VerificationError('Error getting funcType for call, invalid immediate.');
       }
-    } else if (opCode === (OpCodes as any).call_indirect) {
+    } else if (opCode === (OpCodes as any).call_indirect || opCode === (OpCodes as any).return_call_indirect) {
       if (immediate!.values[0] instanceof FuncTypeBuilder) {
         funcType = immediate!.values[0];
       } else {

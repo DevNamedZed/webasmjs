@@ -12,7 +12,7 @@ jobs:
 
     strategy:
       matrix:
-        node-version: [18, 20, 22]
+        node-version: [22, 24]
 
     steps:
       - uses: actions/checkout@v4
@@ -24,5 +24,11 @@ jobs:
           cache: npm
 
       - run: npm ci
-      - run: npm run build
-      - run: npm test
+      - run: npm run build:release
+
+      - name: Upload build artifacts
+        if: always() && matrix.node-version == 22
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-reports
+          path: build/

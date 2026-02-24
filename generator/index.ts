@@ -1,6 +1,26 @@
 import * as fs from 'fs';
 import * as path from 'path';
 
+interface OpCodeJson {
+  value: number;
+  name: string;
+  mnemonic: string;
+  friendlyName: string;
+  immediate: string | null;
+  controlFlow: string | null;
+  pop: string[] | null;
+  push: string[] | null;
+  prefix: number | null;
+  feature: string | null;
+  group: string;
+  order?: number;
+}
+
+interface OpCodeManifest {
+  description: string;
+  includes: string[];
+}
+
 interface OpCode {
   value: number;
   name: string;
@@ -13,6 +33,7 @@ interface OpCode {
   pushOperands: string[] | null;
   prefix: number | null;
   feature: string | null;
+  group: string;
 }
 
 interface OperandInfo {
@@ -70,88 +91,50 @@ function getStackBehavior(pop: string[] | null, push: string[] | null): string {
   return 'None';
 }
 
-function parseOperands(value: string): string[] | null {
-  if (!value || value === '') return null;
-  return JSON.parse(value).filter((x: string) => x !== 'Arguments' && x !== 'Returns');
+function isManifest(data: unknown): data is OpCodeManifest {
+  return typeof data === 'object' && data !== null && 'includes' in data && Array.isArray((data as OpCodeManifest).includes);
 }
 
-function parseCSV(csv: string): string[][] {
-  const rows: string[][] = [];
-  let current = '';
-  let inQuotes = false;
-  let row: string[] = [];
-
-  for (let i = 0; i < csv.length; i++) {
-    const ch = csv[i];
-    if (inQuotes) {
-      if (ch === '"' && csv[i + 1] === '"') {
-        current += '"';
-        i++;
-      } else if (ch === '"') {
-        inQuotes = false;
-      } else {
-        current += ch;
-      }
-    } else {
-      if (ch === '"') {
-        inQuotes = true;
-      } else if (ch === ',') {
-        row.push(current);
-        current = '';
-      } else if (ch === '\n' || ch === '\r') {
-        if (ch === '\r' && csv[i + 1] === '\n') i++;
-        row.push(current);
-        current = '';
-        if (row.some((c) => c !== '')) rows.push(row);
-        row = [];
-      } else {
-        current += ch;
-      }
+function loadRawOpcodes(jsonPath: string): OpCodeJson[] {
+  const data = JSON.parse(fs.readFileSync(jsonPath, 'utf8'));
+  if (isManifest(data)) {
+    const dir = path.dirname(jsonPath);
+    const entries: OpCodeJson[] = [];
+    for (const include of data.includes) {
+      const subPath = path.join(dir, include);
+      const subEntries: OpCodeJson[] = JSON.parse(fs.readFileSync(subPath, 'utf8'));
+      entries.push(...subEntries);
     }
+    entries.sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+    return entries;
   }
-
-  row.push(current);
-  if (row.some((c) => c !== '')) rows.push(row);
-
-  return rows;
+  return data;
 }
 
-function parseOpcodes(data: string[][]): OpCode[] {
-  const result: OpCode[] = [];
-  // Header: value,name,mnemonic,friendlyName,immediate,controlflow,pop,push,prefix
-  for (let index = 1; index < data.length; index++) {
-    const row = data[index];
-    if (!row[0] && row[0] !== '0') continue;
+function loadOpcodes(jsonPath: string): OpCode[] {
+  const raw = loadRawOpcodes(jsonPath);
 
-    const pop = parseOperands(row[6]);
-    const push = parseOperands(row[7]);
-    const isCall = row[1].startsWith('call');
-    const stackBehavior = isCall ? 'PopPush' : getStackBehavior(
-      pop && pop.length !== 0 ? pop : null,
-      push && push.length !== 0 ? push : null
-    );
+  return raw.map((entry) => {
+    const pop = entry.pop && entry.pop.length > 0 ? entry.pop : null;
+    const push = entry.push && entry.push.length > 0 ? entry.push : null;
+    const isCall = entry.name.startsWith('call') || entry.name.startsWith('return_call');
+    const stackBehavior = isCall ? 'PopPush' : getStackBehavior(pop, push);
 
-    const prefixStr = row[8]?.trim();
-    const prefix = prefixStr ? parseInt(prefixStr, 10) : null;
-    const featureStr = row[9]?.trim();
-    const feature = featureStr || null;
-
-    result.push({
-      value: parseInt(row[0], 10),
-      name: row[1],
-      mnemonic: row[2],
-      friendlyName: row[3],
-      immediate: row[4] || null,
-      controlFlow: row[5] || null,
+    return {
+      value: entry.value,
+      name: entry.name,
+      mnemonic: entry.mnemonic,
+      friendlyName: entry.friendlyName,
+      immediate: entry.immediate,
+      controlFlow: entry.controlFlow,
       stackBehavior,
       popOperands: pop,
       pushOperands: push,
-      prefix,
-      feature,
-    });
-  }
-
-  return result;
+      prefix: entry.prefix,
+      feature: entry.feature,
+      group: entry.group,
+    };
+  });
 }
 
 function generateOpCodes(opCodes: OpCode[]): string {
@@ -202,21 +185,114 @@ function generateOpCodeEmitter(opCodes: OpCode[]): string {
   return out;
 }
 
+function generateTests(opCodes: OpCode[]): string {
+  let out = '// AUTO-GENERATED — do not edit. Run `npm run generate` to regenerate.\n';
+  out += "import OpCodes from '../../src/OpCodes';\n";
+  out += "import OpCodeEmitter from '../../src/OpCodeEmitter';\n\n";
+
+  // Group opcodes
+  const groups = new Map<string, OpCode[]>();
+  for (const op of opCodes) {
+    if (!groups.has(op.group)) groups.set(op.group, []);
+    groups.get(op.group)!.push(op);
+  }
+
+  // Group opcodes by feature
+  const features = new Map<string, OpCode[]>();
+  for (const op of opCodes) {
+    if (op.feature) {
+      if (!features.has(op.feature)) features.set(op.feature, []);
+      features.get(op.feature)!.push(op);
+    }
+  }
+
+  out += `describe('OpCode definitions', () => {\n`;
+  out += `  test('total opcode count is ${opCodes.length}', () => {\n`;
+  out += `    expect(Object.keys(OpCodes).length).toBe(${opCodes.length});\n`;
+  out += `  });\n\n`;
+
+  // Per-group describe blocks
+  for (const [group, ops] of groups) {
+    out += `  describe('${group}', () => {\n`;
+    for (const op of ops) {
+      const checks: string[] = [];
+      checks.push(`expect(op.value).toBe(${op.value})`);
+      checks.push(`expect(op.mnemonic).toBe(${JSON.stringify(op.mnemonic)})`);
+      if (op.prefix !== null) {
+        checks.push(`expect(op.prefix).toBe(${op.prefix})`);
+      }
+      if (op.feature) {
+        checks.push(`expect(op.feature).toBe(${JSON.stringify(op.feature)})`);
+      }
+
+      out += `    test('${op.name}', () => {\n`;
+      out += `      const op = (OpCodes as any).${op.name};\n`;
+      out += `      expect(op).toBeDefined();\n`;
+      for (const check of checks) {
+        out += `      ${check};\n`;
+      }
+      out += `    });\n\n`;
+    }
+    out += `  });\n\n`;
+  }
+
+  // Feature group summaries
+  if (features.size > 0) {
+    out += `  describe('feature groups', () => {\n`;
+    for (const [feature, ops] of features) {
+      const prefixes = new Set(ops.map((o) => o.prefix));
+      const prefix = prefixes.size === 1 ? [...prefixes][0] : null;
+      out += `    test('${feature}: ${ops.length} opcodes', () => {\n`;
+      out += `      const ops = Object.values(OpCodes).filter((op: any) => op.feature === '${feature}');\n`;
+      out += `      expect(ops.length).toBe(${ops.length});\n`;
+      if (prefix !== null) {
+        out += `      ops.forEach((op: any) => expect(op.prefix).toBe(${prefix}));\n`;
+      }
+      out += `    });\n\n`;
+    }
+    out += `  });\n`;
+  }
+
+  out += `});\n\n`;
+
+  // Emitter method tests
+  out += `describe('Emitter methods', () => {\n`;
+  for (const [group, ops] of groups) {
+    out += `  describe('${group}', () => {\n`;
+    for (const op of ops) {
+      out += `    test('${op.friendlyName}', () => {\n`;
+      out += `      expect(typeof (OpCodeEmitter.prototype as any).${op.friendlyName}).toBe('function');\n`;
+      out += `    });\n\n`;
+    }
+    out += `  });\n\n`;
+  }
+  out += `});\n`;
+
+  return out;
+}
+
 // Main
 const generatorDir = __dirname;
-const csvPath = path.join(generatorDir, 'opcodes.csv');
+const jsonPath = path.join(generatorDir, 'opcodes.json');
 const srcDir = path.join(generatorDir, '..', 'src');
+const testsDir = path.join(generatorDir, '..', 'tests', 'generated');
 
-const csv = fs.readFileSync(csvPath, 'utf8');
-const csvData = parseCSV(csv);
-const opcodeList = parseOpcodes(csvData);
+const opcodeList = loadOpcodes(jsonPath);
 
 const opCodesOutput = generateOpCodes(opcodeList);
 const emitterOutput = generateOpCodeEmitter(opcodeList);
+const testsOutput = generateTests(opcodeList);
 
 fs.writeFileSync(path.join(srcDir, 'OpCodes.ts'), opCodesOutput);
 fs.writeFileSync(path.join(srcDir, 'OpCodeEmitter.ts'), emitterOutput);
 
+// Ensure tests/generated directory exists
+if (!fs.existsSync(testsDir)) {
+  fs.mkdirSync(testsDir, { recursive: true });
+}
+fs.writeFileSync(path.join(testsDir, 'OpCodes.test.ts'), testsOutput);
+
 console.log(`Generated ${opcodeList.length} opcodes.`);
 console.log(`  OpCodes.ts written to ${path.join(srcDir, 'OpCodes.ts')}`);
 console.log(`  OpCodeEmitter.ts written to ${path.join(srcDir, 'OpCodeEmitter.ts')}`);
+console.log(`  OpCodes.test.ts written to ${path.join(testsDir, 'OpCodes.test.ts')}`);

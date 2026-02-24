@@ -20,8 +20,8 @@ test('ModuleBuilder - defineFuncType deduplicates', () => {
   expect(mod._types).toHaveLength(1);
 });
 
-test('ModuleBuilder - defineFuncType rejects multiple returns', () => {
-  const mod = new ModuleBuilder('test');
+test('ModuleBuilder - defineFuncType rejects multiple returns (mvp)', () => {
+  const mod = new ModuleBuilder('test', { target: 'mvp' });
   expect(() => mod.defineFuncType([ValueType.Int32, ValueType.Int32], [])).toThrow();
 });
 
@@ -31,14 +31,14 @@ test('ModuleBuilder - defineFunction duplicate name throws', () => {
   expect(() => mod.defineFunction('fn', null, [])).toThrow();
 });
 
-test('ModuleBuilder - defineTable only one allowed', () => {
-  const mod = new ModuleBuilder('test');
+test('ModuleBuilder - defineTable only one allowed (mvp)', () => {
+  const mod = new ModuleBuilder('test', { target: 'mvp' });
   mod.defineTable(ElementType.AnyFunc, 1);
   expect(() => mod.defineTable(ElementType.AnyFunc, 1)).toThrow();
 });
 
-test('ModuleBuilder - defineMemory only one allowed', () => {
-  const mod = new ModuleBuilder('test');
+test('ModuleBuilder - defineMemory only one allowed (mvp)', () => {
+  const mod = new ModuleBuilder('test', { target: 'mvp' });
   mod.defineMemory(1);
   expect(() => mod.defineMemory(1)).toThrow(VerificationError);
 });
@@ -139,4 +139,43 @@ test('ModuleBuilder - import function indices are correct', async () => {
   });
   (module.instance.exports.test as CallableFunction)();
   expect(loggedValue).toBe(42);
+});
+
+describe('ModuleBuilder options', () => {
+  test('defaultOptions exist', () => {
+    expect(ModuleBuilder.defaultOptions).toBeDefined();
+    expect(ModuleBuilder.defaultOptions.generateNameSection).toBe(true);
+    expect(ModuleBuilder.defaultOptions.disableVerification).toBe(false);
+  });
+
+  test('targetFeatures has mvp, 2.0, latest', () => {
+    expect(ModuleBuilder.targetFeatures['mvp']).toEqual([]);
+    expect(ModuleBuilder.targetFeatures['2.0']).toContain('sign-extend');
+    expect(ModuleBuilder.targetFeatures['latest']).toContain('simd');
+  });
+
+  test('features getter returns resolved features', () => {
+    const mod = new ModuleBuilder('test');
+    expect(mod.features).toBeInstanceOf(Set);
+    expect(mod.features.has('simd')).toBe(true);
+  });
+
+  test('hasFeature checks correctly', () => {
+    const mod = new ModuleBuilder('test', { target: 'mvp' });
+    expect(mod.hasFeature('simd')).toBe(false);
+    expect(mod.hasFeature('sign-extend')).toBe(false);
+  });
+
+  test('custom features are merged', () => {
+    const mod = new ModuleBuilder('test', { target: 'mvp', features: ['simd'] });
+    expect(mod.hasFeature('simd')).toBe(true);
+    expect(mod.hasFeature('sign-extend')).toBe(false);
+  });
+
+  test('disableVerification getter', () => {
+    const mod1 = new ModuleBuilder('test');
+    expect(mod1.disableVerification).toBe(false);
+    const mod2 = new ModuleBuilder('test', { disableVerification: true });
+    expect(mod2.disableVerification).toBe(true);
+  });
 });

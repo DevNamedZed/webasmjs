@@ -1,0 +1,140 @@
+[
+  {
+    "value": 15,
+    "name": "table_grow",
+    "mnemonic": "table.grow",
+    "friendlyName": "table_grow",
+    "immediate": "VarUInt32",
+    "controlFlow": null,
+    "pop": [
+      "Int32",
+      "Int32"
+    ],
+    "push": [
+      "Int32"
+    ],
+    "prefix": 252,
+    "feature": "reference-types",
+    "group": "reference-types",
+    "order": 200
+  },
+  {
+    "value": 16,
+    "name": "table_size",
+    "mnemonic": "table.size",
+    "friendlyName": "table_size",
+    "immediate": "VarUInt32",
+    "controlFlow": null,
+    "pop": null,
+    "push": [
+      "Int32"
+    ],
+    "prefix": 252,
+    "feature": "reference-types",
+    "group": "reference-types",
+    "order": 201
+  },
+  {
+    "value": 17,
+    "name": "table_fill",
+    "mnemonic": "table.fill",
+    "friendlyName": "table_fill",
+    "immediate": "VarUInt32",
+    "controlFlow": null,
+    "pop": [
+      "Int32",
+      "Int32",
+      "Int32"
+    ],
+    "push": null,
+    "prefix": 252,
+    "feature": "reference-types",
+    "group": "reference-types",
+    "order": 202
+  },
+  {
+    "value": 208,
+    "name": "ref_null",
+    "mnemonic": "ref.null",
+    "friendlyName": "ref_null",
+    "immediate": "VarUInt32",
+    "controlFlow": null,
+    "pop": null,
+    "push": [
+      "Int32"
+    ],
+    "prefix": null,
+    "feature": "reference-types",
+    "group": "reference-types",
+    "order": 203
+  },
+  {
+    "value": 209,
+    "name": "ref_is_null",
+    "mnemonic": "ref.is_null",
+    "friendlyName": "ref_is_null",
+    "immediate": null,
+    "controlFlow": null,
+    "pop": [
+      "Int32"
+    ],
+    "push": [
+      "Int32"
+    ],
+    "prefix": null,
+    "feature": "reference-types",
+    "group": "reference-types",
+    "order": 204
+  },
+  {
+    "value": 210,
+    "name": "ref_func",
+    "mnemonic": "ref.func",
+    "friendlyName": "ref_func",
+    "immediate": "Function",
+    "controlFlow": null,
+    "pop": null,
+    "push": [
+      "Int32"
+    ],
+    "prefix": null,
+    "feature": "reference-types",
+    "group": "reference-types",
+    "order": 205
+  },
+  {
+    "value": 37,
+    "name": "table_get",
+    "mnemonic": "table.get",
+    "friendlyName": "table_get",
+    "immediate": "VarUInt32",
+    "controlFlow": null,
+    "pop": [
+      "Int32"
+    ],
+    "push": [
+      "Int32"
+    ],
+    "prefix": null,
+    "feature": "reference-types",
+    "group": "reference-types",
+    "order": 206
+  },
+  {
+    "value": 38,
+    "name": "table_set",
+    "mnemonic": "table.set",
+    "friendlyName": "table_set",
+    "immediate": "VarUInt32",
+    "controlFlow": null,
+    "pop": [
+      "Int32",
+      "Int32"
+    ],
+    "push": null,
+    "prefix": null,
+    "feature": "reference-types",
+    "group": "reference-types",
+    "order": 207
+  }
+]

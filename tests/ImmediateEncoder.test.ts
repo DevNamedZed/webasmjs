@@ -1,6 +1,6 @@
 import ImmediateEncoder from '../src/ImmediateEncoder';
 import BinaryWriter from '../src/BinaryWriter';
-import { BlockType, ValueType } from '../src/index';
+import { BlockType, ValueType, ModuleBuilder } from '../src/index';
 
 test('ImmediateEncoder - block signature void', () => {
   const writer = new BinaryWriter();
@@ -103,4 +103,43 @@ test('ImmediateEncoder - memory immediate', () => {
   expect(bytes.length).toBe(2);
   expect(bytes[0]).toBe(0x02);
   expect(bytes[1]).toBe(0x10);
+});
+
+describe('f64 special values', () => {
+  test('f64 Infinity', () => {
+    const mod = new ModuleBuilder('test');
+    mod.defineFunction('infF64', [ValueType.Float64], [], (f, a) => {
+      a.const_f64(Infinity);
+    }).withExport();
+    const bytes = mod.toBytes();
+    expect(WebAssembly.validate(bytes.buffer as ArrayBuffer)).toBe(true);
+  });
+
+  test('f64 -Infinity', () => {
+    const mod = new ModuleBuilder('test');
+    mod.defineFunction('negInfF64', [ValueType.Float64], [], (f, a) => {
+      a.const_f64(-Infinity);
+    }).withExport();
+    const bytes = mod.toBytes();
+    expect(WebAssembly.validate(bytes.buffer as ArrayBuffer)).toBe(true);
+  });
+
+  test('f64 NaN', () => {
+    const mod = new ModuleBuilder('test');
+    mod.defineFunction('nanF64', [ValueType.Float64], [], (f, a) => {
+      a.const_f64(NaN);
+    }).withExport();
+    const bytes = mod.toBytes();
+    expect(WebAssembly.validate(bytes.buffer as ArrayBuffer)).toBe(true);
+  });
+
+  test('f64 0.0', async () => {
+    const mod = new ModuleBuilder('test');
+    mod.defineFunction('zeroF64', [ValueType.Float64], [], (f, a) => {
+      a.const_f64(0.0);
+    }).withExport();
+    const instance = await mod.instantiate();
+    const { zeroF64 } = instance.instance.exports as any;
+    expect(zeroF64()).toBe(0.0);
+  });
 });

@@ -85,10 +85,16 @@ test('Memory - Export', async () => {
   }
 });
 
-test('Memory - Only one allowed', () => {
-  const moduleBuilder = new ModuleBuilder('test');
+test('Memory - Only one allowed (mvp)', () => {
+  const moduleBuilder = new ModuleBuilder('test', { target: 'mvp' });
   moduleBuilder.defineMemory(1, 1);
   expect(() => moduleBuilder.defineMemory(1, 1)).toThrow(VerificationError);
+});
+
+test('Memory - Multiple allowed with multi-memory feature', () => {
+  const moduleBuilder = new ModuleBuilder('test', { features: ['multi-memory'] });
+  moduleBuilder.defineMemory(1, 1);
+  expect(() => moduleBuilder.defineMemory(1, 1)).not.toThrow();
 });
 
 test('Memory - i32 load/store', async () => {

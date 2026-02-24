@@ -42,7 +42,8 @@ export default class GlobalBuilder {
 
     this._initExpressionEmitter = new InitExpressionEmitter(
       InitExpressionType.Global,
-      this.valueType
+      this.valueType,
+      this._moduleBuilder.features
     );
     if (callback) {
       callback(this._initExpressionEmitter);

@@ -46,6 +46,8 @@ var webasmPlayground = (() => {
     Element: { name: "Element", value: 9 },
     Code: { name: "Code", value: 10 },
     Data: { name: "Data", value: 11 },
+    DataCount: { name: "DataCount", value: 12 },
+    Tag: { name: "Tag", value: 13 },
     createCustom(name) {
       return { name, value: 0 };
     }
@@ -297,6 +299,9 @@ var webasmPlayground = (() => {
     writeExportSection(writer) {
       _BinaryModuleWriter.writeSection(writer, SectionType.Export, this.moduleBuilder._exports);
     }
+    writeTagSection(writer) {
+      _BinaryModuleWriter.writeSection(writer, SectionType.Tag, this.moduleBuilder._tags);
+    }
     writeStartSection(writer) {
       if (!this.moduleBuilder._startFunction) {
         return;
@@ -426,6 +431,7 @@ var webasmPlayground = (() => {
       this.writeTableSection(writer);
       this.writeMemorySection(writer);
       this.writeGlobalSection(writer);
+      this.writeTagSection(writer);
       this.writeExportSection(writer);
       this.writeStartSection(writer);
       this.writeElementSection(writer);
@@ -433,893 +439,6 @@ var webasmPlayground = (() => {
       this.writeDataSection(writer);
       this.writeCustomSections(writer);
       return writer.toArray();
-    }
-  };
-
-  // src/BinaryReader.ts
-  var MagicHeader2 = 1836278016;
-  var BinaryReader = class {
-    constructor(buffer) {
-      this.buffer = buffer;
-      this.offset = 0;
-    }
-    read() {
-      const magic = this.readUInt32();
-      if (magic !== MagicHeader2) {
-        throw new Error(`Invalid WASM magic header: 0x${magic.toString(16)}`);
-      }
-      const version = this.readUInt32();
-      if (version !== 1) {
-        throw new Error(`Unsupported WASM version: ${version}`);
-      }
-      const module = {
-        version,
-        types: [],
-        imports: [],
-        functions: [],
-        tables: [],
-        memories: [],
-        globals: [],
-        exports: [],
-        start: null,
-        elements: [],
-        data: [],
-        customSections: []
-      };
-      const functionTypeIndices = [];
-      while (this.offset < this.buffer.length) {
-        const sectionId = this.readVarUInt7();
-        const sectionSize = this.readVarUInt32();
-        const sectionEnd = this.offset + sectionSize;
-        switch (sectionId) {
-          case 0:
-            this.readCustomSection(module, sectionEnd);
-            break;
-          case 1:
-            this.readTypeSection(module);
-            break;
-          case 2:
-            this.readImportSection(module);
-            break;
-          case 3:
-            this.readFunctionSection(functionTypeIndices);
-            break;
-          case 4:
-            this.readTableSection(module);
-            break;
-          case 5:
-            this.readMemorySection(module);
-            break;
-          case 6:
-            this.readGlobalSection(module);
-            break;
-          case 7:
-            this.readExportSection(module);
-            break;
-          case 8:
-            module.start = this.readVarUInt32();
-            break;
-          case 9:
-            this.readElementSection(module);
-            break;
-          case 10:
-            this.readCodeSection(module, functionTypeIndices);
-            break;
-          case 11:
-            this.readDataSection(module);
-            break;
-          default:
-            this.offset = sectionEnd;
-            break;
-        }
-        this.offset = sectionEnd;
-      }
-      return module;
-    }
-    readCustomSection(module, sectionEnd) {
-      const nameLen = this.readVarUInt32();
-      const name = this.readString(nameLen);
-      if (name === "name") {
-        module.nameSection = this.readNameSection(sectionEnd);
-        return;
-      }
-      const remaining = sectionEnd - this.offset;
-      const data = this.readBytes(remaining);
-      module.customSections.push({ name, data });
-    }
-    readNameSection(sectionEnd) {
-      const info = {};
-      while (this.offset < sectionEnd) {
-        const subsectionId = this.readVarUInt7();
-        const subsectionSize = this.readVarUInt32();
-        const subsectionEnd = this.offset + subsectionSize;
-        switch (subsectionId) {
-          case 0: {
-            const len = this.readVarUInt32();
-            info.moduleName = this.readString(len);
-            break;
-          }
-          case 1: {
-            const count = this.readVarUInt32();
-            info.functionNames = /* @__PURE__ */ new Map();
-            for (let i = 0; i < count; i++) {
-              const index = this.readVarUInt32();
-              const len = this.readVarUInt32();
-              info.functionNames.set(index, this.readString(len));
-            }
-            break;
-          }
-          case 2: {
-            const funcCount = this.readVarUInt32();
-            info.localNames = /* @__PURE__ */ new Map();
-            for (let i = 0; i < funcCount; i++) {
-              const funcIndex = this.readVarUInt32();
-              const localCount = this.readVarUInt32();
-              const locals = /* @__PURE__ */ new Map();
-              for (let j = 0; j < localCount; j++) {
-                const localIndex = this.readVarUInt32();
-                const len = this.readVarUInt32();
-                locals.set(localIndex, this.readString(len));
-              }
-              info.localNames.set(funcIndex, locals);
-            }
-            break;
-          }
-          case 7: {
-            const count = this.readVarUInt32();
-            info.globalNames = /* @__PURE__ */ new Map();
-            for (let i = 0; i < count; i++) {
-              const index = this.readVarUInt32();
-              const len = this.readVarUInt32();
-              info.globalNames.set(index, this.readString(len));
-            }
-            break;
-          }
-          default:
-            this.offset = subsectionEnd;
-            break;
-        }
-        this.offset = subsectionEnd;
-      }
-      return info;
-    }
-    readTypeSection(module) {
-      const count = this.readVarUInt32();
-      for (let i = 0; i < count; i++) {
-        const form = this.readVarInt7();
-        const paramCount = this.readVarUInt32();
-        const parameterTypes = [];
-        for (let j = 0; j < paramCount; j++) {
-          parameterTypes.push(this.readValueType());
-        }
-        const returnCount = this.readVarUInt32();
-        const returnTypes = [];
-        for (let j = 0; j < returnCount; j++) {
-          returnTypes.push(this.readValueType());
-        }
-        module.types.push({ parameterTypes, returnTypes });
-      }
-    }
-    readImportSection(module) {
-      const count = this.readVarUInt32();
-      for (let i = 0; i < count; i++) {
-        const moduleNameLen = this.readVarUInt32();
-        const moduleName = this.readString(moduleNameLen);
-        const fieldNameLen = this.readVarUInt32();
-        const fieldName = this.readString(fieldNameLen);
-        const kind = this.readUInt8();
-        const imp = { moduleName, fieldName, kind };
-        switch (kind) {
-          case 0:
-            imp.typeIndex = this.readVarUInt32();
-            break;
-          case 1: {
-            const elementType = this.readVarInt7();
-            const { initial, maximum } = this.readResizableLimits();
-            imp.tableType = { elementType, initial, maximum };
-            break;
-          }
-          case 2: {
-            const { initial, maximum } = this.readResizableLimits();
-            imp.memoryType = { initial, maximum };
-            break;
-          }
-          case 3: {
-            const valueType = this.readVarInt7();
-            const mutable = this.readVarUInt1() === 1;
-            imp.globalType = { valueType, mutable };
-            break;
-          }
-        }
-        module.imports.push(imp);
-      }
-    }
-    readFunctionSection(functionTypeIndices) {
-      const count = this.readVarUInt32();
-      for (let i = 0; i < count; i++) {
-        functionTypeIndices.push(this.readVarUInt32());
-      }
-    }
-    readTableSection(module) {
-      const count = this.readVarUInt32();
-      for (let i = 0; i < count; i++) {
-        const elementType = this.readVarInt7();
-        const { initial, maximum } = this.readResizableLimits();
-        module.tables.push({ elementType, initial, maximum });
-      }
-    }
-    readMemorySection(module) {
-      const count = this.readVarUInt32();
-      for (let i = 0; i < count; i++) {
-        const { initial, maximum } = this.readResizableLimits();
-        module.memories.push({ initial, maximum });
-      }
-    }
-    readGlobalSection(module) {
-      const count = this.readVarUInt32();
-      for (let i = 0; i < count; i++) {
-        const valueType = this.readVarInt7();
-        const mutable = this.readVarUInt1() === 1;
-        const initExpr = this.readInitExpr();
-        module.globals.push({ valueType, mutable, initExpr });
-      }
-    }
-    readExportSection(module) {
-      const count = this.readVarUInt32();
-      for (let i = 0; i < count; i++) {
-        const nameLen = this.readVarUInt32();
-        const name = this.readString(nameLen);
-        const kind = this.readUInt8();
-        const index = this.readVarUInt32();
-        module.exports.push({ name, kind, index });
-      }
-    }
-    readElementSection(module) {
-      const count = this.readVarUInt32();
-      for (let i = 0; i < count; i++) {
-        const tableIndex = this.readVarUInt32();
-        const offsetExpr = this.readInitExpr();
-        const numElems = this.readVarUInt32();
-        const functionIndices = [];
-        for (let j = 0; j < numElems; j++) {
-          functionIndices.push(this.readVarUInt32());
-        }
-        module.elements.push({ tableIndex, offsetExpr, functionIndices });
-      }
-    }
-    readCodeSection(module, functionTypeIndices) {
-      const count = this.readVarUInt32();
-      for (let i = 0; i < count; i++) {
-        const bodySize = this.readVarUInt32();
-        const bodyEnd = this.offset + bodySize;
-        const localCount = this.readVarUInt32();
-        const locals = [];
-        for (let j = 0; j < localCount; j++) {
-          const lCount = this.readVarUInt32();
-          const type = this.readVarInt7();
-          locals.push({ count: lCount, type });
-        }
-        const bodyLength = bodyEnd - this.offset;
-        const body = this.readBytes(bodyLength);
-        module.functions.push({
-          typeIndex: functionTypeIndices[i],
-          locals,
-          body
-        });
-        this.offset = bodyEnd;
-      }
-    }
-    readDataSection(module) {
-      const count = this.readVarUInt32();
-      for (let i = 0; i < count; i++) {
-        const memoryIndex = this.readVarUInt32();
-        const offsetExpr = this.readInitExpr();
-        const dataSize = this.readVarUInt32();
-        const data = this.readBytes(dataSize);
-        module.data.push({ memoryIndex, offsetExpr, data });
-      }
-    }
-    readInitExpr() {
-      const start = this.offset;
-      while (this.offset < this.buffer.length) {
-        const byte = this.buffer[this.offset++];
-        if (byte === 11) {
-          break;
-        }
-        switch (byte) {
-          case 65:
-            this.readVarInt32();
-            break;
-          case 66:
-            this.readVarInt64();
-            break;
-          case 67:
-            this.offset += 4;
-            break;
-          case 68:
-            this.offset += 8;
-            break;
-          case 35:
-            this.readVarUInt32();
-            break;
-        }
-      }
-      return this.buffer.slice(start, this.offset);
-    }
-    readResizableLimits() {
-      const flags = this.readVarUInt1();
-      const initial = this.readVarUInt32();
-      const maximum = flags === 1 ? this.readVarUInt32() : null;
-      return { initial, maximum };
-    }
-    readValueType() {
-      const value = this.readVarInt7();
-      switch (value) {
-        case -1:
-          return ValueType.Int32;
-        case -2:
-          return ValueType.Int64;
-        case -3:
-          return ValueType.Float32;
-        case -4:
-          return ValueType.Float64;
-        default:
-          throw new Error(`Unknown value type: 0x${(value & 255).toString(16)}`);
-      }
-    }
-    // --- Primitive readers ---
-    readUInt8() {
-      return this.buffer[this.offset++];
-    }
-    readUInt32() {
-      const value = this.buffer[this.offset] | this.buffer[this.offset + 1] << 8 | this.buffer[this.offset + 2] << 16 | this.buffer[this.offset + 3] << 24;
-      this.offset += 4;
-      return value >>> 0;
-    }
-    readVarUInt1() {
-      return this.buffer[this.offset++] & 1;
-    }
-    readVarUInt7() {
-      return this.buffer[this.offset++] & 127;
-    }
-    readVarUInt32() {
-      let result = 0;
-      let shift = 0;
-      let byte;
-      do {
-        byte = this.buffer[this.offset++];
-        result |= (byte & 127) << shift;
-        shift += 7;
-      } while (byte & 128);
-      return result >>> 0;
-    }
-    readVarInt7() {
-      const byte = this.buffer[this.offset++];
-      return byte & 64 ? byte | 4294967168 : byte & 127;
-    }
-    readVarInt32() {
-      let result = 0;
-      let shift = 0;
-      let byte;
-      do {
-        byte = this.buffer[this.offset++];
-        result |= (byte & 127) << shift;
-        shift += 7;
-      } while (byte & 128);
-      if (shift < 32 && byte & 64) {
-        result |= -(1 << shift);
-      }
-      return result;
-    }
-    readVarInt64() {
-      let result = 0n;
-      let shift = 0n;
-      let byte;
-      do {
-        byte = this.buffer[this.offset++];
-        result |= BigInt(byte & 127) << shift;
-        shift += 7n;
-      } while (byte & 128);
-      if (shift < 64n && byte & 64) {
-        result |= -(1n << shift);
-      }
-      return result;
-    }
-    readString(length) {
-      const bytes = this.buffer.slice(this.offset, this.offset + length);
-      this.offset += length;
-      return new TextDecoder().decode(bytes);
-    }
-    readBytes(length) {
-      const bytes = this.buffer.slice(this.offset, this.offset + length);
-      this.offset += length;
-      return bytes;
-    }
-  };
-
-  // src/CustomSectionBuilder.ts
-  var CustomSectionBuilder = class {
-    constructor(name, data) {
-      this.name = name;
-      this.type = SectionType.createCustom(name);
-      this._data = data || new Uint8Array(0);
-    }
-    write(writer) {
-      const sectionWriter = new BinaryWriter();
-      sectionWriter.writeVarUInt32(this.name.length);
-      sectionWriter.writeString(this.name);
-      if (this._data.length > 0) {
-        sectionWriter.writeBytes(this._data);
-      }
-      writer.writeVarUInt7(0);
-      writer.writeVarUInt32(sectionWriter.length);
-      writer.writeBytes(sectionWriter);
-    }
-    toBytes() {
-      const buffer = new BinaryWriter();
-      this.write(buffer);
-      return buffer.toArray();
-    }
-  };
-
-  // src/FunctionParameterBuilder.ts
-  var FunctionParameterBuilder = class {
-    constructor(valueType, index) {
-      this.name = null;
-      this.valueType = valueType;
-      this.index = index;
-    }
-    withName(name) {
-      this.name = name;
-      return this;
-    }
-  };
-
-  // src/LocalBuilder.ts
-  var LocalBuilder = class {
-    constructor(valueType, name, index, count) {
-      this.index = index;
-      this.valueType = valueType;
-      this.name = name;
-      this.count = count;
-    }
-    write(writer) {
-      writer.writeVarUInt32(this.count);
-      writer.writeVarInt7(this.valueType.value);
-    }
-    toBytes() {
-      const buffer = new BinaryWriter();
-      this.write(buffer);
-      return buffer.toArray();
-    }
-  };
-
-  // src/GlobalType.ts
-  var GlobalType = class {
-    constructor(valueType, mutable) {
-      this._valueType = valueType;
-      this._mutable = mutable;
-    }
-    get valueType() {
-      return this._valueType;
-    }
-    get mutable() {
-      return this._mutable;
-    }
-    write(writer) {
-      writer.writeVarInt7(this._valueType.value);
-      writer.writeVarUInt1(this._mutable ? 1 : 0);
-    }
-    toBytes() {
-      const buffer = new BinaryWriter();
-      this.write(buffer);
-      return buffer.toArray();
-    }
-  };
-
-  // src/GlobalBuilder.ts
-  var GlobalBuilder = class _GlobalBuilder {
-    constructor(moduleBuilder, valueType, mutable, index) {
-      this._initExpressionEmitter = null;
-      this.name = null;
-      this._moduleBuilder = moduleBuilder;
-      this._globalType = new GlobalType(valueType, mutable);
-      this._index = index;
-    }
-    withName(name) {
-      this.name = name;
-      return this;
-    }
-    get globalType() {
-      return this._globalType;
-    }
-    get valueType() {
-      return this._globalType.valueType;
-    }
-    createInitEmitter(callback) {
-      if (this._initExpressionEmitter) {
-        throw new Error("Initialization expression emitter has already been created.");
-      }
-      this._initExpressionEmitter = new InitExpressionEmitter(
-        "Global" /* Global */,
-        this.valueType
-      );
-      if (callback) {
-        callback(this._initExpressionEmitter);
-        this._initExpressionEmitter.end();
-      }
-      return this._initExpressionEmitter;
-    }
-    value(value) {
-      if (typeof value === "function") {
-        this.createInitEmitter(value);
-      } else if (value instanceof _GlobalBuilder) {
-        this.createInitEmitter((asm) => {
-          asm.get_global(value);
-        });
-      } else if (typeof value === "number" || typeof value === "bigint") {
-        this.createInitEmitter((asm) => {
-          const vt = this.valueType;
-          if (vt === ValueType.Int32) {
-            asm.const_i32(Number(value));
-          } else if (vt === ValueType.Int64) {
-            asm.const_i64(BigInt(value));
-          } else if (vt === ValueType.Float32) {
-            asm.const_f32(Number(value));
-          } else if (vt === ValueType.Float64) {
-            asm.const_f64(Number(value));
-          } else {
-            throw new Error(`Unsupported global value type: ${vt.name}`);
-          }
-        });
-      } else {
-        throw new Error("Unsupported global value.");
-      }
-    }
-    withExport(name) {
-      this._moduleBuilder.exportGlobal(this, name);
-      return this;
-    }
-    write(writer) {
-      if (!this._initExpressionEmitter) {
-        throw new Error("The initialization expression was not defined.");
-      }
-      this._globalType.write(writer);
-      this._initExpressionEmitter.write(writer);
-    }
-    toBytes() {
-      const buffer = new BinaryWriter();
-      this.write(buffer);
-      return buffer.toArray();
-    }
-  };
-
-  // src/ImportBuilder.ts
-  var ImportBuilder = class {
-    constructor(moduleName, fieldName, externalKind, data, index) {
-      this.moduleName = moduleName;
-      this.fieldName = fieldName;
-      this.externalKind = externalKind;
-      this.data = data;
-      this.index = index;
-    }
-    write(writer) {
-      writer.writeVarUInt32(this.moduleName.length);
-      writer.writeString(this.moduleName);
-      writer.writeVarUInt32(this.fieldName.length);
-      writer.writeString(this.fieldName);
-      writer.writeUInt8(this.externalKind.value);
-      switch (this.externalKind) {
-        case ExternalKind.Function:
-          writer.writeVarUInt32(this.data.index);
-          break;
-        case ExternalKind.Global:
-        case ExternalKind.Memory:
-        case ExternalKind.Table:
-          this.data.write(writer);
-          break;
-        default:
-          throw new Error("Unknown external kind.");
-      }
-    }
-    toBytes() {
-      const buffer = new BinaryWriter();
-      this.write(buffer);
-      return buffer.toArray();
-    }
-  };
-
-  // src/ImmediateEncoder.ts
-  var ImmediateEncoder = class {
-    static encodeBlockSignature(writer, blockType) {
-      writer.writeVarInt7(blockType.value);
-    }
-    static encodeRelativeDepth(writer, label, depth) {
-      const relativeDepth = depth - label.block.depth;
-      writer.writeVarInt7(relativeDepth);
-    }
-    static encodeBranchTable(writer, defaultLabel, labels) {
-      writer.writeVarUInt32(labels.length);
-      labels.forEach((x) => {
-        writer.writeVarUInt32(x);
-      });
-      writer.writeVarUInt32(defaultLabel);
-    }
-    static encodeFunction(writer, func) {
-      let functionIndex = 0;
-      if (func instanceof ImportBuilder) {
-        functionIndex = func.index;
-      } else if (typeof func === "object" && func !== null && "_index" in func) {
-        functionIndex = func._index;
-      } else if (typeof func === "number") {
-        functionIndex = func;
-      } else {
-        throw new Error(
-          "Function argument must either be the index of the function or a FunctionBuilder."
-        );
-      }
-      writer.writeVarUInt32(functionIndex);
-    }
-    static encodeIndirectFunction(writer, funcType) {
-      writer.writeVarUInt32(funcType.index);
-      writer.writeVarUInt1(0);
-    }
-    static encodeLocal(writer, local) {
-      Arg.notNull("local", local);
-      let localIndex = 0;
-      if (local instanceof LocalBuilder) {
-        localIndex = local.index;
-      } else if (local instanceof FunctionParameterBuilder) {
-        localIndex = local.index;
-      } else if (typeof local === "number") {
-        localIndex = local;
-      } else {
-        throw new Error(
-          "Local argument must either be the index of the local variable or a LocalBuilder."
-        );
-      }
-      writer.writeVarUInt32(localIndex);
-    }
-    static encodeGlobal(writer, global) {
-      Arg.notNull("global", global);
-      let globalIndex = 0;
-      if (global instanceof GlobalBuilder) {
-        globalIndex = global._index;
-      } else if (global instanceof ImportBuilder) {
-        if (global.externalKind !== ExternalKind.Global) {
-          throw new Error("Import external kind must be global.");
-        }
-        globalIndex = global.index;
-      } else if (typeof global === "number") {
-        globalIndex = global;
-      } else {
-        throw new Error(
-          "Global argument must either be the index of the global variable, GlobalBuilder, or an ImportBuilder."
-        );
-      }
-      writer.writeVarUInt32(globalIndex);
-    }
-    static encodeFloat32(writer, value) {
-      writer.writeFloat32(value);
-    }
-    static encodeFloat64(writer, value) {
-      writer.writeFloat64(value);
-    }
-    static encodeVarInt32(writer, value) {
-      writer.writeVarInt32(value);
-    }
-    static encodeVarInt64(writer, value) {
-      writer.writeVarInt64(value);
-    }
-    static encodeVarUInt32(writer, value) {
-      writer.writeVarUInt32(value);
-    }
-    static encodeVarUInt1(writer, value) {
-      writer.writeVarUInt1(value);
-    }
-    static encodeMemoryImmediate(writer, alignment, offset) {
-      writer.writeVarUInt32(alignment);
-      writer.writeVarUInt32(offset);
-    }
-    static encodeV128Const(writer, bytes) {
-      for (let i = 0; i < 16; i++) {
-        writer.writeByte(bytes[i]);
-      }
-    }
-    static encodeLaneIndex(writer, index) {
-      writer.writeByte(index);
-    }
-    static encodeShuffleMask(writer, mask) {
-      for (let i = 0; i < 16; i++) {
-        writer.writeByte(mask[i]);
-      }
-    }
-  };
-
-  // src/Immediate.ts
-  var Immediate = class _Immediate {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    constructor(type, values) {
-      Arg.notNull("type", type);
-      Arg.notNull("values", values);
-      this.type = type;
-      this.values = values;
-    }
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    static createBlockSignature(blockType) {
-      return new _Immediate("BlockSignature" /* BlockSignature */, [blockType]);
-    }
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    static createBranchTable(defaultLabel, labels, depth) {
-      const relativeDepths = labels.map((x) => {
-        return depth - x.block.depth;
-      });
-      const defaultLabelDepth = depth - defaultLabel.block.depth;
-      return new _Immediate("BranchTable" /* BranchTable */, [defaultLabelDepth, relativeDepths]);
-    }
-    static createFloat32(value) {
-      return new _Immediate("Float32" /* Float32 */, [value]);
-    }
-    static createFloat64(value) {
-      return new _Immediate("Float64" /* Float64 */, [value]);
-    }
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    static createFunction(functionBuilder) {
-      return new _Immediate("Function" /* Function */, [functionBuilder]);
-    }
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    static createGlobal(globalBuilder) {
-      return new _Immediate("Global" /* Global */, [globalBuilder]);
-    }
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    static createIndirectFunction(functionTypeBuilder) {
-      return new _Immediate("IndirectFunction" /* IndirectFunction */, [functionTypeBuilder]);
-    }
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    static createLocal(local) {
-      return new _Immediate("Local" /* Local */, [local]);
-    }
-    static createMemoryImmediate(alignment, offset) {
-      return new _Immediate("MemoryImmediate" /* MemoryImmediate */, [alignment, offset]);
-    }
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    static createRelativeDepth(label, depth) {
-      return new _Immediate("RelativeDepth" /* RelativeDepth */, [label, depth]);
-    }
-    static createVarUInt1(value) {
-      return new _Immediate("VarUInt1" /* VarUInt1 */, [value]);
-    }
-    static createVarInt32(value) {
-      return new _Immediate("VarInt32" /* VarInt32 */, [value]);
-    }
-    static createVarInt64(value) {
-      return new _Immediate("VarInt64" /* VarInt64 */, [value]);
-    }
-    static createVarUInt32(value) {
-      return new _Immediate("VarUInt32" /* VarUInt32 */, [value]);
-    }
-    static createV128Const(bytes) {
-      if (bytes.length !== 16) {
-        throw new Error("V128 constant must be exactly 16 bytes.");
-      }
-      return new _Immediate("V128Const" /* V128Const */, [bytes]);
-    }
-    static createLaneIndex(index) {
-      return new _Immediate("LaneIndex" /* LaneIndex */, [index]);
-    }
-    static createShuffleMask(mask) {
-      if (mask.length !== 16) {
-        throw new Error("Shuffle mask must be exactly 16 bytes.");
-      }
-      return new _Immediate("ShuffleMask" /* ShuffleMask */, [mask]);
-    }
-    writeBytes(writer) {
-      switch (this.type) {
-        case "BlockSignature" /* BlockSignature */:
-          ImmediateEncoder.encodeBlockSignature(writer, this.values[0]);
-          break;
-        case "BranchTable" /* BranchTable */:
-          ImmediateEncoder.encodeBranchTable(writer, this.values[0], this.values[1]);
-          break;
-        case "Float32" /* Float32 */:
-          ImmediateEncoder.encodeFloat32(writer, this.values[0]);
-          break;
-        case "Float64" /* Float64 */:
-          ImmediateEncoder.encodeFloat64(writer, this.values[0]);
-          break;
-        case "Function" /* Function */:
-          ImmediateEncoder.encodeFunction(writer, this.values[0]);
-          break;
-        case "Global" /* Global */:
-          ImmediateEncoder.encodeGlobal(writer, this.values[0]);
-          break;
-        case "IndirectFunction" /* IndirectFunction */:
-          ImmediateEncoder.encodeIndirectFunction(writer, this.values[0]);
-          break;
-        case "Local" /* Local */:
-          ImmediateEncoder.encodeLocal(writer, this.values[0]);
-          break;
-        case "MemoryImmediate" /* MemoryImmediate */:
-          ImmediateEncoder.encodeMemoryImmediate(writer, this.values[0], this.values[1]);
-          break;
-        case "RelativeDepth" /* RelativeDepth */:
-          ImmediateEncoder.encodeRelativeDepth(writer, this.values[0], this.values[1]);
-          break;
-        case "VarInt32" /* VarInt32 */:
-          ImmediateEncoder.encodeVarInt32(writer, this.values[0]);
-          break;
-        case "VarInt64" /* VarInt64 */:
-          ImmediateEncoder.encodeVarInt64(writer, this.values[0]);
-          break;
-        case "VarUInt1" /* VarUInt1 */:
-          ImmediateEncoder.encodeVarUInt1(writer, this.values[0]);
-          break;
-        case "VarUInt32" /* VarUInt32 */:
-          ImmediateEncoder.encodeVarUInt32(writer, this.values[0]);
-          break;
-        case "V128Const" /* V128Const */:
-          ImmediateEncoder.encodeV128Const(writer, this.values[0]);
-          break;
-        case "LaneIndex" /* LaneIndex */:
-          ImmediateEncoder.encodeLaneIndex(writer, this.values[0]);
-          break;
-        case "ShuffleMask" /* ShuffleMask */:
-          ImmediateEncoder.encodeShuffleMask(writer, this.values[0]);
-          break;
-        default:
-          throw new Error("Cannot encode unknown operand type.");
-      }
-    }
-    toBytes() {
-      const buffer = new BinaryWriter();
-      this.writeBytes(buffer);
-      return buffer.toArray();
-    }
-  };
-
-  // src/Instruction.ts
-  var Instruction = class {
-    constructor(opCode, immediate) {
-      Arg.notNull("opCode", opCode);
-      this.opCode = opCode;
-      this.immediate = immediate;
-    }
-    write(writer) {
-      if (this.opCode.prefix !== void 0) {
-        writer.writeByte(this.opCode.prefix);
-        writer.writeVarUInt32(this.opCode.value);
-      } else {
-        writer.writeByte(this.opCode.value);
-      }
-      if (this.immediate) {
-        this.immediate.writeBytes(writer);
-      }
-    }
-    toBytes() {
-      const buffer = new BinaryWriter();
-      this.write(buffer);
-      return buffer.toArray();
-    }
-  };
-
-  // src/LabelBuilder.ts
-  var LabelBuilder = class {
-    constructor() {
-      this.resolved = false;
-      this.block = null;
-    }
-    get isResolved() {
-      return this.resolved;
-    }
-    resolve(block) {
-      this.block = block;
-      this.resolved = true;
-    }
-    reference(block) {
-      if (this.isResolved) {
-        throw new Error("Cannot add a reference to a label that has been resolved.");
-      }
-      this.block = block;
     }
   };
 
@@ -1362,6 +481,35 @@ var webasmPlayground = (() => {
       mnemonic: "else",
       stackBehavior: "None"
     },
+    "try": {
+      value: 6,
+      mnemonic: "try",
+      immediate: "BlockSignature",
+      controlFlow: "Push",
+      stackBehavior: "None",
+      feature: "exception-handling"
+    },
+    "catch": {
+      value: 7,
+      mnemonic: "catch",
+      immediate: "VarUInt32",
+      stackBehavior: "None",
+      feature: "exception-handling"
+    },
+    "throw": {
+      value: 8,
+      mnemonic: "throw",
+      immediate: "VarUInt32",
+      stackBehavior: "None",
+      feature: "exception-handling"
+    },
+    "rethrow": {
+      value: 9,
+      mnemonic: "rethrow",
+      immediate: "VarUInt32",
+      stackBehavior: "None",
+      feature: "exception-handling"
+    },
     "end": {
       value: 11,
       mnemonic: "end",
@@ -1397,17 +545,42 @@ var webasmPlayground = (() => {
       value: 16,
       mnemonic: "call",
       immediate: "Function",
-      stackBehavior: "PopPush",
-      popOperands: [],
-      pushOperands: []
+      stackBehavior: "PopPush"
     },
     "call_indirect": {
       value: 17,
       mnemonic: "call_indirect",
       immediate: "IndirectFunction",
       stackBehavior: "PopPush",
+      popOperands: ["Int32"]
+    },
+    "return_call": {
+      value: 18,
+      mnemonic: "return_call",
+      immediate: "Function",
+      stackBehavior: "PopPush",
+      feature: "tail-call"
+    },
+    "return_call_indirect": {
+      value: 19,
+      mnemonic: "return_call_indirect",
+      immediate: "IndirectFunction",
+      stackBehavior: "PopPush",
       popOperands: ["Int32"],
-      pushOperands: []
+      feature: "tail-call"
+    },
+    "delegate": {
+      value: 24,
+      mnemonic: "delegate",
+      immediate: "VarUInt32",
+      stackBehavior: "None",
+      feature: "exception-handling"
+    },
+    "catch_all": {
+      value: 25,
+      mnemonic: "catch_all",
+      stackBehavior: "None",
+      feature: "exception-handling"
     },
     "drop": {
       value: 26,
@@ -1419,7 +592,7 @@ var webasmPlayground = (() => {
       value: 27,
       mnemonic: "select",
       stackBehavior: "PopPush",
-      popOperands: ["Int32", "Any", "Any"],
+      popOperands: ["Any", "Any", "Int32"],
       pushOperands: ["Any"]
     },
     "get_local": {
@@ -4934,9 +4107,1738 @@ var webasmPlayground = (() => {
       pushOperands: ["V128"],
       prefix: 253,
       feature: "simd"
+    },
+    "memory_atomic_notify": {
+      value: 0,
+      mnemonic: "memory.atomic.notify",
+      immediate: "MemoryImmediate",
+      stackBehavior: "PopPush",
+      popOperands: ["Int32", "Int32"],
+      pushOperands: ["Int32"],
+      prefix: 254,
+      feature: "threads"
+    },
+    "memory_atomic_wait32": {
+      value: 1,
+      mnemonic: "memory.atomic.wait32",
+      immediate: "MemoryImmediate",
+      stackBehavior: "PopPush",
+      popOperands: ["Int32", "Int32", "Int64"],
+      pushOperands: ["Int32"],
+      prefix: 254,
+      feature: "threads"
+    },
+    "memory_atomic_wait64": {
+      value: 2,
+      mnemonic: "memory.atomic.wait64",
+      immediate: "MemoryImmediate",
+      stackBehavior: "PopPush",
+      popOperands: ["Int32", "Int64", "Int64"],
+      pushOperands: ["Int32"],
+      prefix: 254,
+      feature: "threads"
+    },
+    "atomic_fence": {
+      value: 3,
+      mnemonic: "atomic.fence",
+      immediate: "VarUInt1",
+      stackBehavior: "None",
+      prefix: 254,
+      feature: "threads"
+    },
+    "i32_atomic_load": {
+      value: 16,
+      mnemonic: "i32.atomic.load",
+      immediate: "MemoryImmediate",
+      stackBehavior: "PopPush",
+      popOperands: ["Int32"],
+      pushOperands: ["Int32"],
+      prefix: 254,
+      feature: "threads"
+    },
+    "i64_atomic_load": {
+      value: 17,
+      mnemonic: "i64.atomic.load",
+      immediate: "MemoryImmediate",
+      stackBehavior: "PopPush",
+      popOperands: ["Int32"],
+      pushOperands: ["Int64"],
+      prefix: 254,
+      feature: "threads"
+    },
+    "i32_atomic_load8_u": {
+      value: 18,
+      mnemonic: "i32.atomic.load8_u",
+      immediate: "MemoryImmediate",
+      stackBehavior: "PopPush",
+      popOperands: ["Int32"],
+      pushOperands: ["Int32"],
+      prefix: 254,
+      feature: "threads"
+    },
+    "i32_atomic_load16_u": {
+      value: 19,
+      mnemonic: "i32.atomic.load16_u",
+      immediate: "MemoryImmediate",
+      stackBehavior: "PopPush",
+      popOperands: ["Int32"],
+      pushOperands: ["Int32"],
+      prefix: 254,
+      feature: "threads"
+    },
+    "i64_atomic_load8_u": {
+      value: 20,
+      mnemonic: "i64.atomic.load8_u",
+      immediate: "MemoryImmediate",
+      stackBehavior: "PopPush",
+      popOperands: ["Int32"],
+      pushOperands: ["Int64"],
+      prefix: 254,
+      feature: "threads"
+    },
+    "i64_atomic_load16_u": {
+      value: 21,
+      mnemonic: "i64.atomic.load16_u",
+      immediate: "MemoryImmediate",
+      stackBehavior: "PopPush",
+      popOperands: ["Int32"],
+      pushOperands: ["Int64"],
+      prefix: 254,
+      feature: "threads"
+    },
+    "i64_atomic_load32_u": {
+      value: 22,
+      mnemonic: "i64.atomic.load32_u",
+      immediate: "MemoryImmediate",
+      stackBehavior: "PopPush",
+      popOperands: ["Int32"],
+      pushOperands: ["Int64"],
+      prefix: 254,
+      feature: "threads"
+    },
+    "i32_atomic_store": {
+      value: 23,
+      mnemonic: "i32.atomic.store",
+      immediate: "MemoryImmediate",
+      stackBehavior: "Pop",
+      popOperands: ["Int32", "Int32"],
+      prefix: 254,
+      feature: "threads"
+    },
+    "i64_atomic_store": {
+      value: 24,
+      mnemonic: "i64.atomic.store",
+      immediate: "MemoryImmediate",
+      stackBehavior: "Pop",
+      popOperands: ["Int32", "Int64"],
+      prefix: 254,
+      feature: "threads"
+    },
+    "i32_atomic_store8": {
+      value: 25,
+      mnemonic: "i32.atomic.store8",
+      immediate: "MemoryImmediate",
+      stackBehavior: "Pop",
+      popOperands: ["Int32", "Int32"],
+      prefix: 254,
+      feature: "threads"
+    },
+    "i32_atomic_store16": {
+      value: 26,
+      mnemonic: "i32.atomic.store16",
+      immediate: "MemoryImmediate",
+      stackBehavior: "Pop",
+      popOperands: ["Int32", "Int32"],
+      prefix: 254,
+      feature: "threads"
+    },
+    "i64_atomic_store8": {
+      value: 27,
+      mnemonic: "i64.atomic.store8",
+      immediate: "MemoryImmediate",
+      stackBehavior: "Pop",
+      popOperands: ["Int32", "Int64"],
+      prefix: 254,
+      feature: "threads"
+    },
+    "i64_atomic_store16": {
+      value: 28,
+      mnemonic: "i64.atomic.store16",
+      immediate: "MemoryImmediate",
+      stackBehavior: "Pop",
+      popOperands: ["Int32", "Int64"],
+      prefix: 254,
+      feature: "threads"
+    },
+    "i64_atomic_store32": {
+      value: 29,
+      mnemonic: "i64.atomic.store32",
+      immediate: "MemoryImmediate",
+      stackBehavior: "Pop",
+      popOperands: ["Int32", "Int64"],
+      prefix: 254,
+      feature: "threads"
+    },
+    "i32_atomic_rmw_add": {
+      value: 30,
+      mnemonic: "i32.atomic.rmw.add",
+      immediate: "MemoryImmediate",
+      stackBehavior: "PopPush",
+      popOperands: ["Int32", "Int32"],
+      pushOperands: ["Int32"],
+      prefix: 254,
+      feature: "threads"
+    },
+    "i64_atomic_rmw_add": {
+      value: 31,
+      mnemonic: "i64.atomic.rmw.add",
+      immediate: "MemoryImmediate",
+      stackBehavior: "PopPush",
+      popOperands: ["Int32", "Int64"],
+      pushOperands: ["Int64"],
+      prefix: 254,
+      feature: "threads"
+    },
+    "i32_atomic_rmw8_add_u": {
+      value: 32,
+      mnemonic: "i32.atomic.rmw8.add_u",
+      immediate: "MemoryImmediate",
+      stackBehavior: "PopPush",
+      popOperands: ["Int32", "Int32"],
+      pushOperands: ["Int32"],
+      prefix: 254,
+      feature: "threads"
+    },
+    "i32_atomic_rmw16_add_u": {
+      value: 33,
+      mnemonic: "i32.atomic.rmw16.add_u",
+      immediate: "MemoryImmediate",
+      stackBehavior: "PopPush",
+      popOperands: ["Int32", "Int32"],
+      pushOperands: ["Int32"],
+      prefix: 254,
+      feature: "threads"
+    },
+    "i64_atomic_rmw8_add_u": {
+      value: 34,
+      mnemonic: "i64.atomic.rmw8.add_u",
+      immediate: "MemoryImmediate",
+      stackBehavior: "PopPush",
+      popOperands: ["Int32", "Int64"],
+      pushOperands: ["Int64"],
+      prefix: 254,
+      feature: "threads"
+    },
+    "i64_atomic_rmw16_add_u": {
+      value: 35,
+      mnemonic: "i64.atomic.rmw16.add_u",
+      immediate: "MemoryImmediate",
+      stackBehavior: "PopPush",
+      popOperands: ["Int32", "Int64"],
+      pushOperands: ["Int64"],
+      prefix: 254,
+      feature: "threads"
+    },
+    "i64_atomic_rmw32_add_u": {
+      value: 36,
+      mnemonic: "i64.atomic.rmw32.add_u",
+      immediate: "MemoryImmediate",
+      stackBehavior: "PopPush",
+      popOperands: ["Int32", "Int64"],
+      pushOperands: ["Int64"],
+      prefix: 254,
+      feature: "threads"
+    },
+    "i32_atomic_rmw_sub": {
+      value: 37,
+      mnemonic: "i32.atomic.rmw.sub",
+      immediate: "MemoryImmediate",
+      stackBehavior: "PopPush",
+      popOperands: ["Int32", "Int32"],
+      pushOperands: ["Int32"],
+      prefix: 254,
+      feature: "threads"
+    },
+    "i64_atomic_rmw_sub": {
+      value: 38,
+      mnemonic: "i64.atomic.rmw.sub",
+      immediate: "MemoryImmediate",
+      stackBehavior: "PopPush",
+      popOperands: ["Int32", "Int64"],
+      pushOperands: ["Int64"],
+      prefix: 254,
+      feature: "threads"
+    },
+    "i32_atomic_rmw8_sub_u": {
+      value: 39,
+      mnemonic: "i32.atomic.rmw8.sub_u",
+      immediate: "MemoryImmediate",
+      stackBehavior: "PopPush",
+      popOperands: ["Int32", "Int32"],
+      pushOperands: ["Int32"],
+      prefix: 254,
+      feature: "threads"
+    },
+    "i32_atomic_rmw16_sub_u": {
+      value: 40,
+      mnemonic: "i32.atomic.rmw16.sub_u",
+      immediate: "MemoryImmediate",
+      stackBehavior: "PopPush",
+      popOperands: ["Int32", "Int32"],
+      pushOperands: ["Int32"],
+      prefix: 254,
+      feature: "threads"
+    },
+    "i64_atomic_rmw8_sub_u": {
+      value: 41,
+      mnemonic: "i64.atomic.rmw8.sub_u",
+      immediate: "MemoryImmediate",
+      stackBehavior: "PopPush",
+      popOperands: ["Int32", "Int64"],
+      pushOperands: ["Int64"],
+      prefix: 254,
+      feature: "threads"
+    },
+    "i64_atomic_rmw16_sub_u": {
+      value: 42,
+      mnemonic: "i64.atomic.rmw16.sub_u",
+      immediate: "MemoryImmediate",
+      stackBehavior: "PopPush",
+      popOperands: ["Int32", "Int64"],
+      pushOperands: ["Int64"],
+      prefix: 254,
+      feature: "threads"
+    },
+    "i64_atomic_rmw32_sub_u": {
+      value: 43,
+      mnemonic: "i64.atomic.rmw32.sub_u",
+      immediate: "MemoryImmediate",
+      stackBehavior: "PopPush",
+      popOperands: ["Int32", "Int64"],
+      pushOperands: ["Int64"],
+      prefix: 254,
+      feature: "threads"
+    },
+    "i32_atomic_rmw_and": {
+      value: 44,
+      mnemonic: "i32.atomic.rmw.and",
+      immediate: "MemoryImmediate",
+      stackBehavior: "PopPush",
+      popOperands: ["Int32", "Int32"],
+      pushOperands: ["Int32"],
+      prefix: 254,
+      feature: "threads"
+    },
+    "i64_atomic_rmw_and": {
+      value: 45,
+      mnemonic: "i64.atomic.rmw.and",
+      immediate: "MemoryImmediate",
+      stackBehavior: "PopPush",
+      popOperands: ["Int32", "Int64"],
+      pushOperands: ["Int64"],
+      prefix: 254,
+      feature: "threads"
+    },
+    "i32_atomic_rmw8_and_u": {
+      value: 46,
+      mnemonic: "i32.atomic.rmw8.and_u",
+      immediate: "MemoryImmediate",
+      stackBehavior: "PopPush",
+      popOperands: ["Int32", "Int32"],
+      pushOperands: ["Int32"],
+      prefix: 254,
+      feature: "threads"
+    },
+    "i32_atomic_rmw16_and_u": {
+      value: 47,
+      mnemonic: "i32.atomic.rmw16.and_u",
+      immediate: "MemoryImmediate",
+      stackBehavior: "PopPush",
+      popOperands: ["Int32", "Int32"],
+      pushOperands: ["Int32"],
+      prefix: 254,
+      feature: "threads"
+    },
+    "i64_atomic_rmw8_and_u": {
+      value: 48,
+      mnemonic: "i64.atomic.rmw8.and_u",
+      immediate: "MemoryImmediate",
+      stackBehavior: "PopPush",
+      popOperands: ["Int32", "Int64"],
+      pushOperands: ["Int64"],
+      prefix: 254,
+      feature: "threads"
+    },
+    "i64_atomic_rmw16_and_u": {
+      value: 49,
+      mnemonic: "i64.atomic.rmw16.and_u",
+      immediate: "MemoryImmediate",
+      stackBehavior: "PopPush",
+      popOperands: ["Int32", "Int64"],
+      pushOperands: ["Int64"],
+      prefix: 254,
+      feature: "threads"
+    },
+    "i64_atomic_rmw32_and_u": {
+      value: 50,
+      mnemonic: "i64.atomic.rmw32.and_u",
+      immediate: "MemoryImmediate",
+      stackBehavior: "PopPush",
+      popOperands: ["Int32", "Int64"],
+      pushOperands: ["Int64"],
+      prefix: 254,
+      feature: "threads"
+    },
+    "i32_atomic_rmw_or": {
+      value: 51,
+      mnemonic: "i32.atomic.rmw.or",
+      immediate: "MemoryImmediate",
+      stackBehavior: "PopPush",
+      popOperands: ["Int32", "Int32"],
+      pushOperands: ["Int32"],
+      prefix: 254,
+      feature: "threads"
+    },
+    "i64_atomic_rmw_or": {
+      value: 52,
+      mnemonic: "i64.atomic.rmw.or",
+      immediate: "MemoryImmediate",
+      stackBehavior: "PopPush",
+      popOperands: ["Int32", "Int64"],
+      pushOperands: ["Int64"],
+      prefix: 254,
+      feature: "threads"
+    },
+    "i32_atomic_rmw8_or_u": {
+      value: 53,
+      mnemonic: "i32.atomic.rmw8.or_u",
+      immediate: "MemoryImmediate",
+      stackBehavior: "PopPush",
+      popOperands: ["Int32", "Int32"],
+      pushOperands: ["Int32"],
+      prefix: 254,
+      feature: "threads"
+    },
+    "i32_atomic_rmw16_or_u": {
+      value: 54,
+      mnemonic: "i32.atomic.rmw16.or_u",
+      immediate: "MemoryImmediate",
+      stackBehavior: "PopPush",
+      popOperands: ["Int32", "Int32"],
+      pushOperands: ["Int32"],
+      prefix: 254,
+      feature: "threads"
+    },
+    "i64_atomic_rmw8_or_u": {
+      value: 55,
+      mnemonic: "i64.atomic.rmw8.or_u",
+      immediate: "MemoryImmediate",
+      stackBehavior: "PopPush",
+      popOperands: ["Int32", "Int64"],
+      pushOperands: ["Int64"],
+      prefix: 254,
+      feature: "threads"
+    },
+    "i64_atomic_rmw16_or_u": {
+      value: 56,
+      mnemonic: "i64.atomic.rmw16.or_u",
+      immediate: "MemoryImmediate",
+      stackBehavior: "PopPush",
+      popOperands: ["Int32", "Int64"],
+      pushOperands: ["Int64"],
+      prefix: 254,
+      feature: "threads"
+    },
+    "i64_atomic_rmw32_or_u": {
+      value: 57,
+      mnemonic: "i64.atomic.rmw32.or_u",
+      immediate: "MemoryImmediate",
+      stackBehavior: "PopPush",
+      popOperands: ["Int32", "Int64"],
+      pushOperands: ["Int64"],
+      prefix: 254,
+      feature: "threads"
+    },
+    "i32_atomic_rmw_xor": {
+      value: 58,
+      mnemonic: "i32.atomic.rmw.xor",
+      immediate: "MemoryImmediate",
+      stackBehavior: "PopPush",
+      popOperands: ["Int32", "Int32"],
+      pushOperands: ["Int32"],
+      prefix: 254,
+      feature: "threads"
+    },
+    "i64_atomic_rmw_xor": {
+      value: 59,
+      mnemonic: "i64.atomic.rmw.xor",
+      immediate: "MemoryImmediate",
+      stackBehavior: "PopPush",
+      popOperands: ["Int32", "Int64"],
+      pushOperands: ["Int64"],
+      prefix: 254,
+      feature: "threads"
+    },
+    "i32_atomic_rmw8_xor_u": {
+      value: 60,
+      mnemonic: "i32.atomic.rmw8.xor_u",
+      immediate: "MemoryImmediate",
+      stackBehavior: "PopPush",
+      popOperands: ["Int32", "Int32"],
+      pushOperands: ["Int32"],
+      prefix: 254,
+      feature: "threads"
+    },
+    "i32_atomic_rmw16_xor_u": {
+      value: 61,
+      mnemonic: "i32.atomic.rmw16.xor_u",
+      immediate: "MemoryImmediate",
+      stackBehavior: "PopPush",
+      popOperands: ["Int32", "Int32"],
+      pushOperands: ["Int32"],
+      prefix: 254,
+      feature: "threads"
+    },
+    "i64_atomic_rmw8_xor_u": {
+      value: 62,
+      mnemonic: "i64.atomic.rmw8.xor_u",
+      immediate: "MemoryImmediate",
+      stackBehavior: "PopPush",
+      popOperands: ["Int32", "Int64"],
+      pushOperands: ["Int64"],
+      prefix: 254,
+      feature: "threads"
+    },
+    "i64_atomic_rmw16_xor_u": {
+      value: 63,
+      mnemonic: "i64.atomic.rmw16.xor_u",
+      immediate: "MemoryImmediate",
+      stackBehavior: "PopPush",
+      popOperands: ["Int32", "Int64"],
+      pushOperands: ["Int64"],
+      prefix: 254,
+      feature: "threads"
+    },
+    "i64_atomic_rmw32_xor_u": {
+      value: 64,
+      mnemonic: "i64.atomic.rmw32.xor_u",
+      immediate: "MemoryImmediate",
+      stackBehavior: "PopPush",
+      popOperands: ["Int32", "Int64"],
+      pushOperands: ["Int64"],
+      prefix: 254,
+      feature: "threads"
+    },
+    "i32_atomic_rmw_xchg": {
+      value: 65,
+      mnemonic: "i32.atomic.rmw.xchg",
+      immediate: "MemoryImmediate",
+      stackBehavior: "PopPush",
+      popOperands: ["Int32", "Int32"],
+      pushOperands: ["Int32"],
+      prefix: 254,
+      feature: "threads"
+    },
+    "i64_atomic_rmw_xchg": {
+      value: 66,
+      mnemonic: "i64.atomic.rmw.xchg",
+      immediate: "MemoryImmediate",
+      stackBehavior: "PopPush",
+      popOperands: ["Int32", "Int64"],
+      pushOperands: ["Int64"],
+      prefix: 254,
+      feature: "threads"
+    },
+    "i32_atomic_rmw8_xchg_u": {
+      value: 67,
+      mnemonic: "i32.atomic.rmw8.xchg_u",
+      immediate: "MemoryImmediate",
+      stackBehavior: "PopPush",
+      popOperands: ["Int32", "Int32"],
+      pushOperands: ["Int32"],
+      prefix: 254,
+      feature: "threads"
+    },
+    "i32_atomic_rmw16_xchg_u": {
+      value: 68,
+      mnemonic: "i32.atomic.rmw16.xchg_u",
+      immediate: "MemoryImmediate",
+      stackBehavior: "PopPush",
+      popOperands: ["Int32", "Int32"],
+      pushOperands: ["Int32"],
+      prefix: 254,
+      feature: "threads"
+    },
+    "i64_atomic_rmw8_xchg_u": {
+      value: 69,
+      mnemonic: "i64.atomic.rmw8.xchg_u",
+      immediate: "MemoryImmediate",
+      stackBehavior: "PopPush",
+      popOperands: ["Int32", "Int64"],
+      pushOperands: ["Int64"],
+      prefix: 254,
+      feature: "threads"
+    },
+    "i64_atomic_rmw16_xchg_u": {
+      value: 70,
+      mnemonic: "i64.atomic.rmw16.xchg_u",
+      immediate: "MemoryImmediate",
+      stackBehavior: "PopPush",
+      popOperands: ["Int32", "Int64"],
+      pushOperands: ["Int64"],
+      prefix: 254,
+      feature: "threads"
+    },
+    "i64_atomic_rmw32_xchg_u": {
+      value: 71,
+      mnemonic: "i64.atomic.rmw32.xchg_u",
+      immediate: "MemoryImmediate",
+      stackBehavior: "PopPush",
+      popOperands: ["Int32", "Int64"],
+      pushOperands: ["Int64"],
+      prefix: 254,
+      feature: "threads"
+    },
+    "i32_atomic_rmw_cmpxchg": {
+      value: 72,
+      mnemonic: "i32.atomic.rmw.cmpxchg",
+      immediate: "MemoryImmediate",
+      stackBehavior: "PopPush",
+      popOperands: ["Int32", "Int32", "Int32"],
+      pushOperands: ["Int32"],
+      prefix: 254,
+      feature: "threads"
+    },
+    "i64_atomic_rmw_cmpxchg": {
+      value: 73,
+      mnemonic: "i64.atomic.rmw.cmpxchg",
+      immediate: "MemoryImmediate",
+      stackBehavior: "PopPush",
+      popOperands: ["Int32", "Int64", "Int64"],
+      pushOperands: ["Int64"],
+      prefix: 254,
+      feature: "threads"
+    },
+    "i32_atomic_rmw8_cmpxchg_u": {
+      value: 74,
+      mnemonic: "i32.atomic.rmw8.cmpxchg_u",
+      immediate: "MemoryImmediate",
+      stackBehavior: "PopPush",
+      popOperands: ["Int32", "Int32", "Int32"],
+      pushOperands: ["Int32"],
+      prefix: 254,
+      feature: "threads"
+    },
+    "i32_atomic_rmw16_cmpxchg_u": {
+      value: 75,
+      mnemonic: "i32.atomic.rmw16.cmpxchg_u",
+      immediate: "MemoryImmediate",
+      stackBehavior: "PopPush",
+      popOperands: ["Int32", "Int32", "Int32"],
+      pushOperands: ["Int32"],
+      prefix: 254,
+      feature: "threads"
+    },
+    "i64_atomic_rmw8_cmpxchg_u": {
+      value: 76,
+      mnemonic: "i64.atomic.rmw8.cmpxchg_u",
+      immediate: "MemoryImmediate",
+      stackBehavior: "PopPush",
+      popOperands: ["Int32", "Int64", "Int64"],
+      pushOperands: ["Int64"],
+      prefix: 254,
+      feature: "threads"
+    },
+    "i64_atomic_rmw16_cmpxchg_u": {
+      value: 77,
+      mnemonic: "i64.atomic.rmw16.cmpxchg_u",
+      immediate: "MemoryImmediate",
+      stackBehavior: "PopPush",
+      popOperands: ["Int32", "Int64", "Int64"],
+      pushOperands: ["Int64"],
+      prefix: 254,
+      feature: "threads"
+    },
+    "i64_atomic_rmw32_cmpxchg_u": {
+      value: 78,
+      mnemonic: "i64.atomic.rmw32.cmpxchg_u",
+      immediate: "MemoryImmediate",
+      stackBehavior: "PopPush",
+      popOperands: ["Int32", "Int64", "Int64"],
+      pushOperands: ["Int64"],
+      prefix: 254,
+      feature: "threads"
+    },
+    "i8x16_relaxed_swizzle": {
+      value: 256,
+      mnemonic: "i8x16.relaxed_swizzle",
+      stackBehavior: "PopPush",
+      popOperands: ["V128", "V128"],
+      pushOperands: ["V128"],
+      prefix: 253,
+      feature: "relaxed-simd"
+    },
+    "i32x4_relaxed_trunc_f32x4_s": {
+      value: 257,
+      mnemonic: "i32x4.relaxed_trunc_f32x4_s",
+      stackBehavior: "PopPush",
+      popOperands: ["V128"],
+      pushOperands: ["V128"],
+      prefix: 253,
+      feature: "relaxed-simd"
+    },
+    "i32x4_relaxed_trunc_f32x4_u": {
+      value: 258,
+      mnemonic: "i32x4.relaxed_trunc_f32x4_u",
+      stackBehavior: "PopPush",
+      popOperands: ["V128"],
+      pushOperands: ["V128"],
+      prefix: 253,
+      feature: "relaxed-simd"
+    },
+    "i32x4_relaxed_trunc_f64x2_s_zero": {
+      value: 259,
+      mnemonic: "i32x4.relaxed_trunc_f64x2_s_zero",
+      stackBehavior: "PopPush",
+      popOperands: ["V128"],
+      pushOperands: ["V128"],
+      prefix: 253,
+      feature: "relaxed-simd"
+    },
+    "i32x4_relaxed_trunc_f64x2_u_zero": {
+      value: 260,
+      mnemonic: "i32x4.relaxed_trunc_f64x2_u_zero",
+      stackBehavior: "PopPush",
+      popOperands: ["V128"],
+      pushOperands: ["V128"],
+      prefix: 253,
+      feature: "relaxed-simd"
+    },
+    "f32x4_relaxed_madd": {
+      value: 261,
+      mnemonic: "f32x4.relaxed_madd",
+      stackBehavior: "PopPush",
+      popOperands: ["V128", "V128", "V128"],
+      pushOperands: ["V128"],
+      prefix: 253,
+      feature: "relaxed-simd"
+    },
+    "f32x4_relaxed_nmadd": {
+      value: 262,
+      mnemonic: "f32x4.relaxed_nmadd",
+      stackBehavior: "PopPush",
+      popOperands: ["V128", "V128", "V128"],
+      pushOperands: ["V128"],
+      prefix: 253,
+      feature: "relaxed-simd"
+    },
+    "f64x2_relaxed_madd": {
+      value: 263,
+      mnemonic: "f64x2.relaxed_madd",
+      stackBehavior: "PopPush",
+      popOperands: ["V128", "V128", "V128"],
+      pushOperands: ["V128"],
+      prefix: 253,
+      feature: "relaxed-simd"
+    },
+    "f64x2_relaxed_nmadd": {
+      value: 264,
+      mnemonic: "f64x2.relaxed_nmadd",
+      stackBehavior: "PopPush",
+      popOperands: ["V128", "V128", "V128"],
+      pushOperands: ["V128"],
+      prefix: 253,
+      feature: "relaxed-simd"
+    },
+    "i8x16_relaxed_laneselect": {
+      value: 265,
+      mnemonic: "i8x16.relaxed_laneselect",
+      stackBehavior: "PopPush",
+      popOperands: ["V128", "V128", "V128"],
+      pushOperands: ["V128"],
+      prefix: 253,
+      feature: "relaxed-simd"
+    },
+    "i16x8_relaxed_laneselect": {
+      value: 266,
+      mnemonic: "i16x8.relaxed_laneselect",
+      stackBehavior: "PopPush",
+      popOperands: ["V128", "V128", "V128"],
+      pushOperands: ["V128"],
+      prefix: 253,
+      feature: "relaxed-simd"
+    },
+    "i32x4_relaxed_laneselect": {
+      value: 267,
+      mnemonic: "i32x4.relaxed_laneselect",
+      stackBehavior: "PopPush",
+      popOperands: ["V128", "V128", "V128"],
+      pushOperands: ["V128"],
+      prefix: 253,
+      feature: "relaxed-simd"
+    },
+    "i64x2_relaxed_laneselect": {
+      value: 268,
+      mnemonic: "i64x2.relaxed_laneselect",
+      stackBehavior: "PopPush",
+      popOperands: ["V128", "V128", "V128"],
+      pushOperands: ["V128"],
+      prefix: 253,
+      feature: "relaxed-simd"
+    },
+    "f32x4_relaxed_min": {
+      value: 269,
+      mnemonic: "f32x4.relaxed_min",
+      stackBehavior: "PopPush",
+      popOperands: ["V128", "V128"],
+      pushOperands: ["V128"],
+      prefix: 253,
+      feature: "relaxed-simd"
+    },
+    "f32x4_relaxed_max": {
+      value: 270,
+      mnemonic: "f32x4.relaxed_max",
+      stackBehavior: "PopPush",
+      popOperands: ["V128", "V128"],
+      pushOperands: ["V128"],
+      prefix: 253,
+      feature: "relaxed-simd"
+    },
+    "f64x2_relaxed_min": {
+      value: 271,
+      mnemonic: "f64x2.relaxed_min",
+      stackBehavior: "PopPush",
+      popOperands: ["V128", "V128"],
+      pushOperands: ["V128"],
+      prefix: 253,
+      feature: "relaxed-simd"
+    },
+    "f64x2_relaxed_max": {
+      value: 272,
+      mnemonic: "f64x2.relaxed_max",
+      stackBehavior: "PopPush",
+      popOperands: ["V128", "V128"],
+      pushOperands: ["V128"],
+      prefix: 253,
+      feature: "relaxed-simd"
+    },
+    "i16x8_relaxed_q15mulr_s": {
+      value: 273,
+      mnemonic: "i16x8.relaxed_q15mulr_s",
+      stackBehavior: "PopPush",
+      popOperands: ["V128", "V128"],
+      pushOperands: ["V128"],
+      prefix: 253,
+      feature: "relaxed-simd"
+    },
+    "i16x8_relaxed_dot_i8x16_i7x16_s": {
+      value: 274,
+      mnemonic: "i16x8.relaxed_dot_i8x16_i7x16_s",
+      stackBehavior: "PopPush",
+      popOperands: ["V128", "V128"],
+      pushOperands: ["V128"],
+      prefix: 253,
+      feature: "relaxed-simd"
+    },
+    "i32x4_relaxed_dot_i8x16_i7x16_add_s": {
+      value: 275,
+      mnemonic: "i32x4.relaxed_dot_i8x16_i7x16_add_s",
+      stackBehavior: "PopPush",
+      popOperands: ["V128", "V128", "V128"],
+      pushOperands: ["V128"],
+      prefix: 253,
+      feature: "relaxed-simd"
     }
   };
   var OpCodes_default = OpCodes;
+
+  // src/BinaryReader.ts
+  var MagicHeader2 = 1836278016;
+  var BinaryReader = class {
+    constructor(buffer) {
+      this.buffer = buffer;
+      this.offset = 0;
+    }
+    read() {
+      const magic = this.readUInt32();
+      if (magic !== MagicHeader2) {
+        throw new Error(`Invalid WASM magic header: 0x${magic.toString(16)}`);
+      }
+      const version = this.readUInt32();
+      if (version !== 1) {
+        throw new Error(`Unsupported WASM version: ${version}`);
+      }
+      const module = {
+        version,
+        types: [],
+        imports: [],
+        functions: [],
+        tables: [],
+        memories: [],
+        globals: [],
+        exports: [],
+        start: null,
+        elements: [],
+        data: [],
+        customSections: []
+      };
+      const functionTypeIndices = [];
+      while (this.offset < this.buffer.length) {
+        const sectionId = this.readVarUInt7();
+        const sectionSize = this.readVarUInt32();
+        const sectionEnd = this.offset + sectionSize;
+        switch (sectionId) {
+          case 0:
+            this.readCustomSection(module, sectionEnd);
+            break;
+          case 1:
+            this.readTypeSection(module);
+            break;
+          case 2:
+            this.readImportSection(module);
+            break;
+          case 3:
+            this.readFunctionSection(functionTypeIndices);
+            break;
+          case 4:
+            this.readTableSection(module);
+            break;
+          case 5:
+            this.readMemorySection(module);
+            break;
+          case 6:
+            this.readGlobalSection(module);
+            break;
+          case 7:
+            this.readExportSection(module);
+            break;
+          case 8:
+            module.start = this.readVarUInt32();
+            break;
+          case 9:
+            this.readElementSection(module);
+            break;
+          case 10:
+            this.readCodeSection(module, functionTypeIndices);
+            break;
+          case 11:
+            this.readDataSection(module);
+            break;
+          default:
+            this.offset = sectionEnd;
+            break;
+        }
+        this.offset = sectionEnd;
+      }
+      return module;
+    }
+    readCustomSection(module, sectionEnd) {
+      const nameLen = this.readVarUInt32();
+      const name = this.readString(nameLen);
+      if (name === "name") {
+        module.nameSection = this.readNameSection(sectionEnd);
+        return;
+      }
+      const remaining = sectionEnd - this.offset;
+      const data = this.readBytes(remaining);
+      module.customSections.push({ name, data });
+    }
+    readNameSection(sectionEnd) {
+      const info = {};
+      while (this.offset < sectionEnd) {
+        const subsectionId = this.readVarUInt7();
+        const subsectionSize = this.readVarUInt32();
+        const subsectionEnd = this.offset + subsectionSize;
+        switch (subsectionId) {
+          case 0: {
+            const len = this.readVarUInt32();
+            info.moduleName = this.readString(len);
+            break;
+          }
+          case 1: {
+            const count = this.readVarUInt32();
+            info.functionNames = /* @__PURE__ */ new Map();
+            for (let i = 0; i < count; i++) {
+              const index = this.readVarUInt32();
+              const len = this.readVarUInt32();
+              info.functionNames.set(index, this.readString(len));
+            }
+            break;
+          }
+          case 2: {
+            const funcCount = this.readVarUInt32();
+            info.localNames = /* @__PURE__ */ new Map();
+            for (let i = 0; i < funcCount; i++) {
+              const funcIndex = this.readVarUInt32();
+              const localCount = this.readVarUInt32();
+              const locals = /* @__PURE__ */ new Map();
+              for (let j = 0; j < localCount; j++) {
+                const localIndex = this.readVarUInt32();
+                const len = this.readVarUInt32();
+                locals.set(localIndex, this.readString(len));
+              }
+              info.localNames.set(funcIndex, locals);
+            }
+            break;
+          }
+          case 7: {
+            const count = this.readVarUInt32();
+            info.globalNames = /* @__PURE__ */ new Map();
+            for (let i = 0; i < count; i++) {
+              const index = this.readVarUInt32();
+              const len = this.readVarUInt32();
+              info.globalNames.set(index, this.readString(len));
+            }
+            break;
+          }
+          default:
+            this.offset = subsectionEnd;
+            break;
+        }
+        this.offset = subsectionEnd;
+      }
+      return info;
+    }
+    readTypeSection(module) {
+      const count = this.readVarUInt32();
+      for (let i = 0; i < count; i++) {
+        const form = this.readVarInt7();
+        const paramCount = this.readVarUInt32();
+        const parameterTypes = [];
+        for (let j = 0; j < paramCount; j++) {
+          parameterTypes.push(this.readValueType());
+        }
+        const returnCount = this.readVarUInt32();
+        const returnTypes = [];
+        for (let j = 0; j < returnCount; j++) {
+          returnTypes.push(this.readValueType());
+        }
+        module.types.push({ parameterTypes, returnTypes });
+      }
+    }
+    readImportSection(module) {
+      const count = this.readVarUInt32();
+      for (let i = 0; i < count; i++) {
+        const moduleNameLen = this.readVarUInt32();
+        const moduleName = this.readString(moduleNameLen);
+        const fieldNameLen = this.readVarUInt32();
+        const fieldName = this.readString(fieldNameLen);
+        const kind = this.readUInt8();
+        const imp = { moduleName, fieldName, kind };
+        switch (kind) {
+          case 0:
+            imp.typeIndex = this.readVarUInt32();
+            break;
+          case 1: {
+            const elementType = this.readVarInt7();
+            const { initial, maximum } = this.readResizableLimits();
+            imp.tableType = { elementType, initial, maximum };
+            break;
+          }
+          case 2: {
+            const { initial, maximum } = this.readResizableLimits();
+            imp.memoryType = { initial, maximum };
+            break;
+          }
+          case 3: {
+            const valueType = this.readVarInt7();
+            const mutable = this.readVarUInt1() === 1;
+            imp.globalType = { valueType, mutable };
+            break;
+          }
+        }
+        module.imports.push(imp);
+      }
+    }
+    readFunctionSection(functionTypeIndices) {
+      const count = this.readVarUInt32();
+      for (let i = 0; i < count; i++) {
+        functionTypeIndices.push(this.readVarUInt32());
+      }
+    }
+    readTableSection(module) {
+      const count = this.readVarUInt32();
+      for (let i = 0; i < count; i++) {
+        const elementType = this.readVarInt7();
+        const { initial, maximum } = this.readResizableLimits();
+        module.tables.push({ elementType, initial, maximum });
+      }
+    }
+    readMemorySection(module) {
+      const count = this.readVarUInt32();
+      for (let i = 0; i < count; i++) {
+        const { initial, maximum } = this.readResizableLimits();
+        module.memories.push({ initial, maximum });
+      }
+    }
+    readGlobalSection(module) {
+      const count = this.readVarUInt32();
+      for (let i = 0; i < count; i++) {
+        const valueType = this.readVarInt7();
+        const mutable = this.readVarUInt1() === 1;
+        const initExpr = this.readInitExpr();
+        module.globals.push({ valueType, mutable, initExpr });
+      }
+    }
+    readExportSection(module) {
+      const count = this.readVarUInt32();
+      for (let i = 0; i < count; i++) {
+        const nameLen = this.readVarUInt32();
+        const name = this.readString(nameLen);
+        const kind = this.readUInt8();
+        const index = this.readVarUInt32();
+        module.exports.push({ name, kind, index });
+      }
+    }
+    readElementSection(module) {
+      const count = this.readVarUInt32();
+      for (let i = 0; i < count; i++) {
+        const tableIndex = this.readVarUInt32();
+        const offsetExpr = this.readInitExpr();
+        const numElems = this.readVarUInt32();
+        const functionIndices = [];
+        for (let j = 0; j < numElems; j++) {
+          functionIndices.push(this.readVarUInt32());
+        }
+        module.elements.push({ tableIndex, offsetExpr, functionIndices });
+      }
+    }
+    readCodeSection(module, functionTypeIndices) {
+      const count = this.readVarUInt32();
+      for (let i = 0; i < count; i++) {
+        const bodySize = this.readVarUInt32();
+        const bodyEnd = this.offset + bodySize;
+        const localCount = this.readVarUInt32();
+        const locals = [];
+        for (let j = 0; j < localCount; j++) {
+          const lCount = this.readVarUInt32();
+          const type = this.readVarInt7();
+          locals.push({ count: lCount, type });
+        }
+        const bodyLength = bodyEnd - this.offset;
+        const body = this.readBytes(bodyLength);
+        module.functions.push({
+          typeIndex: functionTypeIndices[i],
+          locals,
+          body
+        });
+        this.offset = bodyEnd;
+      }
+    }
+    readDataSection(module) {
+      const count = this.readVarUInt32();
+      for (let i = 0; i < count; i++) {
+        const memoryIndex = this.readVarUInt32();
+        const offsetExpr = this.readInitExpr();
+        const dataSize = this.readVarUInt32();
+        const data = this.readBytes(dataSize);
+        module.data.push({ memoryIndex, offsetExpr, data });
+      }
+    }
+    readInitExpr() {
+      const start = this.offset;
+      while (this.offset < this.buffer.length) {
+        const byte = this.buffer[this.offset++];
+        if (byte === OpCodes_default.end.value) {
+          break;
+        }
+        switch (byte) {
+          case OpCodes_default.i32_const.value:
+            this.readVarInt32();
+            break;
+          case OpCodes_default.i64_const.value:
+            this.readVarInt64();
+            break;
+          case OpCodes_default.f32_const.value:
+            this.offset += 4;
+            break;
+          case OpCodes_default.f64_const.value:
+            this.offset += 8;
+            break;
+          case OpCodes_default.get_global.value:
+            this.readVarUInt32();
+            break;
+        }
+      }
+      return this.buffer.slice(start, this.offset);
+    }
+    readResizableLimits() {
+      const flags = this.readVarUInt1();
+      const initial = this.readVarUInt32();
+      const maximum = flags === 1 ? this.readVarUInt32() : null;
+      return { initial, maximum };
+    }
+    readValueType() {
+      const value = this.readVarInt7();
+      switch (value) {
+        case -1:
+          return ValueType.Int32;
+        case -2:
+          return ValueType.Int64;
+        case -3:
+          return ValueType.Float32;
+        case -4:
+          return ValueType.Float64;
+        default:
+          throw new Error(`Unknown value type: 0x${(value & 255).toString(16)}`);
+      }
+    }
+    // --- Primitive readers ---
+    readUInt8() {
+      return this.buffer[this.offset++];
+    }
+    readUInt32() {
+      const value = this.buffer[this.offset] | this.buffer[this.offset + 1] << 8 | this.buffer[this.offset + 2] << 16 | this.buffer[this.offset + 3] << 24;
+      this.offset += 4;
+      return value >>> 0;
+    }
+    readVarUInt1() {
+      return this.buffer[this.offset++] & 1;
+    }
+    readVarUInt7() {
+      return this.buffer[this.offset++] & 127;
+    }
+    readVarUInt32() {
+      let result = 0;
+      let shift = 0;
+      let byte;
+      do {
+        byte = this.buffer[this.offset++];
+        result |= (byte & 127) << shift;
+        shift += 7;
+      } while (byte & 128);
+      return result >>> 0;
+    }
+    readVarInt7() {
+      const byte = this.buffer[this.offset++];
+      return byte & 64 ? byte | 4294967168 : byte & 127;
+    }
+    readVarInt32() {
+      let result = 0;
+      let shift = 0;
+      let byte;
+      do {
+        byte = this.buffer[this.offset++];
+        result |= (byte & 127) << shift;
+        shift += 7;
+      } while (byte & 128);
+      if (shift < 32 && byte & 64) {
+        result |= -(1 << shift);
+      }
+      return result;
+    }
+    readVarInt64() {
+      let result = 0n;
+      let shift = 0n;
+      let byte;
+      do {
+        byte = this.buffer[this.offset++];
+        result |= BigInt(byte & 127) << shift;
+        shift += 7n;
+      } while (byte & 128);
+      if (shift < 64n && byte & 64) {
+        result |= -(1n << shift);
+      }
+      return result;
+    }
+    readString(length) {
+      const bytes = this.buffer.slice(this.offset, this.offset + length);
+      this.offset += length;
+      return new TextDecoder().decode(bytes);
+    }
+    readBytes(length) {
+      const bytes = this.buffer.slice(this.offset, this.offset + length);
+      this.offset += length;
+      return bytes;
+    }
+  };
+
+  // src/CustomSectionBuilder.ts
+  var CustomSectionBuilder = class {
+    constructor(name, data) {
+      this.name = name;
+      this.type = SectionType.createCustom(name);
+      this._data = data || new Uint8Array(0);
+    }
+    write(writer) {
+      const sectionWriter = new BinaryWriter();
+      sectionWriter.writeVarUInt32(this.name.length);
+      sectionWriter.writeString(this.name);
+      if (this._data.length > 0) {
+        sectionWriter.writeBytes(this._data);
+      }
+      writer.writeVarUInt7(0);
+      writer.writeVarUInt32(sectionWriter.length);
+      writer.writeBytes(sectionWriter);
+    }
+    toBytes() {
+      const buffer = new BinaryWriter();
+      this.write(buffer);
+      return buffer.toArray();
+    }
+  };
+
+  // src/FunctionParameterBuilder.ts
+  var FunctionParameterBuilder = class {
+    constructor(valueType, index) {
+      this.name = null;
+      this.valueType = valueType;
+      this.index = index;
+    }
+    withName(name) {
+      this.name = name;
+      return this;
+    }
+  };
+
+  // src/LocalBuilder.ts
+  var LocalBuilder = class {
+    constructor(valueType, name, index, count) {
+      this.index = index;
+      this.valueType = valueType;
+      this.name = name;
+      this.count = count;
+    }
+    write(writer) {
+      writer.writeVarUInt32(this.count);
+      writer.writeVarInt7(this.valueType.value);
+    }
+    toBytes() {
+      const buffer = new BinaryWriter();
+      this.write(buffer);
+      return buffer.toArray();
+    }
+  };
+
+  // src/GlobalType.ts
+  var GlobalType = class {
+    constructor(valueType, mutable) {
+      this._valueType = valueType;
+      this._mutable = mutable;
+    }
+    get valueType() {
+      return this._valueType;
+    }
+    get mutable() {
+      return this._mutable;
+    }
+    write(writer) {
+      writer.writeVarInt7(this._valueType.value);
+      writer.writeVarUInt1(this._mutable ? 1 : 0);
+    }
+    toBytes() {
+      const buffer = new BinaryWriter();
+      this.write(buffer);
+      return buffer.toArray();
+    }
+  };
+
+  // src/GlobalBuilder.ts
+  var GlobalBuilder = class _GlobalBuilder {
+    constructor(moduleBuilder, valueType, mutable, index) {
+      this._initExpressionEmitter = null;
+      this.name = null;
+      this._moduleBuilder = moduleBuilder;
+      this._globalType = new GlobalType(valueType, mutable);
+      this._index = index;
+    }
+    withName(name) {
+      this.name = name;
+      return this;
+    }
+    get globalType() {
+      return this._globalType;
+    }
+    get valueType() {
+      return this._globalType.valueType;
+    }
+    createInitEmitter(callback) {
+      if (this._initExpressionEmitter) {
+        throw new Error("Initialization expression emitter has already been created.");
+      }
+      this._initExpressionEmitter = new InitExpressionEmitter(
+        "Global" /* Global */,
+        this.valueType,
+        this._moduleBuilder.features
+      );
+      if (callback) {
+        callback(this._initExpressionEmitter);
+        this._initExpressionEmitter.end();
+      }
+      return this._initExpressionEmitter;
+    }
+    value(value) {
+      if (typeof value === "function") {
+        this.createInitEmitter(value);
+      } else if (value instanceof _GlobalBuilder) {
+        this.createInitEmitter((asm) => {
+          asm.get_global(value);
+        });
+      } else if (typeof value === "number" || typeof value === "bigint") {
+        this.createInitEmitter((asm) => {
+          const vt = this.valueType;
+          if (vt === ValueType.Int32) {
+            asm.const_i32(Number(value));
+          } else if (vt === ValueType.Int64) {
+            asm.const_i64(BigInt(value));
+          } else if (vt === ValueType.Float32) {
+            asm.const_f32(Number(value));
+          } else if (vt === ValueType.Float64) {
+            asm.const_f64(Number(value));
+          } else {
+            throw new Error(`Unsupported global value type: ${vt.name}`);
+          }
+        });
+      } else {
+        throw new Error("Unsupported global value.");
+      }
+    }
+    withExport(name) {
+      this._moduleBuilder.exportGlobal(this, name);
+      return this;
+    }
+    write(writer) {
+      if (!this._initExpressionEmitter) {
+        throw new Error("The initialization expression was not defined.");
+      }
+      this._globalType.write(writer);
+      this._initExpressionEmitter.write(writer);
+    }
+    toBytes() {
+      const buffer = new BinaryWriter();
+      this.write(buffer);
+      return buffer.toArray();
+    }
+  };
+
+  // src/ImportBuilder.ts
+  var ImportBuilder = class {
+    constructor(moduleName, fieldName, externalKind, data, index) {
+      this.moduleName = moduleName;
+      this.fieldName = fieldName;
+      this.externalKind = externalKind;
+      this.data = data;
+      this.index = index;
+    }
+    write(writer) {
+      writer.writeVarUInt32(this.moduleName.length);
+      writer.writeString(this.moduleName);
+      writer.writeVarUInt32(this.fieldName.length);
+      writer.writeString(this.fieldName);
+      writer.writeUInt8(this.externalKind.value);
+      switch (this.externalKind) {
+        case ExternalKind.Function:
+          writer.writeVarUInt32(this.data.index);
+          break;
+        case ExternalKind.Global:
+        case ExternalKind.Memory:
+        case ExternalKind.Table:
+          this.data.write(writer);
+          break;
+        default:
+          throw new Error("Unknown external kind.");
+      }
+    }
+    toBytes() {
+      const buffer = new BinaryWriter();
+      this.write(buffer);
+      return buffer.toArray();
+    }
+  };
+
+  // src/ImmediateEncoder.ts
+  var ImmediateEncoder = class {
+    static encodeBlockSignature(writer, blockType) {
+      writer.writeVarInt7(blockType.value);
+    }
+    static encodeRelativeDepth(writer, label, depth) {
+      const relativeDepth = depth - label.block.depth;
+      writer.writeVarInt7(relativeDepth);
+    }
+    static encodeBranchTable(writer, defaultLabel, labels) {
+      writer.writeVarUInt32(labels.length);
+      labels.forEach((x) => {
+        writer.writeVarUInt32(x);
+      });
+      writer.writeVarUInt32(defaultLabel);
+    }
+    static encodeFunction(writer, func) {
+      let functionIndex = 0;
+      if (func instanceof ImportBuilder) {
+        functionIndex = func.index;
+      } else if (typeof func === "object" && func !== null && "_index" in func) {
+        functionIndex = func._index;
+      } else if (typeof func === "number") {
+        functionIndex = func;
+      } else {
+        throw new Error(
+          "Function argument must either be the index of the function or a FunctionBuilder."
+        );
+      }
+      writer.writeVarUInt32(functionIndex);
+    }
+    static encodeIndirectFunction(writer, funcType) {
+      writer.writeVarUInt32(funcType.index);
+      writer.writeVarUInt1(0);
+    }
+    static encodeLocal(writer, local) {
+      Arg.notNull("local", local);
+      let localIndex = 0;
+      if (local instanceof LocalBuilder) {
+        localIndex = local.index;
+      } else if (local instanceof FunctionParameterBuilder) {
+        localIndex = local.index;
+      } else if (typeof local === "number") {
+        localIndex = local;
+      } else {
+        throw new Error(
+          "Local argument must either be the index of the local variable or a LocalBuilder."
+        );
+      }
+      writer.writeVarUInt32(localIndex);
+    }
+    static encodeGlobal(writer, global) {
+      Arg.notNull("global", global);
+      let globalIndex = 0;
+      if (global instanceof GlobalBuilder) {
+        globalIndex = global._index;
+      } else if (global instanceof ImportBuilder) {
+        if (global.externalKind !== ExternalKind.Global) {
+          throw new Error("Import external kind must be global.");
+        }
+        globalIndex = global.index;
+      } else if (typeof global === "number") {
+        globalIndex = global;
+      } else {
+        throw new Error(
+          "Global argument must either be the index of the global variable, GlobalBuilder, or an ImportBuilder."
+        );
+      }
+      writer.writeVarUInt32(globalIndex);
+    }
+    static encodeFloat32(writer, value) {
+      writer.writeFloat32(value);
+    }
+    static encodeFloat64(writer, value) {
+      writer.writeFloat64(value);
+    }
+    static encodeVarInt32(writer, value) {
+      writer.writeVarInt32(value);
+    }
+    static encodeVarInt64(writer, value) {
+      writer.writeVarInt64(value);
+    }
+    static encodeVarUInt32(writer, value) {
+      writer.writeVarUInt32(value);
+    }
+    static encodeVarUInt1(writer, value) {
+      writer.writeVarUInt1(value);
+    }
+    static encodeMemoryImmediate(writer, alignment, offset) {
+      writer.writeVarUInt32(alignment);
+      writer.writeVarUInt32(offset);
+    }
+    static encodeV128Const(writer, bytes) {
+      for (let i = 0; i < 16; i++) {
+        writer.writeByte(bytes[i]);
+      }
+    }
+    static encodeLaneIndex(writer, index) {
+      writer.writeByte(index);
+    }
+    static encodeShuffleMask(writer, mask) {
+      for (let i = 0; i < 16; i++) {
+        writer.writeByte(mask[i]);
+      }
+    }
+  };
+
+  // src/Immediate.ts
+  var Immediate = class _Immediate {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    constructor(type, values) {
+      Arg.notNull("type", type);
+      Arg.notNull("values", values);
+      this.type = type;
+      this.values = values;
+    }
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    static createBlockSignature(blockType) {
+      return new _Immediate("BlockSignature" /* BlockSignature */, [blockType]);
+    }
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    static createBranchTable(defaultLabel, labels, depth) {
+      const relativeDepths = labels.map((x) => {
+        return depth - x.block.depth;
+      });
+      const defaultLabelDepth = depth - defaultLabel.block.depth;
+      return new _Immediate("BranchTable" /* BranchTable */, [defaultLabelDepth, relativeDepths]);
+    }
+    static createFloat32(value) {
+      return new _Immediate("Float32" /* Float32 */, [value]);
+    }
+    static createFloat64(value) {
+      return new _Immediate("Float64" /* Float64 */, [value]);
+    }
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    static createFunction(functionBuilder) {
+      return new _Immediate("Function" /* Function */, [functionBuilder]);
+    }
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    static createGlobal(globalBuilder) {
+      return new _Immediate("Global" /* Global */, [globalBuilder]);
+    }
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    static createIndirectFunction(functionTypeBuilder) {
+      return new _Immediate("IndirectFunction" /* IndirectFunction */, [functionTypeBuilder]);
+    }
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    static createLocal(local) {
+      return new _Immediate("Local" /* Local */, [local]);
+    }
+    static createMemoryImmediate(alignment, offset) {
+      return new _Immediate("MemoryImmediate" /* MemoryImmediate */, [alignment, offset]);
+    }
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    static createRelativeDepth(label, depth) {
+      return new _Immediate("RelativeDepth" /* RelativeDepth */, [label, depth]);
+    }
+    static createVarUInt1(value) {
+      return new _Immediate("VarUInt1" /* VarUInt1 */, [value]);
+    }
+    static createVarInt32(value) {
+      return new _Immediate("VarInt32" /* VarInt32 */, [value]);
+    }
+    static createVarInt64(value) {
+      return new _Immediate("VarInt64" /* VarInt64 */, [value]);
+    }
+    static createVarUInt32(value) {
+      return new _Immediate("VarUInt32" /* VarUInt32 */, [value]);
+    }
+    static createV128Const(bytes) {
+      if (bytes.length !== 16) {
+        throw new Error("V128 constant must be exactly 16 bytes.");
+      }
+      return new _Immediate("V128Const" /* V128Const */, [bytes]);
+    }
+    static createLaneIndex(index) {
+      return new _Immediate("LaneIndex" /* LaneIndex */, [index]);
+    }
+    static createShuffleMask(mask) {
+      if (mask.length !== 16) {
+        throw new Error("Shuffle mask must be exactly 16 bytes.");
+      }
+      return new _Immediate("ShuffleMask" /* ShuffleMask */, [mask]);
+    }
+    writeBytes(writer) {
+      switch (this.type) {
+        case "BlockSignature" /* BlockSignature */:
+          ImmediateEncoder.encodeBlockSignature(writer, this.values[0]);
+          break;
+        case "BranchTable" /* BranchTable */:
+          ImmediateEncoder.encodeBranchTable(writer, this.values[0], this.values[1]);
+          break;
+        case "Float32" /* Float32 */:
+          ImmediateEncoder.encodeFloat32(writer, this.values[0]);
+          break;
+        case "Float64" /* Float64 */:
+          ImmediateEncoder.encodeFloat64(writer, this.values[0]);
+          break;
+        case "Function" /* Function */:
+          ImmediateEncoder.encodeFunction(writer, this.values[0]);
+          break;
+        case "Global" /* Global */:
+          ImmediateEncoder.encodeGlobal(writer, this.values[0]);
+          break;
+        case "IndirectFunction" /* IndirectFunction */:
+          ImmediateEncoder.encodeIndirectFunction(writer, this.values[0]);
+          break;
+        case "Local" /* Local */:
+          ImmediateEncoder.encodeLocal(writer, this.values[0]);
+          break;
+        case "MemoryImmediate" /* MemoryImmediate */:
+          ImmediateEncoder.encodeMemoryImmediate(writer, this.values[0], this.values[1]);
+          break;
+        case "RelativeDepth" /* RelativeDepth */:
+          ImmediateEncoder.encodeRelativeDepth(writer, this.values[0], this.values[1]);
+          break;
+        case "VarInt32" /* VarInt32 */:
+          ImmediateEncoder.encodeVarInt32(writer, this.values[0]);
+          break;
+        case "VarInt64" /* VarInt64 */:
+          ImmediateEncoder.encodeVarInt64(writer, this.values[0]);
+          break;
+        case "VarUInt1" /* VarUInt1 */:
+          ImmediateEncoder.encodeVarUInt1(writer, this.values[0]);
+          break;
+        case "VarUInt32" /* VarUInt32 */:
+          ImmediateEncoder.encodeVarUInt32(writer, this.values[0]);
+          break;
+        case "V128Const" /* V128Const */:
+          ImmediateEncoder.encodeV128Const(writer, this.values[0]);
+          break;
+        case "LaneIndex" /* LaneIndex */:
+          ImmediateEncoder.encodeLaneIndex(writer, this.values[0]);
+          break;
+        case "ShuffleMask" /* ShuffleMask */:
+          ImmediateEncoder.encodeShuffleMask(writer, this.values[0]);
+          break;
+        default:
+          throw new Error("Cannot encode unknown operand type.");
+      }
+    }
+    toBytes() {
+      const buffer = new BinaryWriter();
+      this.writeBytes(buffer);
+      return buffer.toArray();
+    }
+  };
+
+  // src/Instruction.ts
+  var Instruction = class {
+    constructor(opCode, immediate) {
+      Arg.notNull("opCode", opCode);
+      this.opCode = opCode;
+      this.immediate = immediate;
+    }
+    write(writer) {
+      if (this.opCode.prefix !== void 0) {
+        writer.writeByte(this.opCode.prefix);
+        writer.writeVarUInt32(this.opCode.value);
+      } else {
+        writer.writeByte(this.opCode.value);
+      }
+      if (this.immediate) {
+        this.immediate.writeBytes(writer);
+      }
+    }
+    toBytes() {
+      const buffer = new BinaryWriter();
+      this.write(buffer);
+      return buffer.toArray();
+    }
+  };
+
+  // src/LabelBuilder.ts
+  var LabelBuilder = class {
+    constructor() {
+      this.resolved = false;
+      this.block = null;
+    }
+    get isResolved() {
+      return this.resolved;
+    }
+    resolve(block) {
+      this.block = block;
+      this.resolved = true;
+    }
+    reference(block) {
+      if (this.isResolved) {
+        throw new Error("Cannot add a reference to a label that has been resolved.");
+      }
+      this.block = block;
+    }
+  };
 
   // src/OpCodeEmitter.ts
   var OpCodeEmitter = class {
@@ -4958,6 +5860,18 @@ var webasmPlayground = (() => {
     else() {
       return this.emit(OpCodes_default.else);
     }
+    try(blockType, label) {
+      return this.emit(OpCodes_default.try, blockType, label);
+    }
+    catch(varUInt32) {
+      return this.emit(OpCodes_default.catch, varUInt32);
+    }
+    throw(varUInt32) {
+      return this.emit(OpCodes_default.throw, varUInt32);
+    }
+    rethrow(varUInt32) {
+      return this.emit(OpCodes_default.rethrow, varUInt32);
+    }
     end() {
       return this.emit(OpCodes_default.end);
     }
@@ -4978,6 +5892,18 @@ var webasmPlayground = (() => {
     }
     call_indirect(funcTypeBuilder) {
       return this.emit(OpCodes_default.call_indirect, funcTypeBuilder);
+    }
+    return_call(functionBuilder) {
+      return this.emit(OpCodes_default.return_call, functionBuilder);
+    }
+    return_call_indirect(funcTypeBuilder) {
+      return this.emit(OpCodes_default.return_call_indirect, funcTypeBuilder);
+    }
+    delegate(varUInt32) {
+      return this.emit(OpCodes_default.delegate, varUInt32);
+    }
+    catch_all() {
+      return this.emit(OpCodes_default.catch_all);
     }
     drop() {
       return this.emit(OpCodes_default.drop);
@@ -6248,6 +7174,267 @@ var webasmPlayground = (() => {
     promote_low_f32x4_f64x2() {
       return this.emit(OpCodes_default.f64x2_promote_low_f32x4);
     }
+    atomic_notify(alignment, offset) {
+      return this.emit(OpCodes_default.memory_atomic_notify, alignment, offset);
+    }
+    atomic_wait32(alignment, offset) {
+      return this.emit(OpCodes_default.memory_atomic_wait32, alignment, offset);
+    }
+    atomic_wait64(alignment, offset) {
+      return this.emit(OpCodes_default.memory_atomic_wait64, alignment, offset);
+    }
+    atomic_fence(varUInt1) {
+      return this.emit(OpCodes_default.atomic_fence, varUInt1);
+    }
+    atomic_load_i32(alignment, offset) {
+      return this.emit(OpCodes_default.i32_atomic_load, alignment, offset);
+    }
+    atomic_load_i64(alignment, offset) {
+      return this.emit(OpCodes_default.i64_atomic_load, alignment, offset);
+    }
+    atomic_load8_u_i32(alignment, offset) {
+      return this.emit(OpCodes_default.i32_atomic_load8_u, alignment, offset);
+    }
+    atomic_load16_u_i32(alignment, offset) {
+      return this.emit(OpCodes_default.i32_atomic_load16_u, alignment, offset);
+    }
+    atomic_load8_u_i64(alignment, offset) {
+      return this.emit(OpCodes_default.i64_atomic_load8_u, alignment, offset);
+    }
+    atomic_load16_u_i64(alignment, offset) {
+      return this.emit(OpCodes_default.i64_atomic_load16_u, alignment, offset);
+    }
+    atomic_load32_u_i64(alignment, offset) {
+      return this.emit(OpCodes_default.i64_atomic_load32_u, alignment, offset);
+    }
+    atomic_store_i32(alignment, offset) {
+      return this.emit(OpCodes_default.i32_atomic_store, alignment, offset);
+    }
+    atomic_store_i64(alignment, offset) {
+      return this.emit(OpCodes_default.i64_atomic_store, alignment, offset);
+    }
+    atomic_store8_i32(alignment, offset) {
+      return this.emit(OpCodes_default.i32_atomic_store8, alignment, offset);
+    }
+    atomic_store16_i32(alignment, offset) {
+      return this.emit(OpCodes_default.i32_atomic_store16, alignment, offset);
+    }
+    atomic_store8_i64(alignment, offset) {
+      return this.emit(OpCodes_default.i64_atomic_store8, alignment, offset);
+    }
+    atomic_store16_i64(alignment, offset) {
+      return this.emit(OpCodes_default.i64_atomic_store16, alignment, offset);
+    }
+    atomic_store32_i64(alignment, offset) {
+      return this.emit(OpCodes_default.i64_atomic_store32, alignment, offset);
+    }
+    atomic_rmw_add_i32(alignment, offset) {
+      return this.emit(OpCodes_default.i32_atomic_rmw_add, alignment, offset);
+    }
+    atomic_rmw_add_i64(alignment, offset) {
+      return this.emit(OpCodes_default.i64_atomic_rmw_add, alignment, offset);
+    }
+    atomic_rmw8_add_u_i32(alignment, offset) {
+      return this.emit(OpCodes_default.i32_atomic_rmw8_add_u, alignment, offset);
+    }
+    atomic_rmw16_add_u_i32(alignment, offset) {
+      return this.emit(OpCodes_default.i32_atomic_rmw16_add_u, alignment, offset);
+    }
+    atomic_rmw8_add_u_i64(alignment, offset) {
+      return this.emit(OpCodes_default.i64_atomic_rmw8_add_u, alignment, offset);
+    }
+    atomic_rmw16_add_u_i64(alignment, offset) {
+      return this.emit(OpCodes_default.i64_atomic_rmw16_add_u, alignment, offset);
+    }
+    atomic_rmw32_add_u_i64(alignment, offset) {
+      return this.emit(OpCodes_default.i64_atomic_rmw32_add_u, alignment, offset);
+    }
+    atomic_rmw_sub_i32(alignment, offset) {
+      return this.emit(OpCodes_default.i32_atomic_rmw_sub, alignment, offset);
+    }
+    atomic_rmw_sub_i64(alignment, offset) {
+      return this.emit(OpCodes_default.i64_atomic_rmw_sub, alignment, offset);
+    }
+    atomic_rmw8_sub_u_i32(alignment, offset) {
+      return this.emit(OpCodes_default.i32_atomic_rmw8_sub_u, alignment, offset);
+    }
+    atomic_rmw16_sub_u_i32(alignment, offset) {
+      return this.emit(OpCodes_default.i32_atomic_rmw16_sub_u, alignment, offset);
+    }
+    atomic_rmw8_sub_u_i64(alignment, offset) {
+      return this.emit(OpCodes_default.i64_atomic_rmw8_sub_u, alignment, offset);
+    }
+    atomic_rmw16_sub_u_i64(alignment, offset) {
+      return this.emit(OpCodes_default.i64_atomic_rmw16_sub_u, alignment, offset);
+    }
+    atomic_rmw32_sub_u_i64(alignment, offset) {
+      return this.emit(OpCodes_default.i64_atomic_rmw32_sub_u, alignment, offset);
+    }
+    atomic_rmw_and_i32(alignment, offset) {
+      return this.emit(OpCodes_default.i32_atomic_rmw_and, alignment, offset);
+    }
+    atomic_rmw_and_i64(alignment, offset) {
+      return this.emit(OpCodes_default.i64_atomic_rmw_and, alignment, offset);
+    }
+    atomic_rmw8_and_u_i32(alignment, offset) {
+      return this.emit(OpCodes_default.i32_atomic_rmw8_and_u, alignment, offset);
+    }
+    atomic_rmw16_and_u_i32(alignment, offset) {
+      return this.emit(OpCodes_default.i32_atomic_rmw16_and_u, alignment, offset);
+    }
+    atomic_rmw8_and_u_i64(alignment, offset) {
+      return this.emit(OpCodes_default.i64_atomic_rmw8_and_u, alignment, offset);
+    }
+    atomic_rmw16_and_u_i64(alignment, offset) {
+      return this.emit(OpCodes_default.i64_atomic_rmw16_and_u, alignment, offset);
+    }
+    atomic_rmw32_and_u_i64(alignment, offset) {
+      return this.emit(OpCodes_default.i64_atomic_rmw32_and_u, alignment, offset);
+    }
+    atomic_rmw_or_i32(alignment, offset) {
+      return this.emit(OpCodes_default.i32_atomic_rmw_or, alignment, offset);
+    }
+    atomic_rmw_or_i64(alignment, offset) {
+      return this.emit(OpCodes_default.i64_atomic_rmw_or, alignment, offset);
+    }
+    atomic_rmw8_or_u_i32(alignment, offset) {
+      return this.emit(OpCodes_default.i32_atomic_rmw8_or_u, alignment, offset);
+    }
+    atomic_rmw16_or_u_i32(alignment, offset) {
+      return this.emit(OpCodes_default.i32_atomic_rmw16_or_u, alignment, offset);
+    }
+    atomic_rmw8_or_u_i64(alignment, offset) {
+      return this.emit(OpCodes_default.i64_atomic_rmw8_or_u, alignment, offset);
+    }
+    atomic_rmw16_or_u_i64(alignment, offset) {
+      return this.emit(OpCodes_default.i64_atomic_rmw16_or_u, alignment, offset);
+    }
+    atomic_rmw32_or_u_i64(alignment, offset) {
+      return this.emit(OpCodes_default.i64_atomic_rmw32_or_u, alignment, offset);
+    }
+    atomic_rmw_xor_i32(alignment, offset) {
+      return this.emit(OpCodes_default.i32_atomic_rmw_xor, alignment, offset);
+    }
+    atomic_rmw_xor_i64(alignment, offset) {
+      return this.emit(OpCodes_default.i64_atomic_rmw_xor, alignment, offset);
+    }
+    atomic_rmw8_xor_u_i32(alignment, offset) {
+      return this.emit(OpCodes_default.i32_atomic_rmw8_xor_u, alignment, offset);
+    }
+    atomic_rmw16_xor_u_i32(alignment, offset) {
+      return this.emit(OpCodes_default.i32_atomic_rmw16_xor_u, alignment, offset);
+    }
+    atomic_rmw8_xor_u_i64(alignment, offset) {
+      return this.emit(OpCodes_default.i64_atomic_rmw8_xor_u, alignment, offset);
+    }
+    atomic_rmw16_xor_u_i64(alignment, offset) {
+      return this.emit(OpCodes_default.i64_atomic_rmw16_xor_u, alignment, offset);
+    }
+    atomic_rmw32_xor_u_i64(alignment, offset) {
+      return this.emit(OpCodes_default.i64_atomic_rmw32_xor_u, alignment, offset);
+    }
+    atomic_rmw_xchg_i32(alignment, offset) {
+      return this.emit(OpCodes_default.i32_atomic_rmw_xchg, alignment, offset);
+    }
+    atomic_rmw_xchg_i64(alignment, offset) {
+      return this.emit(OpCodes_default.i64_atomic_rmw_xchg, alignment, offset);
+    }
+    atomic_rmw8_xchg_u_i32(alignment, offset) {
+      return this.emit(OpCodes_default.i32_atomic_rmw8_xchg_u, alignment, offset);
+    }
+    atomic_rmw16_xchg_u_i32(alignment, offset) {
+      return this.emit(OpCodes_default.i32_atomic_rmw16_xchg_u, alignment, offset);
+    }
+    atomic_rmw8_xchg_u_i64(alignment, offset) {
+      return this.emit(OpCodes_default.i64_atomic_rmw8_xchg_u, alignment, offset);
+    }
+    atomic_rmw16_xchg_u_i64(alignment, offset) {
+      return this.emit(OpCodes_default.i64_atomic_rmw16_xchg_u, alignment, offset);
+    }
+    atomic_rmw32_xchg_u_i64(alignment, offset) {
+      return this.emit(OpCodes_default.i64_atomic_rmw32_xchg_u, alignment, offset);
+    }
+    atomic_rmw_cmpxchg_i32(alignment, offset) {
+      return this.emit(OpCodes_default.i32_atomic_rmw_cmpxchg, alignment, offset);
+    }
+    atomic_rmw_cmpxchg_i64(alignment, offset) {
+      return this.emit(OpCodes_default.i64_atomic_rmw_cmpxchg, alignment, offset);
+    }
+    atomic_rmw8_cmpxchg_u_i32(alignment, offset) {
+      return this.emit(OpCodes_default.i32_atomic_rmw8_cmpxchg_u, alignment, offset);
+    }
+    atomic_rmw16_cmpxchg_u_i32(alignment, offset) {
+      return this.emit(OpCodes_default.i32_atomic_rmw16_cmpxchg_u, alignment, offset);
+    }
+    atomic_rmw8_cmpxchg_u_i64(alignment, offset) {
+      return this.emit(OpCodes_default.i64_atomic_rmw8_cmpxchg_u, alignment, offset);
+    }
+    atomic_rmw16_cmpxchg_u_i64(alignment, offset) {
+      return this.emit(OpCodes_default.i64_atomic_rmw16_cmpxchg_u, alignment, offset);
+    }
+    atomic_rmw32_cmpxchg_u_i64(alignment, offset) {
+      return this.emit(OpCodes_default.i64_atomic_rmw32_cmpxchg_u, alignment, offset);
+    }
+    relaxed_swizzle_i8x16() {
+      return this.emit(OpCodes_default.i8x16_relaxed_swizzle);
+    }
+    relaxed_trunc_f32x4_s_i32x4() {
+      return this.emit(OpCodes_default.i32x4_relaxed_trunc_f32x4_s);
+    }
+    relaxed_trunc_f32x4_u_i32x4() {
+      return this.emit(OpCodes_default.i32x4_relaxed_trunc_f32x4_u);
+    }
+    relaxed_trunc_f64x2_s_zero_i32x4() {
+      return this.emit(OpCodes_default.i32x4_relaxed_trunc_f64x2_s_zero);
+    }
+    relaxed_trunc_f64x2_u_zero_i32x4() {
+      return this.emit(OpCodes_default.i32x4_relaxed_trunc_f64x2_u_zero);
+    }
+    relaxed_madd_f32x4() {
+      return this.emit(OpCodes_default.f32x4_relaxed_madd);
+    }
+    relaxed_nmadd_f32x4() {
+      return this.emit(OpCodes_default.f32x4_relaxed_nmadd);
+    }
+    relaxed_madd_f64x2() {
+      return this.emit(OpCodes_default.f64x2_relaxed_madd);
+    }
+    relaxed_nmadd_f64x2() {
+      return this.emit(OpCodes_default.f64x2_relaxed_nmadd);
+    }
+    relaxed_laneselect_i8x16() {
+      return this.emit(OpCodes_default.i8x16_relaxed_laneselect);
+    }
+    relaxed_laneselect_i16x8() {
+      return this.emit(OpCodes_default.i16x8_relaxed_laneselect);
+    }
+    relaxed_laneselect_i32x4() {
+      return this.emit(OpCodes_default.i32x4_relaxed_laneselect);
+    }
+    relaxed_laneselect_i64x2() {
+      return this.emit(OpCodes_default.i64x2_relaxed_laneselect);
+    }
+    relaxed_min_f32x4() {
+      return this.emit(OpCodes_default.f32x4_relaxed_min);
+    }
+    relaxed_max_f32x4() {
+      return this.emit(OpCodes_default.f32x4_relaxed_max);
+    }
+    relaxed_min_f64x2() {
+      return this.emit(OpCodes_default.f64x2_relaxed_min);
+    }
+    relaxed_max_f64x2() {
+      return this.emit(OpCodes_default.f64x2_relaxed_max);
+    }
+    relaxed_q15mulr_s_i16x8() {
+      return this.emit(OpCodes_default.i16x8_relaxed_q15mulr_s);
+    }
+    relaxed_dot_i8x16_i7x16_s_i16x8() {
+      return this.emit(OpCodes_default.i16x8_relaxed_dot_i8x16_i7x16_s);
+    }
+    relaxed_dot_i8x16_i7x16_add_s_i32x4() {
+      return this.emit(OpCodes_default.i32x4_relaxed_dot_i8x16_i7x16_add_s);
+    }
   };
 
   // src/verification/ControlFlowBlock.ts
@@ -6482,7 +7669,7 @@ var webasmPlayground = (() => {
       this.parameterTypes.forEach((x) => {
         writer.writeVarInt7(x.value);
       });
-      writer.writeVarUInt1(this.returnTypes.length);
+      writer.writeVarUInt32(this.returnTypes.length);
       this.returnTypes.forEach((x) => {
         writer.writeVarInt7(x.value);
       });
@@ -6601,7 +7788,7 @@ var webasmPlayground = (() => {
       let errorMessage = "";
       for (let index = 0; index < remaining.length; index++) {
         if (remaining[index] !== this._funcType.returnTypes[index]) {
-          errorMessage = `A ${this._funcType.returnTypes[index]} was expected at ${remaining.length - index} but a ${remaining[index]} was found. `;
+          errorMessage = `A ${this._funcType.returnTypes[index].name} was expected at ${remaining.length - index} but a ${remaining[index].name} was found. `;
         }
       }
       if (errorMessage !== "") {
@@ -6642,28 +7829,33 @@ var webasmPlayground = (() => {
       return modifiedStack;
     }
     _verifyStackPop(stack, opCode, funcType) {
-      if (funcType) {
-        stack = funcType.parameterTypes.reduce((i, x) => {
-          if (x !== i.valueType) {
-            throw new VerificationError(
-              `Unexpected type found on stack at offset ${this._instructionCount + 1}. A ${x} was expected but a ${i.valueType} was found.`
-            );
-          }
-          return i.pop();
-        }, stack);
-      }
-      stack = (opCode.popOperands || []).reduce((i, x) => {
+      const pops = opCode.popOperands || [];
+      for (let idx = pops.length - 1; idx >= 0; idx--) {
+        const x = pops[idx];
         if (x === "Any" /* Any */) {
-          return i.pop();
+          stack = stack.pop();
+          continue;
         }
         const valueType = ValueType[x];
-        if (valueType !== i.valueType) {
+        if (valueType !== stack.valueType) {
           throw new VerificationError(
-            `Unexpected type found on stack at offset ${this._instructionCount + 1}. A ${valueType} was expected but a ${i.valueType} was found.`
+            `Unexpected type found on stack at offset ${this._instructionCount + 1}. A ${valueType.name} was expected but a ${stack.valueType.name} was found.`
           );
         }
-        return i.pop();
-      }, stack);
+        stack = stack.pop();
+      }
+      if (funcType) {
+        const params = funcType.parameterTypes;
+        for (let idx = params.length - 1; idx >= 0; idx--) {
+          const x = params[idx];
+          if (x !== stack.valueType) {
+            throw new VerificationError(
+              `Unexpected type found on stack at offset ${this._instructionCount + 1}. A ${x.name} was expected but a ${stack.valueType.name} was found.`
+            );
+          }
+          stack = stack.pop();
+        }
+      }
       return stack;
     }
     _stackPush(stack, controlBlock, opCode, immediate, funcType) {
@@ -6687,7 +7879,7 @@ var webasmPlayground = (() => {
     }
     _getFuncType(opCode, immediate) {
       let funcType = null;
-      if (opCode === OpCodes_default.call) {
+      if (opCode === OpCodes_default.call || opCode === OpCodes_default.return_call) {
         if (immediate.values[0] instanceof ImportBuilder) {
           funcType = immediate.values[0].data;
         } else if (immediate.values[0] && "funcTypeBuilder" in immediate.values[0]) {
@@ -6695,7 +7887,7 @@ var webasmPlayground = (() => {
         } else {
           throw new VerificationError("Error getting funcType for call, invalid immediate.");
         }
-      } else if (opCode === OpCodes_default.call_indirect) {
+      } else if (opCode === OpCodes_default.call_indirect || opCode === OpCodes_default.return_call_indirect) {
         if (immediate.values[0] instanceof FuncTypeBuilder) {
           funcType = immediate.values[0];
         } else {
@@ -6970,9 +8162,10 @@ var webasmPlayground = (() => {
 
   // src/InitExpressionEmitter.ts
   var InitExpressionEmitter = class extends AssemblyEmitter {
-    constructor(initExpressionType, valueType) {
+    constructor(initExpressionType, valueType, features) {
       super(new FuncTypeSignature([valueType], []));
       this._initExpressionType = initExpressionType;
+      this._features = features || /* @__PURE__ */ new Set();
     }
     getParameter(_index) {
       throw new Error("An initialization expression does not have any parameters.");
@@ -6990,13 +8183,18 @@ var webasmPlayground = (() => {
       }
     }
     _isValidateOp(opCode, args) {
-      if (this._instructions.length === 2) {
+      const hasExtendedConst = this._features.has("extended-const");
+      const maxInstructions = hasExtendedConst ? Infinity : 2;
+      if (this._instructions.length >= maxInstructions) {
         return;
       }
-      if (this._instructions.length === 1) {
+      if (!hasExtendedConst && this._instructions.length === 1) {
         if (opCode !== OpCodes_default.end) {
           throw new Error(`Opcode ${opCode.mnemonic} is not valid after init expression value.`);
         }
+        return;
+      }
+      if (opCode === OpCodes_default.end) {
         return;
       }
       switch (opCode) {
@@ -7007,7 +8205,7 @@ var webasmPlayground = (() => {
           break;
         case OpCodes_default.get_global: {
           const globalBuilder = args?.[0];
-          if (this._initExpressionType === "Element" /* Element */) {
+          if (this._initExpressionType === "Element" /* Element */ && !hasExtendedConst) {
             throw new Error(
               "The only valid instruction for an element initializer expression is a constant i32, global not supported."
             );
@@ -7015,9 +8213,23 @@ var webasmPlayground = (() => {
           if (!(globalBuilder instanceof GlobalBuilder)) {
             throw new Error("A global builder was expected.");
           }
-          if (globalBuilder.globalType.mutable) {
+          if (globalBuilder.globalType.mutable && !hasExtendedConst) {
             throw new Error(
               "An initializer expression cannot reference a mutable global."
+            );
+          }
+          break;
+        }
+        // Extended-const: allow arithmetic in init expressions
+        case OpCodes_default.i32_add:
+        case OpCodes_default.i32_sub:
+        case OpCodes_default.i32_mul:
+        case OpCodes_default.i64_add:
+        case OpCodes_default.i64_sub:
+        case OpCodes_default.i64_mul: {
+          if (!hasExtendedConst) {
+            throw new Error(
+              `Opcode ${opCode.mnemonic} is not supported in an initializer expression. Enable the extended-const feature to allow arithmetic in init expressions.`
             );
           }
           break;
@@ -7032,9 +8244,20 @@ var webasmPlayground = (() => {
 
   // src/DataSegmentBuilder.ts
   var DataSegmentBuilder = class {
-    constructor(data) {
+    constructor(data, features) {
       this._initExpressionEmitter = null;
+      this._passive = false;
+      this._memoryIndex = 0;
       this._data = data;
+      this._features = features || /* @__PURE__ */ new Set();
+    }
+    passive() {
+      this._passive = true;
+      return this;
+    }
+    memoryIndex(index) {
+      this._memoryIndex = index;
+      return this;
     }
     createInitEmitter(callback) {
       if (this._initExpressionEmitter) {
@@ -7042,7 +8265,8 @@ var webasmPlayground = (() => {
       }
       this._initExpressionEmitter = new InitExpressionEmitter(
         "Data" /* Data */,
-        ValueType.Int32
+        ValueType.Int32,
+        this._features
       );
       if (callback) {
         callback(this._initExpressionEmitter);
@@ -7066,10 +8290,21 @@ var webasmPlayground = (() => {
       }
     }
     write(writer) {
+      if (this._passive) {
+        writer.writeVarUInt32(1);
+        writer.writeVarUInt32(this._data.length);
+        writer.writeBytes(this._data);
+        return;
+      }
       if (!this._initExpressionEmitter) {
         throw new Error("The initialization expression was not defined.");
       }
-      writer.writeVarUInt32(0);
+      if (this._memoryIndex !== 0) {
+        writer.writeVarUInt32(2);
+        writer.writeVarUInt32(this._memoryIndex);
+      } else {
+        writer.writeVarUInt32(0);
+      }
       this._initExpressionEmitter.write(writer);
       writer.writeVarUInt32(this._data.length);
       writer.writeBytes(this._data);
@@ -7162,11 +8397,17 @@ var webasmPlayground = (() => {
 
   // src/ElementSegmentBuilder.ts
   var ElementSegmentBuilder = class {
-    constructor(table, functions) {
+    constructor(table, functions, features) {
       this._functions = [];
       this._initExpressionEmitter = null;
+      this._passive = false;
       this._table = table;
       this._functions = functions;
+      this._features = features || /* @__PURE__ */ new Set();
+    }
+    passive() {
+      this._passive = true;
+      return this;
     }
     createInitEmitter(callback) {
       if (this._initExpressionEmitter) {
@@ -7174,7 +8415,8 @@ var webasmPlayground = (() => {
       }
       this._initExpressionEmitter = new InitExpressionEmitter(
         "Element" /* Element */,
-        ValueType.Int32
+        ValueType.Int32,
+        this._features
       );
       if (callback) {
         callback(this._initExpressionEmitter);
@@ -7197,20 +8439,38 @@ var webasmPlayground = (() => {
         throw new Error("Unsupported offset");
       }
     }
+    _writeFuncIndex(writer, func) {
+      if (func instanceof FunctionBuilder) {
+        writer.writeVarUInt32(func._index);
+      } else if (func instanceof ImportBuilder) {
+        writer.writeVarUInt32(func.index);
+      }
+    }
     write(writer) {
+      if (this._passive) {
+        writer.writeVarUInt32(1);
+        writer.writeUInt8(0);
+        writer.writeVarUInt32(this._functions.length);
+        this._functions.forEach((x) => this._writeFuncIndex(writer, x));
+        return;
+      }
       if (!this._initExpressionEmitter) {
         throw new Error("The initialization expression was not defined.");
       }
-      writer.writeVarUInt32(this._table._index);
-      this._initExpressionEmitter.write(writer);
-      writer.writeVarUInt32(this._functions.length);
-      this._functions.forEach((x) => {
-        if (x instanceof FunctionBuilder) {
-          writer.writeVarUInt32(x._index);
-        } else if (x instanceof ImportBuilder) {
-          writer.writeVarUInt32(x.index);
-        }
-      });
+      const tableIndex = this._table ? this._table._index : 0;
+      if (tableIndex !== 0) {
+        writer.writeVarUInt32(2);
+        writer.writeVarUInt32(tableIndex);
+        this._initExpressionEmitter.write(writer);
+        writer.writeUInt8(0);
+        writer.writeVarUInt32(this._functions.length);
+        this._functions.forEach((x) => this._writeFuncIndex(writer, x));
+      } else {
+        writer.writeVarUInt32(0);
+        this._initExpressionEmitter.write(writer);
+        writer.writeVarUInt32(this._functions.length);
+        this._functions.forEach((x) => this._writeFuncIndex(writer, x));
+      }
     }
     toBytes() {
       const buffer = new BinaryWriter();
@@ -7268,12 +8528,28 @@ var webasmPlayground = (() => {
 
   // src/MemoryType.ts
   var MemoryType = class {
-    constructor(resizableLimits) {
+    constructor(resizableLimits, shared = false, memory64 = false) {
       Arg.instanceOf("resizableLimits", resizableLimits, ResizableLimits);
+      if (shared && resizableLimits.maximum === null) {
+        throw new Error("Shared memory requires a maximum size.");
+      }
       this.resizableLimits = resizableLimits;
+      this.shared = shared;
+      this.memory64 = memory64;
     }
     write(writer) {
-      this.resizableLimits.write(writer);
+      if (this.shared || this.memory64) {
+        let flags = this.resizableLimits.maximum !== null ? 1 : 0;
+        if (this.shared) flags |= 2;
+        if (this.memory64) flags |= 4;
+        writer.writeVarUInt7(flags);
+        writer.writeVarUInt32(this.resizableLimits.initial);
+        if (this.resizableLimits.maximum !== null) {
+          writer.writeVarUInt32(this.resizableLimits.maximum);
+        }
+      } else {
+        this.resizableLimits.write(writer);
+      }
     }
     toBytes() {
       const buffer = new BinaryWriter();
@@ -7284,14 +8560,20 @@ var webasmPlayground = (() => {
 
   // src/MemoryBuilder.ts
   var MemoryBuilder = class {
-    constructor(moduleBuilder, resizableLimits, index) {
+    constructor(moduleBuilder, resizableLimits, index, shared = false, memory64 = false) {
       this._moduleBuilder = moduleBuilder;
-      this._memoryType = new MemoryType(resizableLimits);
+      this._memoryType = new MemoryType(resizableLimits, shared, memory64);
       this._index = index;
     }
     withExport(name) {
       this._moduleBuilder.exportMemory(this, name);
       return this;
+    }
+    get isShared() {
+      return this._memoryType.shared;
+    }
+    get isMemory64() {
+      return this._memoryType.memory64;
     }
     write(writer) {
       this._memoryType.write(writer);
@@ -7371,6 +8653,7 @@ var webasmPlayground = (() => {
       this.writeTables(lines, mod);
       this.writeMemories(lines, mod);
       this.writeGlobals(lines, mod);
+      this.writeTags(lines, mod);
       this.writeExports(lines, mod);
       this.writeStart(lines, mod);
       this.writeElements(lines, mod);
@@ -7557,7 +8840,9 @@ var webasmPlayground = (() => {
       mod._memories.forEach((mem) => {
         const limits = mem._memoryType.resizableLimits;
         const max = limits.maximum !== null ? ` ${limits.maximum}` : "";
-        lines.push(`  (memory (;${mem._index};) ${limits.initial}${max})`);
+        const shared = mem._memoryType.shared ? " shared" : "";
+        const m64 = mem._memoryType.memory64 ? " i64" : "";
+        lines.push(`  (memory (;${mem._index};)${m64} ${limits.initial}${max}${shared})`);
       });
     }
     writeGlobals(lines, mod) {
@@ -7577,6 +8862,14 @@ var webasmPlayground = (() => {
           }
         }
         lines.push(`  (global (;${g._index};) ${typeStr} (${initExpr}))`);
+      });
+    }
+    writeTags(lines, mod) {
+      mod._tags.forEach((tag, i) => {
+        const params = tag._funcType.parameterTypes.map((p) => p.name).join(" ");
+        let sig = "";
+        if (params.length > 0) sig = ` (param ${params})`;
+        lines.push(`  (tag (;${i};) (type ${tag._funcType.index})${sig})`);
       });
     }
     writeExports(lines, mod) {
@@ -7607,6 +8900,15 @@ var webasmPlayground = (() => {
     }
     writeElements(lines, mod) {
       mod._elements.forEach((elem, i) => {
+        const funcIndices = elem._functions.map((f) => {
+          if (f instanceof FunctionBuilder) return f._index;
+          if (f instanceof ImportBuilder) return f.index;
+          return 0;
+        }).join(" ");
+        if (elem._passive) {
+          lines.push(`  (elem (;${i};) func ${funcIndices})`);
+          return;
+        }
         let offsetExpr = "";
         if (elem._initExpressionEmitter) {
           const instrs = elem._initExpressionEmitter._instructions;
@@ -7619,16 +8921,21 @@ var webasmPlayground = (() => {
             }
           }
         }
-        const funcIndices = elem._functions.map((f) => {
-          if (f instanceof FunctionBuilder) return f._index;
-          if (f instanceof ImportBuilder) return f.index;
-          return 0;
-        }).join(" ");
-        lines.push(`  (elem (;${i};) (${offsetExpr}) func ${funcIndices})`);
+        const tableIndex = elem._table ? elem._table._index : 0;
+        if (tableIndex !== 0) {
+          lines.push(`  (elem (;${i};) (table ${tableIndex}) (${offsetExpr}) func ${funcIndices})`);
+        } else {
+          lines.push(`  (elem (;${i};) (${offsetExpr}) func ${funcIndices})`);
+        }
       });
     }
     writeData(lines, mod) {
       mod._data.forEach((seg, i) => {
+        const dataStr = this.bytesToWatString(seg._data);
+        if (seg._passive) {
+          lines.push(`  (data (;${i};) "${dataStr}")`);
+          return;
+        }
         let offsetExpr = "";
         if (seg._initExpressionEmitter) {
           const instrs = seg._initExpressionEmitter._instructions;
@@ -7641,8 +8948,11 @@ var webasmPlayground = (() => {
             }
           }
         }
-        const dataStr = this.bytesToWatString(seg._data);
-        lines.push(`  (data (;${i};) (${offsetExpr}) "${dataStr}")`);
+        if (seg._memoryIndex !== 0) {
+          lines.push(`  (data (;${i};) (memory ${seg._memoryIndex}) (${offsetExpr}) "${dataStr}")`);
+        } else {
+          lines.push(`  (data (;${i};) (${offsetExpr}) "${dataStr}")`);
+        }
       });
     }
     bytesToWatString(data) {
@@ -7659,6 +8969,27 @@ var webasmPlayground = (() => {
     }
   };
 
+  // src/TagBuilder.ts
+  var TagBuilder = class {
+    constructor(moduleBuilder, funcType, index) {
+      this._moduleBuilder = moduleBuilder;
+      this._funcType = funcType;
+      this._index = index;
+    }
+    get funcType() {
+      return this._funcType;
+    }
+    write(writer) {
+      writer.writeVarUInt32(0);
+      writer.writeVarUInt32(this._funcType.index);
+    }
+    toBytes() {
+      const buffer = new BinaryWriter();
+      this.write(buffer);
+      return buffer.toArray();
+    }
+  };
+
   // src/ModuleBuilder.ts
   var _ModuleBuilder = class _ModuleBuilder {
     constructor(name, options = { generateNameSection: true, disableVerification: false }) {
@@ -7671,6 +9002,7 @@ var webasmPlayground = (() => {
       this._exports = [];
       this._elements = [];
       this._data = [];
+      this._tags = [];
       this._customSections = [];
       this._startFunction = null;
       this._importsIndexSpace = {
@@ -7708,8 +9040,8 @@ var webasmPlayground = (() => {
       } else {
         normalizedReturnTypes = returnTypes;
       }
-      if (normalizedReturnTypes.length > 1) {
-        throw new Error("A method can only return zero to one values.");
+      if (normalizedReturnTypes.length > 1 && !this._resolvedFeatures.has("multi-value")) {
+        throw new Error("A method can only return zero to one values. Enable the multi-value feature to allow multiple return values.");
       }
       const funcTypeKey = FuncTypeBuilder.createKey(normalizedReturnTypes, parameters);
       let funcType = this._types.find((x) => x.key === funcTypeKey);
@@ -7767,7 +9099,7 @@ var webasmPlayground = (() => {
       });
       return importBuilder;
     }
-    importMemory(moduleName, name, initialSize, maximumSize = null) {
+    importMemory(moduleName, name, initialSize, maximumSize = null, shared = false) {
       Arg.string("moduleName", moduleName);
       Arg.string("name", name);
       Arg.number("initialSize", initialSize);
@@ -7776,10 +9108,10 @@ var webasmPlayground = (() => {
       )) {
         throw new Error(`An import already existing for ${moduleName}.${name}`);
       }
-      if (this._memories.length !== 0 || this._importsIndexSpace.memory !== 0) {
-        throw new VerificationError("Only one memory is allowed per module.");
+      if ((this._memories.length !== 0 || this._importsIndexSpace.memory !== 0) && !this._resolvedFeatures.has("multi-memory")) {
+        throw new VerificationError("Only one memory is allowed per module. Enable the multi-memory feature to allow multiple memories.");
       }
-      const memoryType = new MemoryType(new ResizableLimits(initialSize, maximumSize));
+      const memoryType = new MemoryType(new ResizableLimits(initialSize, maximumSize), shared);
       const importBuilder = new ImportBuilder(
         moduleName,
         name,
@@ -7831,8 +9163,8 @@ var webasmPlayground = (() => {
       return functionBuilder;
     }
     defineTable(elementType, initialSize, maximumSize = null) {
-      if (this._tables.length === 1) {
-        throw new Error("Only one table can be created per module.");
+      if (this._tables.length >= 1 && !this._resolvedFeatures.has("multi-table")) {
+        throw new Error("Only one table can be created per module. Enable the multi-table feature to allow multiple tables.");
       }
       const table = new TableBuilder(
         this,
@@ -7843,14 +9175,16 @@ var webasmPlayground = (() => {
       this._tables.push(table);
       return table;
     }
-    defineMemory(initialSize, maximumSize = null) {
-      if (this._memories.length !== 0 || this._importsIndexSpace.memory !== 0) {
-        throw new VerificationError("Only one memory is allowed per module.");
+    defineMemory(initialSize, maximumSize = null, shared = false, memory64 = false) {
+      if ((this._memories.length !== 0 || this._importsIndexSpace.memory !== 0) && !this._resolvedFeatures.has("multi-memory")) {
+        throw new VerificationError("Only one memory is allowed per module. Enable the multi-memory feature to allow multiple memories.");
       }
       const memory = new MemoryBuilder(
         this,
         new ResizableLimits(initialSize, maximumSize),
-        this._memories.length + this._importsIndexSpace.memory
+        this._memories.length + this._importsIndexSpace.memory,
+        shared,
+        memory64
       );
       this._memories.push(memory);
       return memory;
@@ -7867,6 +9201,16 @@ var webasmPlayground = (() => {
       }
       this._globals.push(globalBuilder);
       return globalBuilder;
+    }
+    defineTag(parameters) {
+      const funcType = this.defineFuncType(null, parameters);
+      const tagBuilder = new TagBuilder(
+        this,
+        funcType,
+        this._tags.length
+      );
+      this._tags.push(tagBuilder);
+      return tagBuilder;
     }
     setStartFunction(functionBuilder) {
       Arg.instanceOf("functionBuilder", functionBuilder, FunctionBuilder);
@@ -7916,8 +9260,8 @@ var webasmPlayground = (() => {
     exportGlobal(globalBuilder, name) {
       Arg.notEmptyString("name", name);
       Arg.instanceOf("globalBuilder", globalBuilder, GlobalBuilder);
-      if (globalBuilder.globalType.mutable && !this.disableVerification) {
-        throw new VerificationError("Cannot export a mutable global.");
+      if (globalBuilder.globalType.mutable && !this.disableVerification && !this._resolvedFeatures.has("mutable-globals")) {
+        throw new VerificationError("Cannot export a mutable global. Enable the mutable-globals feature to allow this.");
       }
       if (this._exports.find(
         (x) => x.externalKind === ExternalKind.Global && x.name === name
@@ -7929,15 +9273,22 @@ var webasmPlayground = (() => {
       return exportBuilder;
     }
     defineTableSegment(table, elements, offset) {
-      const segment = new ElementSegmentBuilder(table, elements);
+      const segment = new ElementSegmentBuilder(table, elements, this._resolvedFeatures);
       if (offset !== void 0) {
         segment.offset(offset);
       }
       this._elements.push(segment);
+      return segment;
+    }
+    definePassiveElementSegment(elements) {
+      const segment = new ElementSegmentBuilder(null, elements, this._resolvedFeatures);
+      segment.passive();
+      this._elements.push(segment);
+      return segment;
     }
     defineData(data, offset) {
       Arg.instanceOf("data", data, Uint8Array);
-      const dataSegmentBuilder = new DataSegmentBuilder(data);
+      const dataSegmentBuilder = new DataSegmentBuilder(data, this._resolvedFeatures);
       if (offset !== void 0) {
         dataSegmentBuilder.offset(offset);
       }
@@ -7979,10 +9330,126 @@ var webasmPlayground = (() => {
   };
   _ModuleBuilder.targetFeatures = {
     "mvp": [],
-    "2.0": ["sign-extend", "sat-trunc", "bulk-memory", "reference-types", "multi-value"],
-    "latest": ["sign-extend", "sat-trunc", "bulk-memory", "reference-types", "simd", "multi-value"]
+    "2.0": ["sign-extend", "sat-trunc", "bulk-memory", "reference-types", "multi-value", "mutable-globals"],
+    "3.0": [
+      "sign-extend",
+      "sat-trunc",
+      "bulk-memory",
+      "reference-types",
+      "multi-value",
+      "mutable-globals",
+      "simd",
+      "tail-call",
+      "exception-handling",
+      "threads",
+      "multi-memory",
+      "multi-table",
+      "memory64",
+      "extended-const"
+    ],
+    "latest": [
+      "sign-extend",
+      "sat-trunc",
+      "bulk-memory",
+      "reference-types",
+      "multi-value",
+      "mutable-globals",
+      "simd",
+      "tail-call",
+      "exception-handling",
+      "threads",
+      "multi-memory",
+      "multi-table",
+      "memory64",
+      "extended-const",
+      "relaxed-simd",
+      "gc"
+    ]
   };
   var ModuleBuilder = _ModuleBuilder;
+
+  // src/PackageBuilder.ts
+  var PackageBuilder = class {
+    constructor() {
+      this._modules = [];
+    }
+    defineModule(name, options) {
+      if (this._modules.find((m) => m.name === name)) {
+        throw new Error(`A module with the name "${name}" already exists.`);
+      }
+      const moduleBuilder = new ModuleBuilder(name, options);
+      this._modules.push({ name, moduleBuilder, dependencies: [] });
+      return moduleBuilder;
+    }
+    addDependency(moduleName, dependsOn) {
+      const entry = this._modules.find((m) => m.name === moduleName);
+      if (!entry) {
+        throw new Error(`Module "${moduleName}" not found.`);
+      }
+      if (!this._modules.find((m) => m.name === dependsOn)) {
+        throw new Error(`Dependency module "${dependsOn}" not found.`);
+      }
+      if (!entry.dependencies.includes(dependsOn)) {
+        entry.dependencies.push(dependsOn);
+      }
+    }
+    getModule(name) {
+      return this._modules.find((m) => m.name === name)?.moduleBuilder;
+    }
+    topologicalSort() {
+      const visited = /* @__PURE__ */ new Set();
+      const sorted = [];
+      const visiting = /* @__PURE__ */ new Set();
+      const visit = (name) => {
+        if (visited.has(name)) return;
+        if (visiting.has(name)) {
+          throw new Error(`Circular dependency detected involving module "${name}".`);
+        }
+        visiting.add(name);
+        const entry = this._modules.find((m) => m.name === name);
+        for (const dep of entry.dependencies) {
+          visit(dep);
+        }
+        visiting.delete(name);
+        visited.add(name);
+        sorted.push(entry);
+      };
+      for (const entry of this._modules) {
+        visit(entry.name);
+      }
+      return sorted;
+    }
+    async compile() {
+      const sorted = this.topologicalSort();
+      const result = {};
+      for (const entry of sorted) {
+        const bytes = entry.moduleBuilder.toBytes();
+        result[entry.name] = await WebAssembly.compile(bytes.buffer);
+      }
+      return result;
+    }
+    async instantiate(imports = {}) {
+      const sorted = this.topologicalSort();
+      const result = {};
+      for (const entry of sorted) {
+        const bytes = entry.moduleBuilder.toBytes();
+        const moduleImports = {};
+        if (imports[entry.name]) {
+          Object.assign(moduleImports, imports[entry.name]);
+        }
+        for (const depName of entry.dependencies) {
+          const depInstance = result[depName];
+          if (depInstance) {
+            moduleImports[depName] = depInstance.exports;
+          }
+        }
+        const instantiated = await WebAssembly.instantiate(bytes.buffer, moduleImports);
+        const instance = instantiated.instance;
+        result[entry.name] = instance;
+      }
+      return result;
+    }
+  };
 
   // src/WatParser.ts
   function tokenize(source) {
@@ -8966,6 +10433,9 @@ var webasmPlayground = (() => {
     "hello-wasm": {
       label: "Hello WASM",
       group: "Basics",
+      description: "The simplest possible module \u2014 export a function that returns 42.",
+      target: "mvp",
+      features: [],
       code: `// Hello WASM \u2014 the simplest possible module
 const mod = new webasmjs.ModuleBuilder('hello');
 
@@ -8980,6 +10450,9 @@ log('The answer to everything: ' + answer());`
     factorial: {
       label: "Factorial",
       group: "Basics",
+      description: "Iterative factorial using loop and block for control flow.",
+      target: "mvp",
+      features: [],
       code: `// Factorial \u2014 iterative with loop and block
 const mod = new webasmjs.ModuleBuilder('factorial');
 
@@ -9025,6 +10498,9 @@ for (let n = 0; n <= 10; n++) {
     fibonacci: {
       label: "Fibonacci",
       group: "Basics",
+      description: "Iterative Fibonacci with local variables and branching.",
+      target: "mvp",
+      features: [],
       code: `// Fibonacci sequence \u2014 iterative
 const mod = new webasmjs.ModuleBuilder('fibonacci');
 
@@ -9086,6 +10562,9 @@ for (let n = 0; n <= 15; n++) {
     "if-else": {
       label: "If/Else",
       group: "Basics",
+      description: "Absolute value and sign function using typed if/else blocks.",
+      target: "mvp",
+      features: [],
       code: `// If/Else \u2014 absolute value and sign function
 const mod = new webasmjs.ModuleBuilder('ifElse');
 
@@ -9137,6 +10616,9 @@ log('sign(0) = ' + sign(0));`
     memory: {
       label: "Memory Basics",
       group: "Memory",
+      description: "Store and load i32 values in linear memory.",
+      target: "mvp",
+      features: [],
       code: `// Memory: store and load values
 const mod = new webasmjs.ModuleBuilder('memoryExample');
 const mem = mod.defineMemory(1);
@@ -9166,6 +10648,9 @@ log('Sum stored at 0: ' + load(0));`
     "byte-array": {
       label: "Byte Array",
       group: "Memory",
+      description: "Store and sum individual bytes with load8/store8 instructions.",
+      target: "mvp",
+      features: [],
       code: `// Byte array \u2014 store and sum individual bytes
 const mod = new webasmjs.ModuleBuilder('byteArray');
 mod.defineMemory(1);
@@ -9235,6 +10720,9 @@ log('Sum of 10 bytes: ' + sumBytes(10));`
     "string-memory": {
       label: "Strings in Memory",
       group: "Memory",
+      description: "Store a string via data segment and compute its length.",
+      target: "mvp",
+      features: [],
       code: `// Strings in memory \u2014 store a string, compute its length
 const mod = new webasmjs.ModuleBuilder('stringMem');
 const mem = mod.defineMemory(1);
@@ -9284,10 +10772,134 @@ const str = new TextDecoder().decode(memView.slice(0, strLen));
 log('String in memory: "' + str + '"');
 log('Length: ' + strLen);`
     },
+    "data-segments": {
+      label: "Data Segments",
+      group: "Memory",
+      description: "Pre-initialize memory with defineData and read values at runtime.",
+      target: "mvp",
+      features: [],
+      code: `// Data segments \u2014 pre-initialize memory with static data
+const mod = new webasmjs.ModuleBuilder('dataSegments');
+const mem = mod.defineMemory(1);
+mod.exportMemory(mem, 'memory');
+
+// Pre-fill memory with a lookup table at offset 0
+// Powers of 2: [1, 2, 4, 8, 16, 32, 64, 128]
+const powers = new Uint8Array(new Int32Array([1, 2, 4, 8, 16, 32, 64, 128]).buffer);
+mod.defineData(powers, 0);
+
+// Pre-fill memory with a message at offset 64
+const msg = new TextEncoder().encode('Hello from data segment!');
+mod.defineData(new Uint8Array([...msg, 0]), 64);
+
+// Read an i32 from the powers table: getPower(index)
+mod.defineFunction('getPower', [webasmjs.ValueType.Int32], [webasmjs.ValueType.Int32], (f, a) => {
+  a.get_local(f.getParameter(0));
+  a.const_i32(4);
+  a.mul_i32();
+  a.load_i32(2, 0);
+}).withExport();
+
+// strlen starting at offset
+mod.defineFunction('strlen', [webasmjs.ValueType.Int32], [webasmjs.ValueType.Int32], (f, a) => {
+  const ptr = f.getParameter(0);
+  const len = a.declareLocal(webasmjs.ValueType.Int32, 'len');
+  a.const_i32(0);
+  a.set_local(len);
+  a.loop(webasmjs.BlockType.Void, (loopLabel) => {
+    a.block(webasmjs.BlockType.Void, (breakLabel) => {
+      a.get_local(ptr);
+      a.get_local(len);
+      a.add_i32();
+      a.load8_i32_u(0, 0);
+      a.eqz_i32();
+      a.br_if(breakLabel);
+      a.get_local(len);
+      a.const_i32(1);
+      a.add_i32();
+      a.set_local(len);
+      a.br(loopLabel);
+    });
+  });
+  a.get_local(len);
+}).withExport();
+
+const instance = await mod.instantiate();
+const { getPower, strlen, memory } = instance.instance.exports;
+
+log('Powers of 2 from data segment:');
+for (let i = 0; i < 8; i++) {
+  log('  2^' + i + ' = ' + getPower(i));
+}
+
+const view = new Uint8Array(memory.buffer);
+const len = strlen(64);
+const str = new TextDecoder().decode(view.slice(64, 64 + len));
+log('');
+log('Message from data segment: "' + str + '"');`
+    },
+    "memory-growth": {
+      label: "Memory Growth",
+      group: "Memory",
+      description: "Grow memory at runtime with mem_grow and query size with mem_size.",
+      target: "mvp",
+      features: [],
+      code: `// Memory growth \u2014 dynamically add pages at runtime
+const mod = new webasmjs.ModuleBuilder('memGrowth');
+const mem = mod.defineMemory(1); // start with 1 page (64KB)
+mod.exportMemory(mem, 'memory');
+
+// Return current memory size in pages
+mod.defineFunction('pages', [webasmjs.ValueType.Int32], [], (f, a) => {
+  a.mem_size(0);
+}).withExport();
+
+// Grow memory by N pages, return previous size (or -1 on failure)
+mod.defineFunction('grow', [webasmjs.ValueType.Int32], [webasmjs.ValueType.Int32], (f, a) => {
+  a.get_local(f.getParameter(0));
+  a.mem_grow(0);
+}).withExport();
+
+// Store an i32 at a byte offset
+mod.defineFunction('store', null, [webasmjs.ValueType.Int32, webasmjs.ValueType.Int32], (f, a) => {
+  a.get_local(f.getParameter(0));
+  a.get_local(f.getParameter(1));
+  a.store_i32(2, 0);
+}).withExport();
+
+// Load an i32 from a byte offset
+mod.defineFunction('load', [webasmjs.ValueType.Int32], [webasmjs.ValueType.Int32], (f, a) => {
+  a.get_local(f.getParameter(0));
+  a.load_i32(2, 0);
+}).withExport();
+
+const instance = await mod.instantiate();
+const { pages, grow, store, load } = instance.instance.exports;
+
+log('Initial size: ' + pages() + ' page(s) = ' + (pages() * 64) + ' KB');
+
+// Grow by 2 pages
+const prev = grow(2);
+log('grow(2) returned previous size: ' + prev);
+log('New size: ' + pages() + ' page(s) = ' + (pages() * 64) + ' KB');
+
+// Write to the new pages (offset > 64KB = beyond original page)
+const offset = 65536 + 100; // byte 100 in second page
+store(offset, 12345);
+log('Stored 12345 at offset ' + offset + ' (in grown memory)');
+log('Loaded: ' + load(offset));
+
+// Grow again
+grow(1);
+log('After another grow(1): ' + pages() + ' pages');`
+    },
     // ─── Globals & State ───
     globals: {
       label: "Global Counter",
       group: "Globals",
+      description: "Mutable global variable used as a persistent counter.",
+      target: "mvp",
+      features: [],
       code: `// Globals: mutable counter
 const mod = new webasmjs.ModuleBuilder('globals');
 
@@ -9319,6 +10931,9 @@ log('After 7 more: ' + getCount());`
     "start-function": {
       label: "Start Function",
       group: "Globals",
+      description: "A function that runs automatically on module instantiation.",
+      target: "mvp",
+      features: [],
       code: `// Start function \u2014 runs automatically on instantiation
 const mod = new webasmjs.ModuleBuilder('startExample');
 
@@ -9345,6 +10960,9 @@ log('The start function ran automatically!');`
     "multi-func": {
       label: "Function Calls",
       group: "Functions",
+      description: "Multiple functions calling each other \u2014 square, double, compose.",
+      target: "mvp",
+      features: [],
       code: `// Multiple functions calling each other
 const mod = new webasmjs.ModuleBuilder('multiFn');
 
@@ -9382,6 +11000,9 @@ for (let x = 1; x <= 5; x++) {
     "imports": {
       label: "Import Functions",
       group: "Functions",
+      description: "Import host functions so WASM can call JavaScript.",
+      target: "mvp",
+      features: [],
       code: `// Importing host functions \u2014 WASM calling JavaScript
 const mod = new webasmjs.ModuleBuilder('imports');
 
@@ -9421,6 +11042,9 @@ logged.forEach((v, i) => log('  [' + i + '] ' + v));`
     "indirect-call": {
       label: "Indirect Calls (Table)",
       group: "Functions",
+      description: "Dispatch function calls through a table using call_indirect.",
+      target: "mvp",
+      features: [],
       code: `// Indirect calls via function table
 const mod = new webasmjs.ModuleBuilder('indirectCall');
 
@@ -9463,10 +11087,428 @@ for (let op = 0; op < 3; op++) {
   log(ops[op] + '(10, 3) = ' + dispatch(op, 10, 3));
 }`
     },
+    "multi-module": {
+      label: "Multi-Module",
+      group: "Functions",
+      description: "Use PackageBuilder to link two modules with imports.",
+      target: "mvp",
+      features: [],
+      code: `// Multi-module \u2014 PackageBuilder links modules with dependencies
+const pkg = new webasmjs.PackageBuilder();
+
+// Module "math": provides a double function
+const mathMod = pkg.defineModule('math');
+mathMod.defineFunction('double', [webasmjs.ValueType.Int32], [webasmjs.ValueType.Int32], (f, a) => {
+  a.get_local(f.getParameter(0));
+  a.const_i32(2);
+  a.mul_i32();
+}).withExport();
+
+mathMod.defineFunction('square', [webasmjs.ValueType.Int32], [webasmjs.ValueType.Int32], (f, a) => {
+  a.get_local(f.getParameter(0));
+  a.get_local(f.getParameter(0));
+  a.mul_i32();
+}).withExport();
+
+// Module "main": imports from "math" and composes
+const mainMod = pkg.defineModule('main');
+const doubleFn = mainMod.importFunction('math', 'double', [webasmjs.ValueType.Int32], [webasmjs.ValueType.Int32]);
+const squareFn = mainMod.importFunction('math', 'square', [webasmjs.ValueType.Int32], [webasmjs.ValueType.Int32]);
+
+// quadruple(x) = double(double(x))
+mainMod.defineFunction('quadruple', [webasmjs.ValueType.Int32], [webasmjs.ValueType.Int32], (f, a) => {
+  a.get_local(f.getParameter(0));
+  a.call(doubleFn);
+  a.call(doubleFn);
+}).withExport();
+
+// doubleSquare(x) = double(square(x)) = 2 * x^2
+mainMod.defineFunction('doubleSquare', [webasmjs.ValueType.Int32], [webasmjs.ValueType.Int32], (f, a) => {
+  a.get_local(f.getParameter(0));
+  a.call(squareFn);
+  a.call(doubleFn);
+}).withExport();
+
+pkg.addDependency('main', 'math');
+const result = await pkg.instantiate();
+const { quadruple, doubleSquare } = result.main.exports;
+
+log('PackageBuilder \u2014 two linked modules:');
+for (let x = 1; x <= 6; x++) {
+  log('  x=' + x + ': quadruple=' + quadruple(x) + ', 2x\\u00B2=' + doubleSquare(x));
+}`
+    },
+    "recursive": {
+      label: "Recursive Function",
+      group: "Functions",
+      description: "Self-recursive power function using a.call(f).",
+      target: "mvp",
+      features: [],
+      code: `// Recursive function \u2014 power(base, exp) calls itself
+const mod = new webasmjs.ModuleBuilder('recursion');
+
+mod.defineFunction('power', [webasmjs.ValueType.Int32],
+  [webasmjs.ValueType.Int32, webasmjs.ValueType.Int32], (f, a) => {
+  const base = f.getParameter(0);
+  const exp = f.getParameter(1);
+
+  // if exp == 0 return 1
+  a.get_local(exp);
+  a.eqz_i32();
+  a.if(webasmjs.BlockType.Void, () => {
+    a.const_i32(1);
+    a.return();
+  });
+
+  // return base * power(base, exp - 1)
+  a.get_local(base);
+  a.get_local(base);
+  a.get_local(exp);
+  a.const_i32(1);
+  a.sub_i32();
+  a.call(f);  // recursive call to self!
+  a.mul_i32();
+}).withExport();
+
+const instance = await mod.instantiate();
+const { power } = instance.instance.exports;
+
+log('Recursive power(base, exp):');
+for (let b = 2; b <= 5; b++) {
+  const results = [];
+  for (let e = 0; e <= 5; e++) results.push(b + '^' + e + '=' + power(b, e));
+  log('  ' + results.join(', '));
+}`
+    },
+    // ─── Control Flow ───
+    "br-table": {
+      label: "Branch Table",
+      group: "Control Flow",
+      description: "Switch/case dispatch using the br_table instruction.",
+      target: "mvp",
+      features: [],
+      code: `// br_table \u2014 switch/case dispatch to different blocks
+const mod = new webasmjs.ModuleBuilder('brTable');
+
+// dayType(day): 0-4 => "weekday" (return 1), 5-6 => "weekend" (return 2), else => "invalid" (return 0)
+mod.defineFunction('dayType', [webasmjs.ValueType.Int32], [webasmjs.ValueType.Int32], (f, a) => {
+  const day = f.getParameter(0);
+  const result = a.declareLocal(webasmjs.ValueType.Int32, 'result');
+
+  a.block(webasmjs.BlockType.Void, (invalidBlock) => {
+    a.block(webasmjs.BlockType.Void, (weekendBlock) => {
+      a.block(webasmjs.BlockType.Void, (weekdayBlock) => {
+        // br_table: value 0-4 => weekdayBlock, 5-6 => weekendBlock, default => invalidBlock
+        a.get_local(day);
+        a.br_table(invalidBlock,
+          weekdayBlock, weekdayBlock, weekdayBlock, weekdayBlock, weekdayBlock,
+          weekendBlock, weekendBlock
+        );
+      });
+      // weekday path
+      a.const_i32(1);
+      a.set_local(result);
+      a.br(invalidBlock); // jump to end
+    });
+    // weekend path
+    a.const_i32(2);
+    a.set_local(result);
+    a.br(invalidBlock); // jump to end
+  });
+  // if we fell through to here via default, result is still 0
+
+  a.get_local(result);
+}).withExport();
+
+const instance = await mod.instantiate();
+const { dayType } = instance.instance.exports;
+
+const names = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+const types = ['invalid', 'weekday', 'weekend'];
+for (let d = 0; d < 7; d++) {
+  log(names[d] + ' (day ' + d + '): ' + types[dayType(d)]);
+}
+log('day 7: ' + types[dayType(7)]);
+log('day 99: ' + types[dayType(99)]);`
+    },
+    "select": {
+      label: "Select (Ternary)",
+      group: "Control Flow",
+      description: "Branchless conditional with select \u2014 like a ternary operator.",
+      target: "mvp",
+      features: [],
+      code: `// select \u2014 branchless conditional (ternary operator)
+const mod = new webasmjs.ModuleBuilder('selectOp');
+
+// max(a, b) = a > b ? a : b  (using select)
+mod.defineFunction('max', [webasmjs.ValueType.Int32],
+  [webasmjs.ValueType.Int32, webasmjs.ValueType.Int32], (f, a) => {
+  const x = f.getParameter(0);
+  const y = f.getParameter(1);
+
+  a.get_local(x);     // value if true
+  a.get_local(y);     // value if false
+  a.get_local(x);
+  a.get_local(y);
+  a.gt_i32();          // condition: x > y
+  a.select();
+}).withExport();
+
+// min(a, b) = a < b ? a : b
+mod.defineFunction('min', [webasmjs.ValueType.Int32],
+  [webasmjs.ValueType.Int32, webasmjs.ValueType.Int32], (f, a) => {
+  const x = f.getParameter(0);
+  const y = f.getParameter(1);
+
+  a.get_local(x);
+  a.get_local(y);
+  a.get_local(x);
+  a.get_local(y);
+  a.lt_i32();
+  a.select();
+}).withExport();
+
+// clamp(val, lo, hi)
+mod.defineFunction('clamp', [webasmjs.ValueType.Int32],
+  [webasmjs.ValueType.Int32, webasmjs.ValueType.Int32, webasmjs.ValueType.Int32], (f, a) => {
+  const val = f.getParameter(0);
+  const lo = f.getParameter(1);
+  const hi = f.getParameter(2);
+  const tmp = a.declareLocal(webasmjs.ValueType.Int32, 'tmp');
+
+  // tmp = val > hi ? hi : val
+  a.get_local(hi);
+  a.get_local(val);
+  a.get_local(val);
+  a.get_local(hi);
+  a.gt_i32();
+  a.select();
+  a.set_local(tmp);
+
+  // result = tmp < lo ? lo : tmp
+  a.get_local(lo);
+  a.get_local(tmp);
+  a.get_local(tmp);
+  a.get_local(lo);
+  a.lt_i32();
+  a.select();
+}).withExport();
+
+const instance = await mod.instantiate();
+const { max, min, clamp } = instance.instance.exports;
+
+log('max(3, 7) = ' + max(3, 7));
+log('max(10, 2) = ' + max(10, 2));
+log('min(3, 7) = ' + min(3, 7));
+log('min(10, 2) = ' + min(10, 2));
+log('');
+log('clamp(5, 0, 10) = ' + clamp(5, 0, 10));
+log('clamp(-3, 0, 10) = ' + clamp(-3, 0, 10));
+log('clamp(15, 0, 10) = ' + clamp(15, 0, 10));
+log('clamp(0, 0, 10) = ' + clamp(0, 0, 10));
+log('clamp(10, 0, 10) = ' + clamp(10, 0, 10));`
+    },
+    "nested-blocks": {
+      label: "Nested Blocks",
+      group: "Control Flow",
+      description: "Multi-level block nesting with early break and continue.",
+      target: "mvp",
+      features: [],
+      code: `// Nested blocks \u2014 multi-level break and continue patterns
+const mod = new webasmjs.ModuleBuilder('nestedBlocks');
+
+// Find the first number in [start, start+limit) divisible by both 3 and 5
+// Returns -1 if not found
+mod.defineFunction('findFizzBuzz', [webasmjs.ValueType.Int32],
+  [webasmjs.ValueType.Int32, webasmjs.ValueType.Int32], (f, a) => {
+  const start = f.getParameter(0);
+  const limit = f.getParameter(1);
+  const i = a.declareLocal(webasmjs.ValueType.Int32, 'i');
+  const end = a.declareLocal(webasmjs.ValueType.Int32, 'end');
+  const result = a.declareLocal(webasmjs.ValueType.Int32, 'result');
+
+  a.const_i32(-1);
+  a.set_local(result);
+
+  // end = start + limit
+  a.get_local(start);
+  a.get_local(limit);
+  a.add_i32();
+  a.set_local(end);
+
+  a.get_local(start);
+  a.set_local(i);
+
+  // outer block \u2014 break here when found
+  a.block(webasmjs.BlockType.Void, (found) => {
+    a.loop(webasmjs.BlockType.Void, (cont) => {
+      // if i >= end, exit loop
+      a.block(webasmjs.BlockType.Void, (skip) => {
+        a.get_local(i);
+        a.get_local(end);
+        a.ge_i32();
+        a.br_if(found);
+
+        // Check divisible by 3
+        a.get_local(i);
+        a.const_i32(3);
+        a.rem_i32_u();
+        a.br_if(skip); // not divisible by 3, skip
+
+        // Check divisible by 5
+        a.get_local(i);
+        a.const_i32(5);
+        a.rem_i32_u();
+        a.br_if(skip); // not divisible by 5, skip
+
+        // Found! Save and break to outer
+        a.get_local(i);
+        a.set_local(result);
+        a.br(found);
+      });
+
+      // i++
+      a.get_local(i);
+      a.const_i32(1);
+      a.add_i32();
+      a.set_local(i);
+      a.br(cont);
+    });
+  });
+
+  a.get_local(result);
+}).withExport();
+
+const instance = await mod.instantiate();
+const { findFizzBuzz } = instance.instance.exports;
+
+log('Find first FizzBuzz (divisible by 3 and 5):');
+log('  findFizzBuzz(1, 100) = ' + findFizzBuzz(1, 100));
+log('  findFizzBuzz(16, 10) = ' + findFizzBuzz(16, 10));
+log('  findFizzBuzz(31, 50) = ' + findFizzBuzz(31, 50));
+log('  findFizzBuzz(1, 5) = ' + findFizzBuzz(1, 5) + '  (not found)');
+log('  findFizzBuzz(46, 10) = ' + findFizzBuzz(46, 10));`
+    },
+    "drop-and-tee": {
+      label: "Drop & Tee Local",
+      group: "Control Flow",
+      description: "Stack manipulation with drop() and tee_local().",
+      target: "mvp",
+      features: [],
+      code: `// drop and tee_local \u2014 stack manipulation
+const mod = new webasmjs.ModuleBuilder('stackOps');
+
+// tee_local: stores to local AND keeps value on stack
+// Equivalent to: set_local + get_local, but in one instruction
+mod.defineFunction('sumAndCount', [webasmjs.ValueType.Int32],
+  [webasmjs.ValueType.Int32], (f, a) => {
+  const n = f.getParameter(0);
+  const sum = a.declareLocal(webasmjs.ValueType.Int32, 'sum');
+  const i = a.declareLocal(webasmjs.ValueType.Int32, 'i');
+
+  a.const_i32(0);
+  a.set_local(sum);
+  a.const_i32(1);
+  a.set_local(i);
+
+  a.loop(webasmjs.BlockType.Void, (cont) => {
+    a.block(webasmjs.BlockType.Void, (brk) => {
+      a.get_local(i);
+      a.get_local(n);
+      a.gt_i32();
+      a.br_if(brk);
+
+      // tee_local: store i to sum while keeping it on stack
+      a.get_local(sum);
+      a.get_local(i);
+      a.tee_local(i);  // stores i, but also leaves value on stack
+      a.add_i32();
+      a.set_local(sum);
+
+      // increment i (which was already tee'd)
+      a.get_local(i);
+      a.const_i32(1);
+      a.add_i32();
+      a.set_local(i);
+      a.br(cont);
+    });
+  });
+
+  a.get_local(sum);
+}).withExport();
+
+// drop: discard an unwanted return value
+mod.defineFunction('callAndDiscard', [webasmjs.ValueType.Int32], [], (f, a) => {
+  // Call sumAndCount but ignore its return value
+  a.const_i32(10);
+  a.call(mod._functions[0]); // calls sumAndCount(10)
+  a.drop();                   // discard the result
+
+  // Return a fixed value instead
+  a.const_i32(42);
+}).withExport();
+
+const instance = await mod.instantiate();
+const { sumAndCount, callAndDiscard } = instance.instance.exports;
+
+log('sumAndCount (uses tee_local):');
+for (const n of [5, 10, 100]) {
+  log('  sum(1..' + n + ') = ' + sumAndCount(n));
+}
+log('');
+log('callAndDiscard (uses drop):');
+log('  result = ' + callAndDiscard() + ' (dropped sumAndCount result, returned 42)');`
+    },
+    "unreachable-trap": {
+      label: "Unreachable Trap",
+      group: "Control Flow",
+      description: "Use unreachable as an assertion \u2014 traps if reached.",
+      target: "mvp",
+      features: [],
+      code: `// unreachable \u2014 intentional trap for defensive programming
+const mod = new webasmjs.ModuleBuilder('trapDemo');
+
+// divide(a, b) \u2014 traps if b is zero
+mod.defineFunction('divide', [webasmjs.ValueType.Int32],
+  [webasmjs.ValueType.Int32, webasmjs.ValueType.Int32], (f, a) => {
+  const x = f.getParameter(0);
+  const y = f.getParameter(1);
+
+  // Guard: trap if divisor is zero
+  a.get_local(y);
+  a.eqz_i32();
+  a.if(webasmjs.BlockType.Void, () => {
+    a.unreachable();  // trap!
+  });
+
+  a.get_local(x);
+  a.get_local(y);
+  a.div_i32();
+}).withExport();
+
+const instance = await mod.instantiate();
+const { divide } = instance.instance.exports;
+
+log('divide(10, 2) = ' + divide(10, 2));
+log('divide(100, 5) = ' + divide(100, 5));
+log('divide(7, 3) = ' + divide(7, 3));
+log('');
+
+try {
+  divide(10, 0);
+  log('Should not reach here!');
+} catch (e) {
+  log('divide(10, 0) trapped: ' + e.message);
+  log('The unreachable instruction prevented division by zero!');
+}`
+    },
     // ─── Numeric Types ───
     "float-math": {
       label: "Float Math",
       group: "Numeric",
+      description: "Floating-point distance, rounding, and sqrt with f64.",
+      target: "mvp",
+      features: [],
       code: `// Floating-point operations \u2014 f64 math functions
 const mod = new webasmjs.ModuleBuilder('floatMath');
 
@@ -9529,6 +11571,9 @@ log('roundDown(2.7) = ' + roundDown(2.7));`
     "i64-bigint": {
       label: "i64 / BigInt",
       group: "Numeric",
+      description: "64-bit integers with BigInt interop \u2014 large factorial.",
+      target: "mvp",
+      features: [],
       code: `// 64-bit integers \u2014 BigInt interop
 const mod = new webasmjs.ModuleBuilder('i64ops');
 
@@ -9594,6 +11639,9 @@ for (let n = 0n; n <= 20n; n++) {
     "type-conversions": {
       label: "Type Conversions",
       group: "Numeric",
+      description: "Convert between i32, i64, f32, and f64 types.",
+      target: "mvp",
+      features: [],
       code: `// Type conversions between numeric types
 const mod = new webasmjs.ModuleBuilder('conversions');
 
@@ -9638,10 +11686,179 @@ log('i32(-1) \u2192 i64: ' + i32_to_i64(-1));
 log('i64(0x1FFFFFFFFn) \u2192 i32: ' + i64_to_i32(0x1FFFFFFFFn));
 log('f32(3.14) \u2192 f64: ' + f32_to_f64(3.140000104904175));`
     },
+    "bitwise-ops": {
+      label: "Bitwise Operations",
+      group: "Numeric",
+      description: "Rotation, leading/trailing zeros, and popcount on i32.",
+      target: "mvp",
+      features: [],
+      code: `// Bitwise operations \u2014 rotl, rotr, clz, ctz, popcnt
+const mod = new webasmjs.ModuleBuilder('bitwiseOps');
+
+mod.defineFunction('rotl', [webasmjs.ValueType.Int32],
+  [webasmjs.ValueType.Int32, webasmjs.ValueType.Int32], (f, a) => {
+  a.get_local(f.getParameter(0));
+  a.get_local(f.getParameter(1));
+  a.rotl_i32();
+}).withExport();
+
+mod.defineFunction('rotr', [webasmjs.ValueType.Int32],
+  [webasmjs.ValueType.Int32, webasmjs.ValueType.Int32], (f, a) => {
+  a.get_local(f.getParameter(0));
+  a.get_local(f.getParameter(1));
+  a.rotr_i32();
+}).withExport();
+
+mod.defineFunction('clz', [webasmjs.ValueType.Int32],
+  [webasmjs.ValueType.Int32], (f, a) => {
+  a.get_local(f.getParameter(0));
+  a.clz_i32();
+}).withExport();
+
+mod.defineFunction('ctz', [webasmjs.ValueType.Int32],
+  [webasmjs.ValueType.Int32], (f, a) => {
+  a.get_local(f.getParameter(0));
+  a.ctz_i32();
+}).withExport();
+
+mod.defineFunction('popcnt', [webasmjs.ValueType.Int32],
+  [webasmjs.ValueType.Int32], (f, a) => {
+  a.get_local(f.getParameter(0));
+  a.popcnt_i32();
+}).withExport();
+
+const instance = await mod.instantiate();
+const { rotl, rotr, clz, ctz, popcnt } = instance.instance.exports;
+
+log('=== Rotation ===');
+log('rotl(0x80000001, 1) = 0x' + (rotl(0x80000001, 1) >>> 0).toString(16));
+log('rotr(0x80000001, 1) = 0x' + (rotr(0x80000001, 1) >>> 0).toString(16));
+log('rotl(1, 10) = ' + rotl(1, 10) + '  (1 << 10 = 1024)');
+
+log('');
+log('=== Bit Counting ===');
+log('clz(1) = ' + clz(1) + '  (31 leading zeros)');
+log('clz(256) = ' + clz(256) + '  (23 leading zeros)');
+log('clz(0) = ' + clz(0) + '  (all 32 zeros)');
+log('ctz(256) = ' + ctz(256) + '  (8 trailing zeros)');
+log('ctz(1) = ' + ctz(1) + '  (0 trailing zeros)');
+log('popcnt(0xFF) = ' + popcnt(0xFF) + '  (8 bits set)');
+log('popcnt(0x55555555) = ' + popcnt(0x55555555) + '  (16 bits set)');
+log('popcnt(0) = ' + popcnt(0));`
+    },
+    "float-special": {
+      label: "Float Special Ops",
+      group: "Numeric",
+      description: "copysign, nearest, trunc \u2014 standalone float operations.",
+      target: "mvp",
+      features: [],
+      code: `// Special float operations \u2014 copysign, nearest, trunc
+const mod = new webasmjs.ModuleBuilder('floatSpecial');
+
+// copysign(a, b) \u2014 magnitude of a, sign of b
+mod.defineFunction('copysign', [webasmjs.ValueType.Float64],
+  [webasmjs.ValueType.Float64, webasmjs.ValueType.Float64], (f, a) => {
+  a.get_local(f.getParameter(0));
+  a.get_local(f.getParameter(1));
+  a.copysign_f64();
+}).withExport();
+
+// nearest \u2014 round to nearest even (banker's rounding)
+mod.defineFunction('nearest', [webasmjs.ValueType.Float64],
+  [webasmjs.ValueType.Float64], (f, a) => {
+  a.get_local(f.getParameter(0));
+  a.nearest_f64();
+}).withExport();
+
+// trunc \u2014 round towards zero (remove fractional part)
+mod.defineFunction('trunc', [webasmjs.ValueType.Float64],
+  [webasmjs.ValueType.Float64], (f, a) => {
+  a.get_local(f.getParameter(0));
+  a.trunc_f64();
+}).withExport();
+
+const instance = await mod.instantiate();
+const { copysign, nearest, trunc } = instance.instance.exports;
+
+log('=== copysign(magnitude, sign) ===');
+log('copysign(5.0, -1.0) = ' + copysign(5.0, -1.0));
+log('copysign(-5.0, 1.0) = ' + copysign(-5.0, 1.0));
+log('copysign(3.14, -0.0) = ' + copysign(3.14, -0.0));
+
+log('');
+log('=== nearest (banker\\u2019s rounding) ===');
+log('nearest(0.5) = ' + nearest(0.5) + '  (rounds to even: 0)');
+log('nearest(1.5) = ' + nearest(1.5) + '  (rounds to even: 2)');
+log('nearest(2.5) = ' + nearest(2.5) + '  (rounds to even: 2)');
+log('nearest(3.5) = ' + nearest(3.5) + '  (rounds to even: 4)');
+log('nearest(2.3) = ' + nearest(2.3));
+log('nearest(-1.7) = ' + nearest(-1.7));
+
+log('');
+log('=== trunc (towards zero) ===');
+log('trunc(2.9) = ' + trunc(2.9));
+log('trunc(-2.9) = ' + trunc(-2.9));
+log('trunc(0.1) = ' + trunc(0.1));`
+    },
+    "reinterpret": {
+      label: "Reinterpret Casts",
+      group: "Numeric",
+      description: "Reinterpret bits between float and int without conversion.",
+      target: "mvp",
+      features: [],
+      code: `// Reinterpret \u2014 same bits, different type interpretation
+const mod = new webasmjs.ModuleBuilder('reinterpret');
+
+// View f32 bits as i32
+mod.defineFunction('f32_bits', [webasmjs.ValueType.Int32],
+  [webasmjs.ValueType.Float32], (f, a) => {
+  a.get_local(f.getParameter(0));
+  a.reinterpret_f32_i32();
+}).withExport();
+
+// View i32 bits as f32
+mod.defineFunction('i32_as_f32', [webasmjs.ValueType.Float32],
+  [webasmjs.ValueType.Int32], (f, a) => {
+  a.get_local(f.getParameter(0));
+  a.reinterpret_i32_f32();
+}).withExport();
+
+// View f64 bits as i64
+mod.defineFunction('f64_bits', [webasmjs.ValueType.Int64],
+  [webasmjs.ValueType.Float64], (f, a) => {
+  a.get_local(f.getParameter(0));
+  a.reinterpret_f64_i64();
+}).withExport();
+
+// View i64 bits as f64
+mod.defineFunction('i64_as_f64', [webasmjs.ValueType.Float64],
+  [webasmjs.ValueType.Int64], (f, a) => {
+  a.get_local(f.getParameter(0));
+  a.reinterpret_i64_f64();
+}).withExport();
+
+const instance = await mod.instantiate();
+const { f32_bits, i32_as_f32, f64_bits, i64_as_f64 } = instance.instance.exports;
+
+log('=== f32 \\u2194 i32 reinterpret ===');
+log('f32_bits(1.0)  = 0x' + (f32_bits(1.0) >>> 0).toString(16).padStart(8, '0') + '  (IEEE 754: 3F800000)');
+log('f32_bits(-1.0) = 0x' + (f32_bits(-1.0) >>> 0).toString(16).padStart(8, '0') + '  (BF800000)');
+log('f32_bits(0.0)  = 0x' + (f32_bits(0.0) >>> 0).toString(16).padStart(8, '0'));
+log('i32_as_f32(0x3F800000) = ' + i32_as_f32(0x3F800000) + '  (1.0)');
+log('i32_as_f32(0x40490FDB) = ' + i32_as_f32(0x40490FDB) + '  (~pi)');
+
+log('');
+log('=== f64 \\u2194 i64 reinterpret ===');
+log('f64_bits(1.0) = 0x' + f64_bits(1.0).toString(16) + '  (3FF0000000000000)');
+log('i64_as_f64(0x4009_21FB_5444_2D18n) = ' + i64_as_f64(0x400921FB54442D18n) + '  (pi)');`
+    },
     // ─── Algorithms ───
     "bubble-sort": {
       label: "Bubble Sort",
       group: "Algorithms",
+      description: "Sort an array in linear memory with nested loops.",
+      target: "mvp",
+      features: [],
       code: `// Bubble sort in WASM memory
 const mod = new webasmjs.ModuleBuilder('bubbleSort');
 mod.defineMemory(1);
@@ -9772,6 +11989,9 @@ log('After:  ' + sorted.join(', '));`
     "gcd": {
       label: "GCD (Euclidean)",
       group: "Algorithms",
+      description: "Greatest common divisor using the Euclidean algorithm.",
+      target: "mvp",
+      features: [],
       code: `// Greatest common divisor \u2014 Euclidean algorithm
 const mod = new webasmjs.ModuleBuilder('gcd');
 
@@ -9817,6 +12037,9 @@ for (const [a, b] of pairs) {
     "collatz": {
       label: "Collatz Conjecture",
       group: "Algorithms",
+      description: "Count steps to reach 1 using the 3n+1 conjecture.",
+      target: "mvp",
+      features: [],
       code: `// Collatz conjecture \u2014 count steps to reach 1
 const mod = new webasmjs.ModuleBuilder('collatz');
 
@@ -9876,6 +12099,9 @@ for (const n of [1, 2, 3, 6, 7, 9, 27, 97, 871]) {
     "is-prime": {
       label: "Primality Test",
       group: "Algorithms",
+      description: "Trial division to test and list prime numbers.",
+      target: "mvp",
+      features: [],
       code: `// Primality test \u2014 trial division
 const mod = new webasmjs.ModuleBuilder('prime');
 
@@ -9965,6 +12191,9 @@ for (const n of [997, 1000, 7919, 7920, 104729]) {
     "wat-parser": {
       label: "WAT Parser",
       group: "WAT",
+      description: "Parse WebAssembly Text format and instantiate the module.",
+      target: "mvp",
+      features: [],
       code: `// Parse WAT text and instantiate
 const watSource = \`
 (module $parsed
@@ -9991,6 +12220,9 @@ log('add(-5, 10) = ' + add(-5, 10));`
     "wat-loop": {
       label: "WAT Loop & Branch",
       group: "WAT",
+      description: "WAT with loop, block, and branch instructions.",
+      target: "mvp",
+      features: [],
       code: `// WAT with loop and branch instructions
 const watSource = \`
 (module $loops
@@ -10038,6 +12270,9 @@ for (const n of [0, 1, 5, 10, 50, 100]) {
     "wat-memory": {
       label: "WAT Memory & Data",
       group: "WAT",
+      description: "WAT with memory declarations, store/load, and exports.",
+      target: "mvp",
+      features: [],
       code: `// WAT with memory, data segments, and imports
 const watSource = \`
 (module $memTest
@@ -10080,6 +12315,9 @@ log('Raw bytes [0..15]: ' + Array.from(view.slice(0, 16)).join(', '));`
     "wat-global": {
       label: "WAT Globals & Start",
       group: "WAT",
+      description: "WAT with mutable globals, start function, and inc/dec.",
+      target: "mvp",
+      features: [],
       code: `// WAT with globals, start function, and if/else
 const watSource = \`
 (module $globalDemo
@@ -10128,10 +12366,59 @@ log('inc() = ' + inc());
 log('dec() = ' + dec());
 log('Final: ' + getCounter());`
     },
+    "wat-imports": {
+      label: "WAT Imports",
+      group: "WAT",
+      description: "WAT with function imports calling JavaScript host functions.",
+      target: "mvp",
+      features: [],
+      code: `// WAT with imports \u2014 call JavaScript from WebAssembly text
+const watSource = \`
+(module $importDemo
+  (import "env" "print" (func $print (param i32)))
+  (import "env" "add" (func $add (param i32) (param i32) (result i32)))
+
+  (func $run
+    ;; Call host add(3, 4), then print the result
+    i32.const 3
+    i32.const 4
+    call $add
+    call $print
+
+    ;; Print some constants
+    i32.const 100
+    call $print
+    i32.const 200
+    call $print
+  )
+
+  (export "run" (func $run))
+)
+\`;
+
+const mod = webasmjs.parseWat(watSource);
+const results = [];
+const instance = await mod.instantiate({
+  env: {
+    print: (v) => results.push(v),
+    add: (a, b) => a + b,
+  },
+});
+
+instance.instance.exports.run();
+
+log('WAT module called JS imports:');
+results.forEach((v, i) => log('  print[' + i + '] = ' + v));
+log('');
+log('First value is add(3, 4) = 7, then constants 100, 200');`
+    },
     // ─── SIMD ───
     "simd-vec-add": {
       label: "SIMD Vector Add",
       group: "SIMD",
+      description: "Add two f32x4 vectors in memory using SIMD.",
+      target: "3.0",
+      features: ["simd"],
       code: `// SIMD: add two f32x4 vectors in memory
 const mod = new webasmjs.ModuleBuilder('simdAdd');
 mod.defineMemory(1);
@@ -10139,13 +12426,13 @@ mod.defineMemory(1);
 // vec4_add(srcA, srcB, dst) \u2014 adds two 4-float vectors
 mod.defineFunction('vec4_add', null,
   [webasmjs.ValueType.Int32, webasmjs.ValueType.Int32, webasmjs.ValueType.Int32], (f, a) => {
+  a.get_local(f.getParameter(2));  // push dest address first
   a.get_local(f.getParameter(0));
   a.load_v128(2, 0);
   a.get_local(f.getParameter(1));
   a.load_v128(2, 0);
   a.add_f32x4();
-  a.get_local(f.getParameter(2));
-  a.store_v128(2, 0);
+  a.store_v128(2, 0);              // store expects [addr, value] on stack
 }).withExport();
 
 mod.defineFunction('setF32', null,
@@ -10183,6 +12470,9 @@ for (let i = 0; i < 4; i++) {
     "simd-dot-product": {
       label: "SIMD Dot Product",
       group: "SIMD",
+      description: "Element-wise multiply then sum lanes for dot product.",
+      target: "3.0",
+      features: ["simd"],
       code: `// SIMD dot product: multiply element-wise then sum lanes
 const mod = new webasmjs.ModuleBuilder('simdDot');
 mod.defineMemory(1);
@@ -10238,6 +12528,9 @@ log('Expected: ' + (1*5 + 2*6 + 3*7 + 4*8));`
     "simd-splat-scale": {
       label: "SIMD Splat & Scale",
       group: "SIMD",
+      description: "Broadcast a scalar to all lanes and multiply a vector.",
+      target: "3.0",
+      features: ["simd"],
       code: `// SIMD splat: broadcast a scalar to all lanes, then multiply
 const mod = new webasmjs.ModuleBuilder('simdScale');
 mod.defineMemory(1);
@@ -10245,13 +12538,13 @@ mod.defineMemory(1);
 // scale_vec4(src, dst, scalar) \u2014 multiply a vector by a scalar
 mod.defineFunction('scale_vec4', null,
   [webasmjs.ValueType.Int32, webasmjs.ValueType.Int32, webasmjs.ValueType.Float32], (f, a) => {
+  a.get_local(f.getParameter(1));  // push dest address first
   a.get_local(f.getParameter(0));
   a.load_v128(2, 0);
   a.get_local(f.getParameter(2));
   a.splat_f32x4();          // broadcast scalar to all 4 lanes
   a.mul_f32x4();
-  a.get_local(f.getParameter(1));
-  a.store_v128(2, 0);
+  a.store_v128(2, 0);       // store expects [addr, value] on stack
 }).withExport();
 
 mod.defineFunction('setF32', null,
@@ -10286,6 +12579,9 @@ for (let i = 0; i < 4; i++) {
     "bulk-memory": {
       label: "Bulk Memory Ops",
       group: "Bulk Memory",
+      description: "Fill and copy memory regions with bulk operations.",
+      target: "2.0",
+      features: ["bulk-memory"],
       code: `// Bulk memory: memory.fill and memory.copy
 const mod = new webasmjs.ModuleBuilder('bulkMem');
 const mem = mod.defineMemory(1);
@@ -10342,6 +12638,9 @@ log('  ' + Array.from(view.slice(128, 144)).join(', '));`
     "sign-extend": {
       label: "Sign Extension",
       group: "Post-MVP",
+      description: "Interpret low bits as signed values with extend8/extend16.",
+      target: "2.0",
+      features: ["sign-extend"],
       code: `// Sign extension: interpret low bits as signed values
 const mod = new webasmjs.ModuleBuilder('signExt');
 
@@ -10374,6 +12673,9 @@ log('  extend16(0xFFFF) = ' + extend16(0xFFFF) + '  (65535 \u2192 -1)');`
     "sat-trunc": {
       label: "Saturating Truncation",
       group: "Post-MVP",
+      description: "Float-to-int conversion that clamps instead of trapping.",
+      target: "2.0",
+      features: ["sat-trunc"],
       code: `// Saturating truncation: float \u2192 int without trapping on overflow
 const mod = new webasmjs.ModuleBuilder('satTrunc');
 
@@ -10407,6 +12709,9 @@ log('  1e20   \u2192 ' + sat_f64_to_u32(1e20) + '  (clamped to u32 max)');`
     "ref-types": {
       label: "Reference Types",
       group: "Post-MVP",
+      description: "Use ref.null, ref.is_null, and ref.func instructions.",
+      target: "2.0",
+      features: ["reference-types"],
       code: `// Reference types: ref.null, ref.is_null, ref.func
 const mod = new webasmjs.ModuleBuilder('refTypes');
 
@@ -10438,10 +12743,336 @@ log('  real func ref is null: ' + (isFuncNull() === 1));
 log('');
 log('double(21) = ' + instance.instance.exports.double(21));`
     },
+    "target-system": {
+      label: "Target System",
+      group: "Post-MVP",
+      description: "Choose WebAssembly targets and feature flags.",
+      target: "mvp",
+      features: [],
+      code: `// Target system: control which features are available
+// Default is 'latest' \u2014 all features enabled
+const modLatest = new webasmjs.ModuleBuilder('latest');
+log('latest features:');
+log('  threads: ' + modLatest.hasFeature('threads'));
+log('  simd: ' + modLatest.hasFeature('simd'));
+log('  exception-handling: ' + modLatest.hasFeature('exception-handling'));
+log('  memory64: ' + modLatest.hasFeature('memory64'));
+log('  relaxed-simd: ' + modLatest.hasFeature('relaxed-simd'));
+
+log('');
+
+// WebAssembly 2.0 \u2014 only widely-deployed features
+const mod2 = new webasmjs.ModuleBuilder('compat', { target: '2.0' });
+log('2.0 features:');
+log('  sign-extend: ' + mod2.hasFeature('sign-extend'));
+log('  bulk-memory: ' + mod2.hasFeature('bulk-memory'));
+log('  threads: ' + mod2.hasFeature('threads'));
+log('  simd: ' + mod2.hasFeature('simd'));
+
+log('');
+
+// MVP with specific features
+const modCustom = new webasmjs.ModuleBuilder('custom', {
+  target: 'mvp',
+  features: ['simd', 'bulk-memory'],
+});
+log('mvp + simd + bulk-memory:');
+log('  simd: ' + modCustom.hasFeature('simd'));
+log('  bulk-memory: ' + modCustom.hasFeature('bulk-memory'));
+log('  threads: ' + modCustom.hasFeature('threads'));
+
+log('');
+
+// Build a simple module with 2.0 target
+mod2.defineFunction('add', [webasmjs.ValueType.Int32],
+  [webasmjs.ValueType.Int32, webasmjs.ValueType.Int32], (f, a) => {
+  a.get_local(f.getParameter(0));
+  a.get_local(f.getParameter(1));
+  a.add_i32();
+}).withExport();
+
+const instance = await mod2.instantiate();
+log('2.0 module works: add(3, 4) = ' + instance.instance.exports.add(3, 4));`
+    },
+    "multi-value": {
+      label: "Multi-Value Returns",
+      group: "Post-MVP",
+      description: "Functions returning multiple values at once.",
+      target: "2.0",
+      features: ["multi-value"],
+      code: `// Multi-value: functions can return more than one value
+const mod = new webasmjs.ModuleBuilder('multiValue');
+
+// divmod returns both quotient and remainder
+mod.defineFunction('divmod', [webasmjs.ValueType.Int32, webasmjs.ValueType.Int32],
+  [webasmjs.ValueType.Int32, webasmjs.ValueType.Int32], (f, a) => {
+  const dividend = f.getParameter(0);
+  const divisor = f.getParameter(1);
+
+  // Push quotient
+  a.get_local(dividend);
+  a.get_local(divisor);
+  a.div_s_i32();
+
+  // Push remainder
+  a.get_local(dividend);
+  a.get_local(divisor);
+  a.rem_s_i32();
+}).withExport();
+
+const instance = await mod.instantiate();
+const divmod = instance.instance.exports.divmod;
+
+log('Multi-value returns (quotient, remainder):');
+for (const [a, b] of [[17, 5], [100, 7], [42, 6], [99, 10]]) {
+  const result = divmod(a, b);
+  log('  ' + a + ' / ' + b + ' = ' + result);
+}`
+    },
+    "mutable-global-export": {
+      label: "Mutable Global Export",
+      group: "Post-MVP",
+      description: "Export a mutable global, read from JavaScript.",
+      target: "2.0",
+      features: ["mutable-globals"],
+      code: `// Mutable global export: JS can read the global's value
+const mod = new webasmjs.ModuleBuilder('mutGlobal');
+
+const counter = mod.defineGlobal(webasmjs.ValueType.Int32, true, 0);
+mod.exportGlobal(counter, 'counter');
+
+mod.defineFunction('increment', null, [], (f, a) => {
+  a.get_global(counter);
+  a.const_i32(1);
+  a.add_i32();
+  a.set_global(counter);
+}).withExport();
+
+mod.defineFunction('add', null, [webasmjs.ValueType.Int32], (f, a) => {
+  a.get_global(counter);
+  a.get_local(f.getParameter(0));
+  a.add_i32();
+  a.set_global(counter);
+}).withExport();
+
+const instance = await mod.instantiate();
+const { increment, add, counter: g } = instance.instance.exports;
+
+log('Initial: ' + g.value);
+increment();
+increment();
+increment();
+log('After 3 increments: ' + g.value);
+add(10);
+log('After add(10): ' + g.value);
+add(-5);
+log('After add(-5): ' + g.value);`
+    },
+    "tail-call": {
+      label: "Tail Calls",
+      group: "Post-MVP",
+      description: "Tail-recursive factorial \u2014 no stack overflow.",
+      target: "3.0",
+      features: ["tail-call"],
+      code: `// Tail calls: return_call reuses the current frame
+const mod = new webasmjs.ModuleBuilder('tailCall');
+
+// Tail-recursive helper: fact_helper(n, acc)
+const helper = mod.defineFunction('fact_helper', [webasmjs.ValueType.Int64],
+  [webasmjs.ValueType.Int64, webasmjs.ValueType.Int64], (f, a) => {
+  const n = f.getParameter(0);
+  const acc = f.getParameter(1);
+
+  // Base case: n <= 1
+  a.get_local(n);
+  a.const_i64(1n);
+  a.le_s_i64();
+  a.if(webasmjs.BlockType.Void, () => {
+    a.get_local(acc);
+    a.return();
+  });
+
+  // Tail call: return_call fact_helper(n-1, n*acc)
+  a.get_local(n);
+  a.const_i64(1n);
+  a.sub_i64();
+  a.get_local(n);
+  a.get_local(acc);
+  a.mul_i64();
+  a.return_call(helper);
+});
+
+// Public entry: factorial(n)
+mod.defineFunction('factorial', [webasmjs.ValueType.Int64],
+  [webasmjs.ValueType.Int64], (f, a) => {
+  a.get_local(f.getParameter(0));
+  a.const_i64(1n);
+  a.call(helper);
+}).withExport();
+
+const instance = await mod.instantiate();
+const factorial = instance.instance.exports.factorial;
+
+log('Tail-recursive factorial (i64):');
+for (let n = 0n; n <= 20n; n++) {
+  log('  ' + n + '! = ' + factorial(n));
+}
+log('');
+log('No stack overflow \u2014 return_call reuses the frame!');`
+    },
+    "shared-memory": {
+      label: "Shared Memory",
+      group: "Post-MVP",
+      description: "Shared memory with atomic load/store/add.",
+      target: "3.0",
+      features: ["threads"],
+      code: `// Shared memory + atomic operations
+const mod = new webasmjs.ModuleBuilder('atomics');
+
+// Shared memory requires both initial and maximum
+const mem = mod.defineMemory(1, 10, true); // shared=true
+mod.exportMemory(mem, 'memory');
+
+// Atomic store
+mod.defineFunction('atomicStore', null,
+  [webasmjs.ValueType.Int32, webasmjs.ValueType.Int32], (f, a) => {
+  a.get_local(f.getParameter(0));
+  a.get_local(f.getParameter(1));
+  a.atomic_store_i32(2, 0);
+}).withExport();
+
+// Atomic load
+mod.defineFunction('atomicLoad', [webasmjs.ValueType.Int32],
+  [webasmjs.ValueType.Int32], (f, a) => {
+  a.get_local(f.getParameter(0));
+  a.atomic_load_i32(2, 0);
+}).withExport();
+
+// Atomic add (returns old value)
+mod.defineFunction('atomicAdd', [webasmjs.ValueType.Int32],
+  [webasmjs.ValueType.Int32, webasmjs.ValueType.Int32], (f, a) => {
+  a.get_local(f.getParameter(0));
+  a.get_local(f.getParameter(1));
+  a.atomic_rmw_add_i32(2, 0);
+}).withExport();
+
+// Atomic compare-and-swap
+mod.defineFunction('atomicCAS', [webasmjs.ValueType.Int32],
+  [webasmjs.ValueType.Int32, webasmjs.ValueType.Int32, webasmjs.ValueType.Int32], (f, a) => {
+  a.get_local(f.getParameter(0)); // address
+  a.get_local(f.getParameter(1)); // expected
+  a.get_local(f.getParameter(2)); // replacement
+  a.atomic_rmw_cmpxchg_i32(2, 0);
+}).withExport();
+
+const instance = await mod.instantiate();
+const { atomicStore, atomicLoad, atomicAdd, atomicCAS } = instance.instance.exports;
+
+log('=== Atomic Operations ===');
+atomicStore(0, 100);
+log('atomicStore(0, 100)');
+log('atomicLoad(0) = ' + atomicLoad(0));
+
+log('');
+const old1 = atomicAdd(0, 5);
+log('atomicAdd(0, 5) returned old value: ' + old1);
+log('atomicLoad(0) = ' + atomicLoad(0));
+
+const old2 = atomicAdd(0, 10);
+log('atomicAdd(0, 10) returned old value: ' + old2);
+log('atomicLoad(0) = ' + atomicLoad(0));
+
+log('');
+log('=== Compare-and-Swap ===');
+const cas1 = atomicCAS(0, 115, 200);
+log('atomicCAS(0, 115, 200) = ' + cas1 + ' (matched, swapped)');
+log('atomicLoad(0) = ' + atomicLoad(0));
+
+const cas2 = atomicCAS(0, 999, 300);
+log('atomicCAS(0, 999, 300) = ' + cas2 + ' (no match, not swapped)');
+log('atomicLoad(0) = ' + atomicLoad(0));`
+    },
+    "exception-handling": {
+      label: "Exception Handling",
+      group: "Post-MVP",
+      description: "Define tags and throw exceptions from WASM.",
+      target: "3.0",
+      features: ["exception-handling"],
+      code: `// Exception handling: defineTag + throw
+const mod = new webasmjs.ModuleBuilder('exceptions', { disableVerification: true });
+
+// Define a tag with an i32 payload (like an error code)
+const errorTag = mod.defineTag([webasmjs.ValueType.Int32]);
+
+// Throws when input is negative
+mod.defineFunction('checkPositive', null, [webasmjs.ValueType.Int32], (f, a) => {
+  a.get_local(f.getParameter(0));
+  a.const_i32(0);
+  a.lt_s_i32();
+  a.if(webasmjs.BlockType.Void, () => {
+    a.get_local(f.getParameter(0));
+    a.throw(errorTag._index);
+  });
+}).withExport();
+
+// Show the WAT output with tag and throw
+const wat = mod.toString();
+log('=== WAT Output ===');
+log(wat);
+
+// Compile to bytes
+const bytes = mod.toBytes();
+log('Module compiled: ' + bytes.length + ' bytes');
+log('Valid WASM: ' + WebAssembly.validate(bytes.buffer));`
+    },
+    "memory64": {
+      label: "Memory64",
+      group: "Post-MVP",
+      description: "64-bit addressed memory for very large address spaces.",
+      target: "3.0",
+      features: ["memory64"],
+      code: `// Memory64: 64-bit addressed memory
+const mod = new webasmjs.ModuleBuilder('memory64');
+
+// Define a 64-bit addressed memory
+const mem = mod.defineMemory(1, 100, false, true); // memory64=true
+mod.exportMemory(mem, 'memory');
+
+// Store: address is i64 for memory64
+mod.defineFunction('store64', null,
+  [webasmjs.ValueType.Int64, webasmjs.ValueType.Int32], (f, a) => {
+  a.get_local(f.getParameter(0)); // i64 address
+  a.get_local(f.getParameter(1)); // i32 value
+  a.store_i32(2, 0);
+}).withExport();
+
+// Load: address is i64 for memory64
+mod.defineFunction('load64', [webasmjs.ValueType.Int32],
+  [webasmjs.ValueType.Int64], (f, a) => {
+  a.get_local(f.getParameter(0)); // i64 address
+  a.load_i32(2, 0);
+}).withExport();
+
+// Show the WAT \u2014 note i64 addresses
+const wat = mod.toString();
+log('=== WAT Output (memory64) ===');
+log(wat);
+
+// Compile
+const bytes = mod.toBytes();
+log('');
+log('Module compiled: ' + bytes.length + ' bytes');
+log('');
+log('Note: memory64 uses i64 addresses instead of i32.');
+log('Runtime instantiation requires engine support for memory64.');`
+    },
     // ─── Debug & Inspection ───
     "debug-names": {
       label: "Debug Name Section",
       group: "Debug",
+      description: "Inspect function, local, and global names in the binary.",
+      target: "mvp",
+      features: [],
       code: `// Inspect the debug name section in the binary
 const mod = new webasmjs.ModuleBuilder('debugExample');
 
@@ -10517,6 +13148,9 @@ if (ns) {
     "binary-inspect": {
       label: "Binary Inspector",
       group: "Debug",
+      description: "Read back the binary structure \u2014 types, functions, exports.",
+      target: "mvp",
+      features: [],
       code: `// Inspect the binary structure of a WASM module
 const mod = new webasmjs.ModuleBuilder('inspect');
 mod.defineMemory(1);
@@ -10579,6 +13213,9 @@ log('Valid: ' + WebAssembly.validate(bytes.buffer));`
     "wat-roundtrip": {
       label: "WAT Roundtrip",
       group: "Debug",
+      description: "Build a module, emit WAT, parse it back, and verify.",
+      target: "mvp",
+      features: [],
       code: `// Build a module programmatically, inspect WAT, parse it back
 const mod = new webasmjs.ModuleBuilder('roundtrip');
 
@@ -10615,6 +13252,1165 @@ log('negate(42) = ' + negate(42));
 log('negate(-10) = ' + negate(-10));
 log('');
 log('Roundtrip successful!');`
+    },
+    "custom-section": {
+      label: "Custom Section",
+      group: "Debug",
+      description: "Add custom metadata to a module and read it back.",
+      target: "mvp",
+      features: [],
+      code: `// Custom section \u2014 embed arbitrary metadata in the binary
+const mod = new webasmjs.ModuleBuilder('customSec');
+
+mod.defineFunction('nop', null, [], (f, a) => {
+  a.nop();
+}).withExport();
+
+// Add custom sections with metadata
+const version = new TextEncoder().encode('1.0.0');
+mod.defineCustomSection('version', new Uint8Array(version));
+
+const author = new TextEncoder().encode('webasmjs playground');
+mod.defineCustomSection('author', new Uint8Array(author));
+
+const bytes = mod.toBytes();
+log('Module size: ' + bytes.length + ' bytes');
+
+// Read it back with BinaryReader
+const reader = new webasmjs.BinaryReader(bytes);
+const info = reader.read();
+
+log('');
+log('Custom sections found:');
+if (info.customSections) {
+  for (const sec of info.customSections) {
+    const text = new TextDecoder().decode(sec.data);
+    log('  "' + sec.name + '" = "' + text + '" (' + sec.data.length + ' bytes)');
+  }
+} else {
+  log('  (none found \u2014 BinaryReader may not expose custom sections)');
+}
+
+log('');
+log('The binary is still valid WASM:');
+log('  WebAssembly.validate() = ' + WebAssembly.validate(bytes.buffer));`
+    },
+    "extended-const": {
+      label: "Extended Constants",
+      group: "Post-MVP",
+      description: "Arithmetic in global init expressions with extended-const.",
+      target: "3.0",
+      features: ["extended-const"],
+      code: `// Extended constants: arithmetic in global initializers
+const mod = new webasmjs.ModuleBuilder('extConst', {
+  target: 'mvp',
+  features: ['extended-const'],
+});
+
+// Base offset as an immutable global
+const base = mod.defineGlobal(webasmjs.ValueType.Int32, false, 100);
+
+// Computed global: base + 50 (uses i32.add in init expression)
+const offset1 = mod.defineGlobal(webasmjs.ValueType.Int32, false, (asm) => {
+  asm.get_global(base);
+  asm.const_i32(50);
+  asm.add_i32();
+});
+
+// Computed global: base * 3 (uses i32.mul in init expression)
+const scaled = mod.defineGlobal(webasmjs.ValueType.Int32, false, (asm) => {
+  asm.get_global(base);
+  asm.const_i32(3);
+  asm.mul_i32();
+});
+
+// Computed global: base * 2 + 7
+const combined = mod.defineGlobal(webasmjs.ValueType.Int32, false, (asm) => {
+  asm.get_global(base);
+  asm.const_i32(2);
+  asm.mul_i32();
+  asm.const_i32(7);
+  asm.add_i32();
+});
+
+mod.defineFunction('getBase', [webasmjs.ValueType.Int32], [], (f, a) => {
+  a.get_global(base);
+}).withExport();
+
+mod.defineFunction('getOffset1', [webasmjs.ValueType.Int32], [], (f, a) => {
+  a.get_global(offset1);
+}).withExport();
+
+mod.defineFunction('getScaled', [webasmjs.ValueType.Int32], [], (f, a) => {
+  a.get_global(scaled);
+}).withExport();
+
+mod.defineFunction('getCombined', [webasmjs.ValueType.Int32], [], (f, a) => {
+  a.get_global(combined);
+}).withExport();
+
+const instance = await mod.instantiate();
+const { getBase, getOffset1, getScaled, getCombined } = instance.instance.exports;
+
+log('Extended-const: arithmetic in global init expressions');
+log('base = ' + getBase());
+log('base + 50 = ' + getOffset1());
+log('base * 3 = ' + getScaled());
+log('base * 2 + 7 = ' + getCombined());`
+    },
+    "multi-memory": {
+      label: "Multi-Memory",
+      group: "Post-MVP",
+      description: "Define and use multiple linear memories in one module.",
+      target: "3.0",
+      features: ["multi-memory"],
+      code: `// Multi-memory: two separate linear memories
+const mod = new webasmjs.ModuleBuilder('multiMem', {
+  target: 'mvp',
+  features: ['multi-memory'],
+});
+
+const mem0 = mod.defineMemory(1);
+mod.exportMemory(mem0, 'mem0');
+const mem1 = mod.defineMemory(1);
+mod.exportMemory(mem1, 'mem1');
+
+// Store to memory 0
+mod.defineFunction('store0', null,
+  [webasmjs.ValueType.Int32, webasmjs.ValueType.Int32], (f, a) => {
+  a.get_local(f.getParameter(0));
+  a.get_local(f.getParameter(1));
+  a.store_i32(2, 0, 0); // memIndex=0
+}).withExport();
+
+// Load from memory 0
+mod.defineFunction('load0', [webasmjs.ValueType.Int32],
+  [webasmjs.ValueType.Int32], (f, a) => {
+  a.get_local(f.getParameter(0));
+  a.load_i32(2, 0, 0); // memIndex=0
+}).withExport();
+
+// Store to memory 1
+mod.defineFunction('store1', null,
+  [webasmjs.ValueType.Int32, webasmjs.ValueType.Int32], (f, a) => {
+  a.get_local(f.getParameter(0));
+  a.get_local(f.getParameter(1));
+  a.store_i32(2, 0, 1); // memIndex=1
+}).withExport();
+
+// Load from memory 1
+mod.defineFunction('load1', [webasmjs.ValueType.Int32],
+  [webasmjs.ValueType.Int32], (f, a) => {
+  a.get_local(f.getParameter(0));
+  a.load_i32(2, 0, 1); // memIndex=1
+}).withExport();
+
+// Show WAT with two memories
+const wat = mod.toString();
+log('=== WAT Output ===');
+log(wat);
+
+const bytes = mod.toBytes();
+log('Module compiled: ' + bytes.length + ' bytes');
+log('Valid WASM: ' + WebAssembly.validate(bytes.buffer));`
+    },
+    "multi-table": {
+      label: "Multi-Table",
+      group: "Post-MVP",
+      description: "Define multiple function tables and dispatch through each.",
+      target: "3.0",
+      features: ["multi-table"],
+      code: `// Multi-table: two function tables for different dispatch
+const mod = new webasmjs.ModuleBuilder('multiTable', {
+  target: 'mvp',
+  features: ['multi-table'],
+});
+
+const add = mod.defineFunction('add', [webasmjs.ValueType.Int32],
+  [webasmjs.ValueType.Int32, webasmjs.ValueType.Int32], (f, a) => {
+  a.get_local(f.getParameter(0));
+  a.get_local(f.getParameter(1));
+  a.add_i32();
+});
+
+const sub = mod.defineFunction('sub', [webasmjs.ValueType.Int32],
+  [webasmjs.ValueType.Int32, webasmjs.ValueType.Int32], (f, a) => {
+  a.get_local(f.getParameter(0));
+  a.get_local(f.getParameter(1));
+  a.sub_i32();
+});
+
+const mul = mod.defineFunction('mul', [webasmjs.ValueType.Int32],
+  [webasmjs.ValueType.Int32, webasmjs.ValueType.Int32], (f, a) => {
+  a.get_local(f.getParameter(0));
+  a.get_local(f.getParameter(1));
+  a.mul_i32();
+});
+
+// Table 0: math operations
+const table0 = mod.defineTable(webasmjs.ElementType.AnyFunc, 3);
+mod.defineTableSegment(table0, [add, sub, mul], 0);
+
+// Table 1: just add and mul (different arrangement)
+const table1 = mod.defineTable(webasmjs.ElementType.AnyFunc, 2);
+mod.defineTableSegment(table1, [mul, add], 0);
+
+// Show WAT with two tables
+const wat = mod.toString();
+log('=== WAT Output (multi-table) ===');
+log(wat);
+
+const bytes = mod.toBytes();
+log('Module compiled: ' + bytes.length + ' bytes');
+log('Valid WASM: ' + WebAssembly.validate(bytes.buffer));`
+    },
+    "relaxed-simd": {
+      label: "Relaxed SIMD",
+      group: "Post-MVP",
+      description: "Relaxed SIMD operations for performance-sensitive code.",
+      target: "latest",
+      features: ["relaxed-simd"],
+      code: `// Relaxed SIMD: relaxed_madd for fused multiply-add
+const mod = new webasmjs.ModuleBuilder('relaxedSimd');
+mod.defineMemory(1);
+
+// relaxed_madd: a * b + c (fused multiply-add, may use FMA instruction)
+mod.defineFunction('madd_f32x4', null,
+  [webasmjs.ValueType.Int32, webasmjs.ValueType.Int32,
+   webasmjs.ValueType.Int32, webasmjs.ValueType.Int32], (f, a) => {
+  a.get_local(f.getParameter(3)); // dest address
+  a.get_local(f.getParameter(0));
+  a.load_v128(2, 0);  // load A
+  a.get_local(f.getParameter(1));
+  a.load_v128(2, 0);  // load B
+  a.get_local(f.getParameter(2));
+  a.load_v128(2, 0);  // load C
+  a.relaxed_madd_f32x4();  // A * B + C
+  a.store_v128(2, 0);
+}).withExport();
+
+mod.defineFunction('setF32', null,
+  [webasmjs.ValueType.Int32, webasmjs.ValueType.Float32], (f, a) => {
+  a.get_local(f.getParameter(0));
+  a.get_local(f.getParameter(1));
+  a.store_f32(2, 0);
+}).withExport();
+
+mod.defineFunction('getF32', [webasmjs.ValueType.Float32],
+  [webasmjs.ValueType.Int32], (f, a) => {
+  a.get_local(f.getParameter(0));
+  a.load_f32(2, 0);
+}).withExport();
+
+// Show WAT
+const wat = mod.toString();
+log('=== WAT Output (relaxed SIMD) ===');
+log(wat);
+
+const bytes = mod.toBytes();
+log('Module compiled: ' + bytes.length + ' bytes');
+log('Valid WASM: ' + WebAssembly.validate(bytes.buffer));`
+    },
+    "atomic-rmw": {
+      label: "Atomic RMW Ops",
+      group: "Post-MVP",
+      description: "Atomic read-modify-write: sub, and, or, xor, exchange.",
+      target: "3.0",
+      features: ["threads"],
+      code: `// Atomic read-modify-write operations
+const mod = new webasmjs.ModuleBuilder('atomicRMW');
+
+// Shared memory for atomics
+const mem = mod.defineMemory(1, 10, true);
+mod.exportMemory(mem, 'memory');
+
+// Atomic store
+mod.defineFunction('store', null,
+  [webasmjs.ValueType.Int32, webasmjs.ValueType.Int32], (f, a) => {
+  a.get_local(f.getParameter(0));
+  a.get_local(f.getParameter(1));
+  a.atomic_store_i32(2, 0);
+}).withExport();
+
+// Atomic load
+mod.defineFunction('load', [webasmjs.ValueType.Int32],
+  [webasmjs.ValueType.Int32], (f, a) => {
+  a.get_local(f.getParameter(0));
+  a.atomic_load_i32(2, 0);
+}).withExport();
+
+// Atomic sub (returns old value)
+mod.defineFunction('atomicSub', [webasmjs.ValueType.Int32],
+  [webasmjs.ValueType.Int32, webasmjs.ValueType.Int32], (f, a) => {
+  a.get_local(f.getParameter(0));
+  a.get_local(f.getParameter(1));
+  a.atomic_rmw_sub_i32(2, 0);
+}).withExport();
+
+// Atomic AND (returns old value)
+mod.defineFunction('atomicAnd', [webasmjs.ValueType.Int32],
+  [webasmjs.ValueType.Int32, webasmjs.ValueType.Int32], (f, a) => {
+  a.get_local(f.getParameter(0));
+  a.get_local(f.getParameter(1));
+  a.atomic_rmw_and_i32(2, 0);
+}).withExport();
+
+// Atomic OR (returns old value)
+mod.defineFunction('atomicOr', [webasmjs.ValueType.Int32],
+  [webasmjs.ValueType.Int32, webasmjs.ValueType.Int32], (f, a) => {
+  a.get_local(f.getParameter(0));
+  a.get_local(f.getParameter(1));
+  a.atomic_rmw_or_i32(2, 0);
+}).withExport();
+
+// Atomic XOR (returns old value)
+mod.defineFunction('atomicXor', [webasmjs.ValueType.Int32],
+  [webasmjs.ValueType.Int32, webasmjs.ValueType.Int32], (f, a) => {
+  a.get_local(f.getParameter(0));
+  a.get_local(f.getParameter(1));
+  a.atomic_rmw_xor_i32(2, 0);
+}).withExport();
+
+// Atomic exchange (returns old value, stores new)
+mod.defineFunction('atomicXchg', [webasmjs.ValueType.Int32],
+  [webasmjs.ValueType.Int32, webasmjs.ValueType.Int32], (f, a) => {
+  a.get_local(f.getParameter(0));
+  a.get_local(f.getParameter(1));
+  a.atomic_rmw_xchg_i32(2, 0);
+}).withExport();
+
+const instance = await mod.instantiate();
+const { store, load, atomicSub, atomicAnd, atomicOr, atomicXor, atomicXchg } = instance.instance.exports;
+
+log('=== Atomic Read-Modify-Write ===');
+log('All RMW ops return the OLD value before modification.');
+log('');
+
+// Sub
+store(0, 100);
+const oldSub = atomicSub(0, 30);
+log('atomicSub(100, 30): old=' + oldSub + ', new=' + load(0));
+
+// AND
+store(0, 0xFF);
+const oldAnd = atomicAnd(0, 0x0F);
+log('atomicAnd(0xFF, 0x0F): old=0x' + (oldAnd >>> 0).toString(16) + ', new=0x' + (load(0) >>> 0).toString(16));
+
+// OR
+store(0, 0xF0);
+const oldOr = atomicOr(0, 0x0F);
+log('atomicOr(0xF0, 0x0F): old=0x' + (oldOr >>> 0).toString(16) + ', new=0x' + (load(0) >>> 0).toString(16));
+
+// XOR
+store(0, 0xFF);
+const oldXor = atomicXor(0, 0xAA);
+log('atomicXor(0xFF, 0xAA): old=0x' + (oldXor >>> 0).toString(16) + ', new=0x' + (load(0) >>> 0).toString(16));
+
+// Exchange
+store(0, 42);
+const oldXchg = atomicXchg(0, 99);
+log('atomicXchg(42, 99): old=' + oldXchg + ', new=' + load(0));`
+    },
+    "atomic-wait-notify": {
+      label: "Wait & Notify",
+      group: "Post-MVP",
+      description: "Atomic wait/notify primitives and memory fence.",
+      target: "3.0",
+      features: ["threads"],
+      code: `// Atomic wait, notify, and fence \u2014 thread synchronization primitives
+const mod = new webasmjs.ModuleBuilder('waitNotify', { disableVerification: true });
+
+const mem = mod.defineMemory(1, 10, true);
+mod.exportMemory(mem, 'memory');
+
+// atomic.wait32(addr, expected, timeout) -> 0=ok, 1=not-equal, 2=timed-out
+mod.defineFunction('wait32', [webasmjs.ValueType.Int32],
+  [webasmjs.ValueType.Int32, webasmjs.ValueType.Int32, webasmjs.ValueType.Int64], (f, a) => {
+  a.get_local(f.getParameter(0)); // address
+  a.get_local(f.getParameter(1)); // expected value
+  a.get_local(f.getParameter(2)); // timeout in ns (-1 = infinite)
+  a.atomic_wait32(2, 0);
+}).withExport();
+
+// atomic.notify(addr, count) -> number of waiters woken
+mod.defineFunction('notify', [webasmjs.ValueType.Int32],
+  [webasmjs.ValueType.Int32, webasmjs.ValueType.Int32], (f, a) => {
+  a.get_local(f.getParameter(0)); // address
+  a.get_local(f.getParameter(1)); // count of waiters to wake
+  a.atomic_notify(2, 0);
+}).withExport();
+
+// atomic.fence \u2014 full memory barrier
+mod.defineFunction('fence', null, [], (f, a) => {
+  a.atomic_fence(0);
+}).withExport();
+
+// Atomic store for setup
+mod.defineFunction('store', null,
+  [webasmjs.ValueType.Int32, webasmjs.ValueType.Int32], (f, a) => {
+  a.get_local(f.getParameter(0));
+  a.get_local(f.getParameter(1));
+  a.atomic_store_i32(2, 0);
+}).withExport();
+
+// Show the WAT output
+const wat = mod.toString();
+log('=== WAT Output (wait/notify/fence) ===');
+log(wat);
+
+// Compile and validate
+const bytes = mod.toBytes();
+log('Module compiled: ' + bytes.length + ' bytes');
+log('Valid WASM: ' + WebAssembly.validate(bytes.buffer));
+log('');
+log('Note: atomic.wait blocks the calling thread until notified.');
+log('In a multi-threaded setup:');
+log('  Thread A: wait32(addr, 0, -1n)  // sleep until value changes');
+log('  Thread B: store(addr, 1); notify(addr, 1)  // wake thread A');
+log('  fence() ensures memory operations are visible across threads.');`
+    },
+    // ─── Additional SIMD ───
+    "simd-integer": {
+      label: "SIMD Integer Ops",
+      group: "SIMD",
+      description: "Integer SIMD: i32x4 add, sub, mul, comparisons, and lane ops.",
+      target: "3.0",
+      features: ["simd"],
+      code: `// Integer SIMD: i32x4 arithmetic, comparisons, lane extract/replace
+const mod = new webasmjs.ModuleBuilder('simdInt');
+mod.defineMemory(1);
+
+// Add two i32x4 vectors
+mod.defineFunction('add_i32x4', null,
+  [webasmjs.ValueType.Int32, webasmjs.ValueType.Int32, webasmjs.ValueType.Int32], (f, a) => {
+  a.get_local(f.getParameter(2));
+  a.get_local(f.getParameter(0));
+  a.load_v128(2, 0);
+  a.get_local(f.getParameter(1));
+  a.load_v128(2, 0);
+  a.add_i32x4();
+  a.store_v128(2, 0);
+}).withExport();
+
+// Element-wise min (signed)
+mod.defineFunction('min_s_i32x4', null,
+  [webasmjs.ValueType.Int32, webasmjs.ValueType.Int32, webasmjs.ValueType.Int32], (f, a) => {
+  a.get_local(f.getParameter(2));
+  a.get_local(f.getParameter(0));
+  a.load_v128(2, 0);
+  a.get_local(f.getParameter(1));
+  a.load_v128(2, 0);
+  a.min_s_i32x4();
+  a.store_v128(2, 0);
+}).withExport();
+
+// Extract a single lane
+mod.defineFunction('extract', [webasmjs.ValueType.Int32],
+  [webasmjs.ValueType.Int32, webasmjs.ValueType.Int32], (f, a) => {
+  // Load vector, extract lane based on index using a br_table
+  // For simplicity, extract lane 0 from the vector at the address
+  a.get_local(f.getParameter(0));
+  a.load_v128(2, 0);
+  a.extract_lane_i32x4(0);
+}).withExport();
+
+// Splat a scalar to all 4 lanes
+mod.defineFunction('splat_i32x4', null,
+  [webasmjs.ValueType.Int32, webasmjs.ValueType.Int32], (f, a) => {
+  a.get_local(f.getParameter(0)); // dest
+  a.get_local(f.getParameter(1)); // scalar
+  a.splat_i32x4();
+  a.store_v128(2, 0);
+}).withExport();
+
+mod.defineFunction('setI32', null,
+  [webasmjs.ValueType.Int32, webasmjs.ValueType.Int32], (f, a) => {
+  a.get_local(f.getParameter(0));
+  a.get_local(f.getParameter(1));
+  a.store_i32(2, 0);
+}).withExport();
+
+mod.defineFunction('getI32', [webasmjs.ValueType.Int32],
+  [webasmjs.ValueType.Int32], (f, a) => {
+  a.get_local(f.getParameter(0));
+  a.load_i32(2, 0);
+}).withExport();
+
+const instance = await mod.instantiate();
+const { add_i32x4, min_s_i32x4, extract, splat_i32x4, setI32, getI32 } = instance.instance.exports;
+
+// A = [10, 20, 30, 40], B = [5, 25, 15, 45]
+const a = [10, 20, 30, 40], b = [5, 25, 15, 45];
+for (let i = 0; i < 4; i++) { setI32(i * 4, a[i]); setI32(16 + i * 4, b[i]); }
+
+add_i32x4(0, 16, 32);
+log('A = [' + a + ']');
+log('B = [' + b + ']');
+log('A + B = [' + [getI32(32), getI32(36), getI32(40), getI32(44)] + ']');
+
+min_s_i32x4(0, 16, 48);
+log('min(A, B) = [' + [getI32(48), getI32(52), getI32(56), getI32(60)] + ']');
+
+log('');
+log('extract lane 0 of A: ' + extract(0, 0));
+
+splat_i32x4(64, 7);
+log('splat(7) = [' + [getI32(64), getI32(68), getI32(72), getI32(76)] + ']');`
+    },
+    "simd-shuffle": {
+      label: "SIMD Shuffle & Swizzle",
+      group: "SIMD",
+      description: "Rearrange vector lanes with shuffle and swizzle.",
+      target: "3.0",
+      features: ["simd"],
+      code: `// SIMD shuffle & swizzle: rearrange bytes across vectors
+const mod = new webasmjs.ModuleBuilder('simdShuffle');
+mod.defineMemory(1);
+
+// shuffle: pick 16 bytes from two source vectors by index
+// Indices 0-15 = first vector, 16-31 = second vector
+mod.defineFunction('interleave', null,
+  [webasmjs.ValueType.Int32, webasmjs.ValueType.Int32, webasmjs.ValueType.Int32], (f, a) => {
+  a.get_local(f.getParameter(2)); // dest
+  a.get_local(f.getParameter(0));
+  a.load_v128(2, 0); // vector A
+  a.get_local(f.getParameter(1));
+  a.load_v128(2, 0); // vector B
+  // Interleave first 4 bytes: A[0], B[0], A[1], B[1], A[2], B[2], A[3], B[3], ...
+  a.shuffle_i8x16(new Uint8Array([0, 16, 1, 17, 2, 18, 3, 19, 4, 20, 5, 21, 6, 22, 7, 23]));
+  a.store_v128(2, 0);
+}).withExport();
+
+// Reverse bytes within a vector using shuffle
+mod.defineFunction('reverse', null,
+  [webasmjs.ValueType.Int32, webasmjs.ValueType.Int32], (f, a) => {
+  a.get_local(f.getParameter(1)); // dest
+  a.get_local(f.getParameter(0));
+  a.load_v128(2, 0);
+  a.get_local(f.getParameter(0));
+  a.load_v128(2, 0); // same vector for both operands
+  a.shuffle_i8x16(new Uint8Array([15, 14, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1, 0]));
+  a.store_v128(2, 0);
+}).withExport();
+
+// swizzle: rearrange bytes using a dynamic index vector
+mod.defineFunction('swizzle', null,
+  [webasmjs.ValueType.Int32, webasmjs.ValueType.Int32, webasmjs.ValueType.Int32], (f, a) => {
+  a.get_local(f.getParameter(2)); // dest
+  a.get_local(f.getParameter(0));
+  a.load_v128(2, 0); // data
+  a.get_local(f.getParameter(1));
+  a.load_v128(2, 0); // indices
+  a.swizzle_i8x16();
+  a.store_v128(2, 0);
+}).withExport();
+
+mod.defineFunction('setByte', null,
+  [webasmjs.ValueType.Int32, webasmjs.ValueType.Int32], (f, a) => {
+  a.get_local(f.getParameter(0));
+  a.get_local(f.getParameter(1));
+  a.store8_i32(0, 0);
+}).withExport();
+
+mod.defineFunction('getByte', [webasmjs.ValueType.Int32],
+  [webasmjs.ValueType.Int32], (f, a) => {
+  a.get_local(f.getParameter(0));
+  a.load8_i32_u(0, 0);
+}).withExport();
+
+const instance = await mod.instantiate();
+const { interleave, reverse, swizzle, setByte, getByte } = instance.instance.exports;
+
+// Set up: A = [0,1,2,...,15], B = [16,17,...,31]
+for (let i = 0; i < 16; i++) { setByte(i, i); setByte(16 + i, 16 + i); }
+
+interleave(0, 16, 32);
+const interleaved = [];
+for (let i = 0; i < 16; i++) interleaved.push(getByte(32 + i));
+log('A = [0,1,2,...,15]');
+log('B = [16,17,...,31]');
+log('interleave(A, B) = [' + interleaved.join(', ') + ']');
+
+log('');
+reverse(0, 48);
+const reversed = [];
+for (let i = 0; i < 16; i++) reversed.push(getByte(48 + i));
+log('reverse(A) = [' + reversed.join(', ') + ']');
+
+log('');
+// swizzle: use indices [3,2,1,0, 7,6,5,4, 11,10,9,8, 15,14,13,12] to reverse each group of 4
+for (let i = 0; i < 4; i++) {
+  for (let j = 0; j < 4; j++) setByte(64 + i * 4 + j, i * 4 + (3 - j));
+}
+swizzle(0, 64, 80);
+const swizzled = [];
+for (let i = 0; i < 16; i++) swizzled.push(getByte(80 + i));
+log('swizzle(A, reverse-within-groups) = [' + swizzled.join(', ') + ']');`
+    },
+    "simd-widen-narrow": {
+      label: "SIMD Widen & Narrow",
+      group: "SIMD",
+      description: "Convert between vector widths \u2014 narrow i16x8 to i8x16, extend i8x16 to i16x8.",
+      target: "3.0",
+      features: ["simd"],
+      code: `// SIMD widening and narrowing: convert between lane sizes
+const mod = new webasmjs.ModuleBuilder('simdWidenNarrow');
+mod.defineMemory(1);
+
+// Narrow two i16x8 vectors into one i8x16 (saturating, unsigned)
+mod.defineFunction('narrow_u', null,
+  [webasmjs.ValueType.Int32, webasmjs.ValueType.Int32, webasmjs.ValueType.Int32], (f, a) => {
+  a.get_local(f.getParameter(2));
+  a.get_local(f.getParameter(0));
+  a.load_v128(2, 0);
+  a.get_local(f.getParameter(1));
+  a.load_v128(2, 0);
+  a.narrow_i16x8_u_i8x16();
+  a.store_v128(2, 0);
+}).withExport();
+
+// Extend low half of i8x16 to i16x8 (signed)
+mod.defineFunction('extend_low_s', null,
+  [webasmjs.ValueType.Int32, webasmjs.ValueType.Int32], (f, a) => {
+  a.get_local(f.getParameter(1));
+  a.get_local(f.getParameter(0));
+  a.load_v128(2, 0);
+  a.extend_low_i8x16_s_i16x8();
+  a.store_v128(2, 0);
+}).withExport();
+
+mod.defineFunction('setByte', null,
+  [webasmjs.ValueType.Int32, webasmjs.ValueType.Int32], (f, a) => {
+  a.get_local(f.getParameter(0));
+  a.get_local(f.getParameter(1));
+  a.store8_i32(0, 0);
+}).withExport();
+
+mod.defineFunction('getByte', [webasmjs.ValueType.Int32],
+  [webasmjs.ValueType.Int32], (f, a) => {
+  a.get_local(f.getParameter(0));
+  a.load8_i32_u(0, 0);
+}).withExport();
+
+mod.defineFunction('setI16', null,
+  [webasmjs.ValueType.Int32, webasmjs.ValueType.Int32], (f, a) => {
+  a.get_local(f.getParameter(0));
+  a.get_local(f.getParameter(1));
+  a.store16_i32(1, 0);
+}).withExport();
+
+mod.defineFunction('getI16', [webasmjs.ValueType.Int32],
+  [webasmjs.ValueType.Int32], (f, a) => {
+  a.get_local(f.getParameter(0));
+  a.load16_i32_s(1, 0);
+}).withExport();
+
+const instance = await mod.instantiate();
+const { narrow_u, extend_low_s, setByte, getByte, setI16, getI16 } = instance.instance.exports;
+
+// Narrowing: two i16x8 \u2192 one i8x16 (values clamped to 0-255)
+// A = [10, 200, 300, 50, 0, 255, 1000, 128] at offset 0
+const i16a = [10, 200, 300, 50, 0, 255, 1000, 128];
+for (let i = 0; i < 8; i++) setI16(i * 2, i16a[i]);
+// B = [1, 2, 3, 4, 5, 6, 7, 8]
+for (let i = 0; i < 8; i++) setI16(16 + i * 2, i + 1);
+
+narrow_u(0, 16, 32);
+const narrowed = [];
+for (let i = 0; i < 16; i++) narrowed.push(getByte(32 + i));
+log('=== Narrowing (i16x8 \u2192 i8x16, unsigned saturating) ===');
+log('A (i16) = [' + i16a + ']');
+log('B (i16) = [1,2,3,4,5,6,7,8]');
+log('narrow_u = [' + narrowed.join(', ') + ']');
+log('(300\u2192255, 1000\u2192255 clamped)');
+
+// Widening: i8x16 low half \u2192 i16x8 (signed extend)
+log('');
+log('=== Widening (i8x16 \u2192 i16x8, signed) ===');
+const bytes = [5, 200, 127, 128, 0, 255, 1, 100]; // 200=0xC8\u2192-56 signed, 128\u2192-128, 255\u2192-1
+for (let i = 0; i < 8; i++) setByte(48 + i, bytes[i]);
+extend_low_s(48, 64);
+const widened = [];
+for (let i = 0; i < 8; i++) widened.push(getI16(64 + i * 2));
+log('input bytes = [' + bytes + ']');
+log('extend_low_s = [' + widened.join(', ') + ']');
+log('(200\u2192-56, 128\u2192-128, 255\u2192-1 sign-extended)');`
+    },
+    "simd-saturating": {
+      label: "SIMD Saturating Math",
+      group: "SIMD",
+      description: "Saturating add/sub that clamp instead of wrapping.",
+      target: "3.0",
+      features: ["simd"],
+      code: `// SIMD saturating arithmetic: clamp on overflow instead of wrap
+const mod = new webasmjs.ModuleBuilder('simdSat');
+mod.defineMemory(1);
+
+// Saturating unsigned add on i8x16
+mod.defineFunction('add_sat_u', null,
+  [webasmjs.ValueType.Int32, webasmjs.ValueType.Int32, webasmjs.ValueType.Int32], (f, a) => {
+  a.get_local(f.getParameter(2));
+  a.get_local(f.getParameter(0));
+  a.load_v128(2, 0);
+  a.get_local(f.getParameter(1));
+  a.load_v128(2, 0);
+  a.add_sat_u_i8x16();
+  a.store_v128(2, 0);
+}).withExport();
+
+// Saturating unsigned sub on i8x16
+mod.defineFunction('sub_sat_u', null,
+  [webasmjs.ValueType.Int32, webasmjs.ValueType.Int32, webasmjs.ValueType.Int32], (f, a) => {
+  a.get_local(f.getParameter(2));
+  a.get_local(f.getParameter(0));
+  a.load_v128(2, 0);
+  a.get_local(f.getParameter(1));
+  a.load_v128(2, 0);
+  a.sub_sat_u_i8x16();
+  a.store_v128(2, 0);
+}).withExport();
+
+// Regular (wrapping) add for comparison
+mod.defineFunction('add_wrap', null,
+  [webasmjs.ValueType.Int32, webasmjs.ValueType.Int32, webasmjs.ValueType.Int32], (f, a) => {
+  a.get_local(f.getParameter(2));
+  a.get_local(f.getParameter(0));
+  a.load_v128(2, 0);
+  a.get_local(f.getParameter(1));
+  a.load_v128(2, 0);
+  a.add_i8x16();
+  a.store_v128(2, 0);
+}).withExport();
+
+mod.defineFunction('setByte', null,
+  [webasmjs.ValueType.Int32, webasmjs.ValueType.Int32], (f, a) => {
+  a.get_local(f.getParameter(0));
+  a.get_local(f.getParameter(1));
+  a.store8_i32(0, 0);
+}).withExport();
+
+mod.defineFunction('getByte', [webasmjs.ValueType.Int32],
+  [webasmjs.ValueType.Int32], (f, a) => {
+  a.get_local(f.getParameter(0));
+  a.load8_i32_u(0, 0);
+}).withExport();
+
+const instance = await mod.instantiate();
+const { add_sat_u, sub_sat_u, add_wrap, setByte, getByte } = instance.instance.exports;
+
+// A = [200, 100, 255, 0, 128, 50, 250, 10, ...]
+const a = [200, 100, 255, 0, 128, 50, 250, 10];
+// B = [100, 200, 10, 5, 128, 250, 50, 0]
+const b = [100, 200, 10, 5, 128, 250, 50, 0];
+for (let i = 0; i < 8; i++) { setByte(i, a[i]); setByte(16 + i, b[i]); }
+for (let i = 8; i < 16; i++) { setByte(i, 0); setByte(16 + i, 0); }
+
+add_sat_u(0, 16, 32);
+add_wrap(0, 16, 48);
+
+const satResult = [], wrapResult = [];
+for (let i = 0; i < 8; i++) { satResult.push(getByte(32 + i)); wrapResult.push(getByte(48 + i)); }
+
+log('A = [' + a.join(', ') + ']');
+log('B = [' + b.join(', ') + ']');
+log('');
+log('add_sat_u = [' + satResult.join(', ') + ']  (clamped to 255)');
+log('add_wrap  = [' + wrapResult.join(', ') + ']  (wraps around)');
+
+log('');
+sub_sat_u(0, 16, 64);
+const subResult = [];
+for (let i = 0; i < 8; i++) subResult.push(getByte(64 + i));
+log('sub_sat_u = [' + subResult.join(', ') + ']  (clamped to 0)');`
+    },
+    // ─── Additional Bulk Memory ───
+    "passive-data": {
+      label: "Passive Data Segments",
+      group: "Bulk Memory",
+      description: "Lazy-init memory with passive segments and memory.init.",
+      target: "2.0",
+      features: ["bulk-memory"],
+      code: `// Passive data segments: lazy initialization with memory.init
+const mod = new webasmjs.ModuleBuilder('passiveData');
+const mem = mod.defineMemory(1);
+mod.exportMemory(mem, 'memory');
+
+// Passive segment: not placed in memory until memory.init is called
+const greeting = new TextEncoder().encode('Hello, WebAssembly!');
+const dataSegment = mod.defineData(new Uint8Array([...greeting]));
+// dataSegment is passive because no offset was given
+
+// Copy passive data into memory: init(destOffset)
+mod.defineFunction('init', null, [webasmjs.ValueType.Int32], (f, a) => {
+  a.get_local(f.getParameter(0)); // destination offset
+  a.const_i32(0);                  // source offset in data segment
+  a.const_i32(${greeting.length});                // length
+  a.memory_init(dataSegment._index, 0);
+}).withExport();
+
+// Drop data segment (free it after init)
+mod.defineFunction('drop', null, [], (f, a) => {
+  a.data_drop(dataSegment._index);
+}).withExport();
+
+// strlen
+mod.defineFunction('strlen', [webasmjs.ValueType.Int32], [webasmjs.ValueType.Int32], (f, a) => {
+  const ptr = f.getParameter(0);
+  const len = a.declareLocal(webasmjs.ValueType.Int32, 'len');
+  a.const_i32(0);
+  a.set_local(len);
+  a.loop(webasmjs.BlockType.Void, (cont) => {
+    a.block(webasmjs.BlockType.Void, (brk) => {
+      a.get_local(ptr);
+      a.get_local(len);
+      a.add_i32();
+      a.load8_i32_u(0, 0);
+      a.eqz_i32();
+      a.br_if(brk);
+      a.get_local(len);
+      a.const_i32(1);
+      a.add_i32();
+      a.set_local(len);
+      a.br(cont);
+    });
+  });
+  a.get_local(len);
+}).withExport();
+
+const instance = await mod.instantiate();
+const { init, drop: dataDrop, strlen, memory } = instance.instance.exports;
+const view = new Uint8Array(memory.buffer);
+
+// Memory starts empty (passive segment not yet loaded)
+log('Before init: byte[0] = ' + view[0] + ' (empty)');
+
+// Load passive data to offset 0
+init(0);
+const len = strlen(0);
+const str = new TextDecoder().decode(view.slice(0, len));
+log('After init(0): "' + str + '" (length=' + len + ')');
+
+// Load the same data at a different offset
+init(100);
+const str2 = new TextDecoder().decode(view.slice(100, 100 + len));
+log('After init(100): "' + str2 + '"');
+
+// Drop the data segment (can no longer init)
+dataDrop();
+log('');
+log('Data segment dropped \u2014 passive data freed.');
+try {
+  init(200);
+  log('Should not reach here');
+} catch (e) {
+  log('init after drop: trapped as expected');
+}`
+    },
+    "bulk-table-ops": {
+      label: "Bulk Table Operations",
+      group: "Bulk Memory",
+      description: "table.copy and table.fill for bulk table manipulation.",
+      target: "2.0",
+      features: ["bulk-memory"],
+      code: `// Bulk table operations: table.fill and table.copy
+const mod = new webasmjs.ModuleBuilder('bulkTable');
+
+const add = mod.defineFunction('add', [webasmjs.ValueType.Int32],
+  [webasmjs.ValueType.Int32, webasmjs.ValueType.Int32], (f, a) => {
+  a.get_local(f.getParameter(0));
+  a.get_local(f.getParameter(1));
+  a.add_i32();
+}).withExport();
+
+const mul = mod.defineFunction('mul', [webasmjs.ValueType.Int32],
+  [webasmjs.ValueType.Int32, webasmjs.ValueType.Int32], (f, a) => {
+  a.get_local(f.getParameter(0));
+  a.get_local(f.getParameter(1));
+  a.mul_i32();
+}).withExport();
+
+// Table with space for 8 entries
+const table = mod.defineTable(webasmjs.ElementType.AnyFunc, 8);
+mod.defineTableSegment(table, [add, mul], 0);
+
+// table.fill(start, ref, count) \u2014 fill slots 2-5 with the add function
+mod.defineFunction('fillWithAdd', null, [], (f, a) => {
+  a.const_i32(2);      // start index
+  a.ref_func(add);     // function ref
+  a.const_i32(4);      // count
+  a.table_fill(0);
+}).withExport();
+
+// table.copy(dest, src, count) \u2014 copy slots 0-1 to slots 6-7
+mod.defineFunction('copySlots', null, [], (f, a) => {
+  a.const_i32(6);      // dest
+  a.const_i32(0);      // src
+  a.const_i32(2);      // count
+  a.table_copy(0, 0);
+}).withExport();
+
+// table.size
+mod.defineFunction('tableSize', [webasmjs.ValueType.Int32], [], (f, a) => {
+  a.table_size(0);
+}).withExport();
+
+// Dispatch through table
+mod.defineFunction('dispatch', [webasmjs.ValueType.Int32],
+  [webasmjs.ValueType.Int32, webasmjs.ValueType.Int32, webasmjs.ValueType.Int32], (f, a) => {
+  a.get_local(f.getParameter(1));
+  a.get_local(f.getParameter(2));
+  a.get_local(f.getParameter(0));
+  a.call_indirect(add.funcTypeBuilder);
+}).withExport();
+
+const instance = await mod.instantiate();
+const { fillWithAdd, copySlots, tableSize, dispatch } = instance.instance.exports;
+
+log('Table size: ' + tableSize());
+log('');
+
+// Initial: [add, mul, ?, ?, ?, ?, ?, ?]
+log('Initial: slot 0 (add): dispatch(0, 3, 4) = ' + dispatch(0, 3, 4));
+log('Initial: slot 1 (mul): dispatch(1, 3, 4) = ' + dispatch(1, 3, 4));
+
+// Fill slots 2-5 with add
+fillWithAdd();
+log('');
+log('After table.fill(2, add, 4):');
+log('  slot 2: dispatch(2, 10, 20) = ' + dispatch(2, 10, 20) + ' (add)');
+log('  slot 3: dispatch(3, 10, 20) = ' + dispatch(3, 10, 20) + ' (add)');
+
+// Copy slots 0-1 to 6-7
+copySlots();
+log('');
+log('After table.copy(6, 0, 2):');
+log('  slot 6: dispatch(6, 5, 6) = ' + dispatch(6, 5, 6) + ' (add, copied from 0)');
+log('  slot 7: dispatch(7, 5, 6) = ' + dispatch(7, 5, 6) + ' (mul, copied from 1)');`
+    },
+    // ─── Additional Post-MVP ───
+    "table-ops": {
+      label: "Table Get/Set/Grow",
+      group: "Post-MVP",
+      description: "Dynamic table manipulation with table.get, table.set, table.grow.",
+      target: "2.0",
+      features: ["reference-types"],
+      code: `// Dynamic table operations: get, set, grow
+const mod = new webasmjs.ModuleBuilder('tableOps');
+
+const double = mod.defineFunction('double', [webasmjs.ValueType.Int32],
+  [webasmjs.ValueType.Int32], (f, a) => {
+  a.get_local(f.getParameter(0));
+  a.const_i32(2);
+  a.mul_i32();
+}).withExport();
+
+const triple = mod.defineFunction('triple', [webasmjs.ValueType.Int32],
+  [webasmjs.ValueType.Int32], (f, a) => {
+  a.get_local(f.getParameter(0));
+  a.const_i32(3);
+  a.mul_i32();
+}).withExport();
+
+const negate = mod.defineFunction('negate', [webasmjs.ValueType.Int32],
+  [webasmjs.ValueType.Int32], (f, a) => {
+  a.const_i32(0);
+  a.get_local(f.getParameter(0));
+  a.sub_i32();
+}).withExport();
+
+// Start with table of size 2
+const table = mod.defineTable(webasmjs.ElementType.AnyFunc, 2);
+mod.defineTableSegment(table, [double, triple], 0);
+
+// table.set: place a function ref at an index
+mod.defineFunction('setSlot', null, [webasmjs.ValueType.Int32], (f, a) => {
+  a.get_local(f.getParameter(0));
+  a.ref_func(negate);
+  a.table_set(0);
+}).withExport();
+
+// table.grow: add N slots (returns old size, or -1 on failure)
+mod.defineFunction('growTable', [webasmjs.ValueType.Int32],
+  [webasmjs.ValueType.Int32], (f, a) => {
+  a.ref_null(0x70); // fill new slots with null
+  a.get_local(f.getParameter(0));
+  a.table_grow(0);
+}).withExport();
+
+// table.size
+mod.defineFunction('size', [webasmjs.ValueType.Int32], [], (f, a) => {
+  a.table_size(0);
+}).withExport();
+
+// Check if a slot is null
+mod.defineFunction('isNull', [webasmjs.ValueType.Int32],
+  [webasmjs.ValueType.Int32], (f, a) => {
+  a.get_local(f.getParameter(0));
+  a.table_get(0);
+  a.ref_is_null();
+}).withExport();
+
+// Call through table
+mod.defineFunction('call', [webasmjs.ValueType.Int32],
+  [webasmjs.ValueType.Int32, webasmjs.ValueType.Int32], (f, a) => {
+  a.get_local(f.getParameter(1));
+  a.get_local(f.getParameter(0));
+  a.call_indirect(double.funcTypeBuilder);
+}).withExport();
+
+const instance = await mod.instantiate();
+const fn = instance.instance.exports;
+
+log('Initial size: ' + fn.size());
+log('slot 0 (double): call(0, 5) = ' + fn.call(0, 5));
+log('slot 1 (triple): call(1, 5) = ' + fn.call(1, 5));
+
+// Grow table by 3 slots
+const oldSize = fn.growTable(3);
+log('');
+log('growTable(3) returned old size: ' + oldSize);
+log('New size: ' + fn.size());
+log('slot 2 is null: ' + (fn.isNull(2) === 1));
+
+// Set slot 2 to negate
+fn.setSlot(2);
+log('');
+log('After setSlot(2, negate):');
+log('slot 2 is null: ' + (fn.isNull(2) === 1));
+log('slot 2 (negate): call(2, 5) = ' + fn.call(2, 5));`
+    },
+    "try-catch": {
+      label: "Try/Catch",
+      group: "Post-MVP",
+      description: "Full try/catch exception handling with multiple tags.",
+      target: "3.0",
+      features: ["exception-handling"],
+      code: `// Full try/catch exception handling
+const mod = new webasmjs.ModuleBuilder('tryCatch', { disableVerification: true });
+
+// Define two exception tags with different payloads
+const errorTag = mod.defineTag([webasmjs.ValueType.Int32]);     // error code
+const overflowTag = mod.defineTag([webasmjs.ValueType.Int32]);  // overflow value
+
+// Function that may throw
+mod.defineFunction('checkedAdd', [webasmjs.ValueType.Int32],
+  [webasmjs.ValueType.Int32, webasmjs.ValueType.Int32], (f, a) => {
+  const x = f.getParameter(0);
+  const y = f.getParameter(1);
+  const result = a.declareLocal(webasmjs.ValueType.Int32, 'result');
+
+  a.get_local(x);
+  a.get_local(y);
+  a.add_i32();
+  a.set_local(result);
+
+  // Check for "overflow" (result > 1000 for demo purposes)
+  a.get_local(result);
+  a.const_i32(1000);
+  a.gt_i32();
+  a.if(webasmjs.BlockType.Void, () => {
+    a.get_local(result);
+    a.throw(overflowTag._index);
+  });
+
+  // Check for negative input
+  a.get_local(x);
+  a.const_i32(0);
+  a.lt_s_i32();
+  a.if(webasmjs.BlockType.Void, () => {
+    a.const_i32(-1);
+    a.throw(errorTag._index);
+  });
+
+  a.get_local(result);
+}).withExport();
+
+// Show the WAT with tags, throw, try/catch
+const wat = mod.toString();
+log('=== WAT Output (try/catch) ===');
+log(wat);
+
+const bytes = mod.toBytes();
+log('Module compiled: ' + bytes.length + ' bytes');
+log('Valid WASM: ' + WebAssembly.validate(bytes.buffer));
+log('');
+log('This module defines:');
+log('  - errorTag: thrown when input is negative');
+log('  - overflowTag: thrown when result > 1000');
+log('  - checkedAdd: adds two numbers with validation');`
+    },
+    "f32-math": {
+      label: "f32 Math",
+      group: "Numeric",
+      description: "Single-precision float ops \u2014 f32 min, max, abs, neg, sqrt.",
+      target: "mvp",
+      features: [],
+      code: `// f32 math \u2014 single-precision float operations
+const mod = new webasmjs.ModuleBuilder('f32math');
+
+mod.defineFunction('min', [webasmjs.ValueType.Float32],
+  [webasmjs.ValueType.Float32, webasmjs.ValueType.Float32], (f, a) => {
+  a.get_local(f.getParameter(0));
+  a.get_local(f.getParameter(1));
+  a.min_f32();
+}).withExport();
+
+mod.defineFunction('max', [webasmjs.ValueType.Float32],
+  [webasmjs.ValueType.Float32, webasmjs.ValueType.Float32], (f, a) => {
+  a.get_local(f.getParameter(0));
+  a.get_local(f.getParameter(1));
+  a.max_f32();
+}).withExport();
+
+mod.defineFunction('abs', [webasmjs.ValueType.Float32],
+  [webasmjs.ValueType.Float32], (f, a) => {
+  a.get_local(f.getParameter(0));
+  a.abs_f32();
+}).withExport();
+
+mod.defineFunction('neg', [webasmjs.ValueType.Float32],
+  [webasmjs.ValueType.Float32], (f, a) => {
+  a.get_local(f.getParameter(0));
+  a.neg_f32();
+}).withExport();
+
+mod.defineFunction('sqrt', [webasmjs.ValueType.Float32],
+  [webasmjs.ValueType.Float32], (f, a) => {
+  a.get_local(f.getParameter(0));
+  a.sqrt_f32();
+}).withExport();
+
+// Compare: f32 arithmetic vs f64 for precision
+mod.defineFunction('addF32', [webasmjs.ValueType.Float32],
+  [webasmjs.ValueType.Float32, webasmjs.ValueType.Float32], (f, a) => {
+  a.get_local(f.getParameter(0));
+  a.get_local(f.getParameter(1));
+  a.add_f32();
+}).withExport();
+
+mod.defineFunction('addF64', [webasmjs.ValueType.Float64],
+  [webasmjs.ValueType.Float64, webasmjs.ValueType.Float64], (f, a) => {
+  a.get_local(f.getParameter(0));
+  a.get_local(f.getParameter(1));
+  a.add_f64();
+}).withExport();
+
+const instance = await mod.instantiate();
+const { min, max, abs, neg, sqrt, addF32, addF64 } = instance.instance.exports;
+
+log('=== f32 Operations ===');
+log('min(3.14, 2.71) = ' + min(3.14, 2.71));
+log('max(3.14, 2.71) = ' + max(3.14, 2.71));
+log('abs(-42.5) = ' + abs(-42.5));
+log('neg(3.14) = ' + neg(3.14));
+log('sqrt(2.0) = ' + sqrt(2.0));
+log('sqrt(9.0) = ' + sqrt(9.0));
+
+log('');
+log('=== f32 vs f64 Precision ===');
+log('f32: 0.1 + 0.2 = ' + addF32(0.1, 0.2));
+log('f64: 0.1 + 0.2 = ' + addF64(0.1, 0.2));
+log('f32 uses 4 bytes, f64 uses 8 bytes per value.');`
     }
   };
   var GROUP_ICONS = {
@@ -10622,6 +14418,7 @@ log('Roundtrip successful!');`
     Memory: "\u{1F4BE}",
     Globals: "\u{1F30D}",
     Functions: "\u{1F517}",
+    "Control Flow": "\u{1F500}",
     Numeric: "\u{1F522}",
     Algorithms: "\u2699",
     SIMD: "\u26A1",
@@ -10629,6 +14426,12 @@ log('Roundtrip successful!');`
     "Post-MVP": "\u{1F680}",
     WAT: "\u{1F4DD}",
     Debug: "\u{1F50D}"
+  };
+  var TARGET_ORDER = {
+    mvp: 0,
+    "2.0": 1,
+    "3.0": 2,
+    latest: 3
   };
   function getEditor() {
     return document.getElementById("editor");
@@ -10638,6 +14441,9 @@ log('Roundtrip successful!');`
   }
   function getRunOutput() {
     return document.getElementById("runOutput");
+  }
+  function getConsoleOutput() {
+    return document.getElementById("consoleOutput");
   }
   function clearOutput(el) {
     el.textContent = "";
@@ -10656,9 +14462,69 @@ log('Roundtrip successful!');`
       getEditor().value = example.code;
       clearOutput(getWatOutput());
       clearOutput(getRunOutput());
+      clearOutput(getConsoleOutput());
       const label = document.getElementById("currentExample");
       if (label) label.textContent = example.label;
     }
+  }
+  function switchTab(tabName) {
+    const tabs = document.querySelectorAll(".tab-bar .tab");
+    const panels = document.querySelectorAll(".tab-panel");
+    tabs.forEach((tab) => {
+      tab.classList.toggle("active", tab.dataset.tab === tabName);
+    });
+    panels.forEach((panel) => {
+      const isTarget = panel.id === (tabName === "wat" ? "watOutput" : "runOutput");
+      panel.classList.toggle("active", isTarget);
+    });
+  }
+  function toggleConsole() {
+    const drawer = document.getElementById("consoleDrawer");
+    drawer.classList.toggle("open");
+  }
+  function clearConsole() {
+    getConsoleOutput().textContent = "";
+    updateConsoleBadge();
+  }
+  var consoleMessageCount = 0;
+  function updateConsoleBadge() {
+    const badge = document.getElementById("consoleBadge");
+    consoleMessageCount = getConsoleOutput().childElementCount;
+    badge.textContent = String(consoleMessageCount);
+    badge.classList.toggle("has-messages", consoleMessageCount > 0);
+  }
+  function initResizeHandler() {
+    const handle = document.getElementById("resizeHandle");
+    const main = document.querySelector(".main");
+    const editorPane = document.querySelector(".editor-pane");
+    const outputPane = document.querySelector(".output-pane");
+    let isResizing = false;
+    handle.addEventListener("mousedown", (e) => {
+      isResizing = true;
+      handle.classList.add("active");
+      document.body.style.cursor = "col-resize";
+      document.body.style.userSelect = "none";
+      e.preventDefault();
+    });
+    document.addEventListener("mousemove", (e) => {
+      if (!isResizing) return;
+      const rect = main.getBoundingClientRect();
+      const x = e.clientX - rect.left;
+      const totalWidth = rect.width - 4;
+      const leftPct = Math.max(20, Math.min(80, x / rect.width * 100));
+      editorPane.style.flex = "none";
+      outputPane.style.flex = "none";
+      editorPane.style.width = leftPct + "%";
+      outputPane.style.width = 100 - leftPct + "%";
+    });
+    document.addEventListener("mouseup", () => {
+      if (isResizing) {
+        isResizing = false;
+        handle.classList.remove("active");
+        document.body.style.cursor = "";
+        document.body.style.userSelect = "";
+      }
+    });
   }
   function openExamplePicker() {
     const existing = document.getElementById("exampleDialog");
@@ -10671,11 +14537,43 @@ log('Roundtrip successful!');`
     const header = document.createElement("div");
     header.className = "dialog-header";
     header.innerHTML = "<h2>Examples</h2>";
+    const searchRow = document.createElement("div");
+    searchRow.className = "dialog-search-row";
     const searchInput = document.createElement("input");
     searchInput.type = "text";
     searchInput.placeholder = "Search examples...";
     searchInput.className = "dialog-search";
-    header.appendChild(searchInput);
+    searchRow.appendChild(searchInput);
+    const filterSelect = document.createElement("select");
+    filterSelect.className = "filter-select";
+    const allOpt = document.createElement("option");
+    allOpt.value = "";
+    allOpt.textContent = "All";
+    filterSelect.appendChild(allOpt);
+    const targetGroup = document.createElement("optgroup");
+    targetGroup.label = "Target";
+    for (const t of ["mvp", "2.0", "3.0", "latest"]) {
+      const opt = document.createElement("option");
+      opt.value = "target:" + t;
+      opt.textContent = t === "mvp" ? "MVP" : t === "latest" ? "Latest" : "Wasm " + t;
+      targetGroup.appendChild(opt);
+    }
+    filterSelect.appendChild(targetGroup);
+    const usedFeatures = /* @__PURE__ */ new Set();
+    for (const example of Object.values(EXAMPLES)) {
+      for (const f of example.features) usedFeatures.add(f);
+    }
+    const featureGroup = document.createElement("optgroup");
+    featureGroup.label = "Feature";
+    for (const f of Array.from(usedFeatures).sort()) {
+      const opt = document.createElement("option");
+      opt.value = "feature:" + f;
+      opt.textContent = f;
+      featureGroup.appendChild(opt);
+    }
+    filterSelect.appendChild(featureGroup);
+    searchRow.appendChild(filterSelect);
+    header.appendChild(searchRow);
     dialog.appendChild(header);
     const body = document.createElement("div");
     body.className = "dialog-body";
@@ -10683,8 +14581,7 @@ log('Roundtrip successful!');`
     for (const [key, example] of Object.entries(EXAMPLES)) {
       const group = example.group;
       if (!groups.has(group)) groups.set(group, []);
-      const firstComment = example.code.split("\n")[0].replace(/^\/\/\s*/, "");
-      groups.get(group).push({ key, label: example.label, desc: firstComment });
+      groups.get(group).push({ key, example });
     }
     const allCards = [];
     const allSections = [];
@@ -10704,15 +14601,34 @@ log('Roundtrip successful!');`
         card.className = "dialog-card";
         if (item.key === currentExampleKey) card.classList.add("active");
         card.dataset.key = item.key;
-        card.dataset.search = `${item.label} ${item.desc} ${groupName}`.toLowerCase();
+        card.dataset.search = `${item.example.label} ${item.example.description} ${groupName}`.toLowerCase();
+        card.dataset.target = item.example.target;
+        card.dataset.features = item.example.features.join(",");
         const title = document.createElement("div");
         title.className = "dialog-card-title";
-        title.textContent = item.label;
+        title.textContent = item.example.label;
         card.appendChild(title);
         const desc = document.createElement("div");
         desc.className = "dialog-card-desc";
-        desc.textContent = item.desc;
+        desc.textContent = item.example.description;
         card.appendChild(desc);
+        if (item.example.target !== "mvp" || item.example.features.length > 0) {
+          const meta = document.createElement("div");
+          meta.className = "dialog-card-meta";
+          if (item.example.target !== "mvp") {
+            const targetBadge = document.createElement("span");
+            targetBadge.className = "card-target";
+            targetBadge.textContent = item.example.target;
+            meta.appendChild(targetBadge);
+          }
+          for (const feat of item.example.features) {
+            const featBadge = document.createElement("span");
+            featBadge.className = "card-feature";
+            featBadge.textContent = feat;
+            meta.appendChild(featBadge);
+          }
+          card.appendChild(meta);
+        }
         card.addEventListener("click", () => {
           loadExample(item.key);
           overlay.remove();
@@ -10727,17 +14643,30 @@ log('Roundtrip successful!');`
     dialog.appendChild(body);
     overlay.appendChild(dialog);
     document.body.appendChild(overlay);
-    searchInput.addEventListener("input", () => {
+    function applyFilters() {
       const q = searchInput.value.toLowerCase().trim();
+      const filterVal = filterSelect.value;
       for (const card of allCards) {
-        const match = !q || card.dataset.search.includes(q);
-        card.style.display = match ? "" : "none";
+        const searchMatch = !q || card.dataset.search.includes(q);
+        let filterMatch = true;
+        if (filterVal.startsWith("target:")) {
+          const selectedTarget = filterVal.slice(7);
+          const cardTarget = card.dataset.target;
+          filterMatch = TARGET_ORDER[cardTarget] <= TARGET_ORDER[selectedTarget];
+        } else if (filterVal.startsWith("feature:")) {
+          const selectedFeature = filterVal.slice(8);
+          const cardFeatures = card.dataset.features ? card.dataset.features.split(",") : [];
+          filterMatch = cardFeatures.includes(selectedFeature);
+        }
+        card.style.display = searchMatch && filterMatch ? "" : "none";
       }
       for (const section of allSections) {
         const visibleCards = section.querySelectorAll('.dialog-card:not([style*="display: none"])');
         section.style.display = visibleCards.length > 0 ? "" : "none";
       }
-    });
+    }
+    searchInput.addEventListener("input", applyFilters);
+    filterSelect.addEventListener("change", applyFilters);
     overlay.addEventListener("click", (e) => {
       if (e.target === overlay) overlay.remove();
     });
@@ -10752,6 +14681,7 @@ log('Roundtrip successful!');`
   }
   window.webasmjs = {
     ModuleBuilder,
+    PackageBuilder,
     ValueType,
     BlockType,
     ElementType,
@@ -10762,11 +14692,16 @@ log('Roundtrip successful!');`
   async function run() {
     const watEl = getWatOutput();
     const runEl = getRunOutput();
+    const consoleEl = getConsoleOutput();
     clearOutput(watEl);
     clearOutput(runEl);
+    clearOutput(consoleEl);
     const code = getEditor().value;
+    const drawer = document.getElementById("consoleDrawer");
+    drawer.classList.add("open");
     const log = (msg) => {
-      appendOutput(runEl, String(msg));
+      appendOutput(consoleEl, String(msg));
+      updateConsoleBadge();
     };
     const OrigModuleBuilder = ModuleBuilder;
     const patchedClass = class extends OrigModuleBuilder {
@@ -10794,11 +14729,23 @@ ${code}
       }
     } finally {
       window.webasmjs.ModuleBuilder = OrigModuleBuilder;
+      updateConsoleBadge();
     }
   }
   document.addEventListener("DOMContentLoaded", () => {
     document.getElementById("examplesBtn").addEventListener("click", openExamplePicker);
     document.getElementById("runBtn").addEventListener("click", run);
+    document.querySelectorAll(".tab-bar .tab").forEach((tab) => {
+      tab.addEventListener("click", () => {
+        switchTab(tab.dataset.tab);
+      });
+    });
+    document.getElementById("consoleToggle").addEventListener("click", toggleConsole);
+    document.getElementById("consoleClear").addEventListener("click", (e) => {
+      e.stopPropagation();
+      clearConsole();
+    });
+    initResizeHandler();
     getEditor().addEventListener("keydown", (e) => {
       if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
         e.preventDefault();

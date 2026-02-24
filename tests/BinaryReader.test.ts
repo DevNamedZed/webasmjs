@@ -156,3 +156,202 @@ test('BinaryReader - roundtrip validates', async () => {
   expect(info.globals.length).toBe(1);
   expect(info.exports.length).toBe(2);
 });
+
+describe('BinaryReader validation', () => {
+  test('invalid magic header throws', () => {
+    const buf = new Uint8Array([0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00]);
+    const reader = new BinaryReader(buf);
+    expect(() => reader.read()).toThrow('Invalid WASM magic header');
+  });
+
+  test('table section roundtrip', () => {
+    const mod = new ModuleBuilder('test');
+    mod.defineTable(ElementType.AnyFunc, 1, 10);
+    const bytes = mod.toBytes();
+    const reader = new BinaryReader(bytes);
+    const info = reader.read();
+    expect(info.tables.length).toBe(1);
+    expect(info.tables[0].initial).toBe(1);
+    expect(info.tables[0].maximum).toBe(10);
+  });
+
+  test('data section roundtrip', () => {
+    const mod = new ModuleBuilder('test');
+    mod.defineMemory(1);
+    mod.defineData(new Uint8Array([0x48, 0x65, 0x6C, 0x6C, 0x6F]), 0);
+    const bytes = mod.toBytes();
+    const reader = new BinaryReader(bytes);
+    const info = reader.read();
+    expect(info.data.length).toBe(1);
+    expect(info.data[0].data).toEqual(new Uint8Array([0x48, 0x65, 0x6C, 0x6C, 0x6F]));
+  });
+
+  test('custom section roundtrip', () => {
+    const mod = new ModuleBuilder('test', { generateNameSection: false });
+    mod.defineCustomSection('mydata', new Uint8Array([0xCA, 0xFE]));
+    const bytes = mod.toBytes();
+    const reader = new BinaryReader(bytes);
+    const info = reader.read();
+    const custom = info.customSections.find(s => s.name === 'mydata');
+    expect(custom).toBeDefined();
+    expect(custom!.data).toEqual(new Uint8Array([0xCA, 0xFE]));
+  });
+
+  test('start section roundtrip', () => {
+    const mod = new ModuleBuilder('test');
+    const fn = mod.defineFunction('init', null, [], (f, a) => {});
+    mod.setStartFunction(fn);
+    const bytes = mod.toBytes();
+    const reader = new BinaryReader(bytes);
+    const info = reader.read();
+    expect(info.start).toBe(fn._index);
+  });
+});
+
+describe('BinaryReader roundtrips', () => {
+  test('Unsupported WASM version throws', () => {
+    // WASM magic: 0x00 0x61 0x73 0x6d (little-endian: 0x6d736100)
+    // Version 2 (little-endian): 0x02 0x00 0x00 0x00
+    const bytes = new Uint8Array([0x00, 0x61, 0x73, 0x6d, 0x02, 0x00, 0x00, 0x00]);
+    const reader = new BinaryReader(bytes);
+    expect(() => reader.read()).toThrow('Unsupported WASM version: 2');
+  });
+
+  test('Import section with table kind roundtrip', () => {
+    const mod = new ModuleBuilder('test');
+    mod.importTable('env', 'tbl', ElementType.AnyFunc, 2, 8);
+    mod.defineFunction('noop', null, [], (f, a) => {}).withExport();
+    const bytes = mod.toBytes();
+
+    const reader = new BinaryReader(bytes);
+    const info = reader.read();
+    const tableImport = info.imports.find((i) => i.kind === 1);
+    expect(tableImport).toBeDefined();
+    expect(tableImport!.moduleName).toBe('env');
+    expect(tableImport!.fieldName).toBe('tbl');
+    expect(tableImport!.tableType).toBeDefined();
+    expect(tableImport!.tableType!.initial).toBe(2);
+    expect(tableImport!.tableType!.maximum).toBe(8);
+    // elementType for anyfunc is 0x70, which is -16 when read as signed varint7
+    expect(tableImport!.tableType!.elementType).toBe(-16);
+  });
+
+  test('Import section with memory kind roundtrip', () => {
+    const mod = new ModuleBuilder('test');
+    mod.importMemory('env', 'mem', 1, 16);
+    mod.defineFunction('noop', null, [], (f, a) => {}).withExport();
+    const bytes = mod.toBytes();
+
+    const reader = new BinaryReader(bytes);
+    const info = reader.read();
+    const memImport = info.imports.find((i) => i.kind === 2);
+    expect(memImport).toBeDefined();
+    expect(memImport!.moduleName).toBe('env');
+    expect(memImport!.fieldName).toBe('mem');
+    expect(memImport!.memoryType).toBeDefined();
+    expect(memImport!.memoryType!.initial).toBe(1);
+    expect(memImport!.memoryType!.maximum).toBe(16);
+  });
+
+  test('Import section with global kind roundtrip', () => {
+    const mod = new ModuleBuilder('test');
+    mod.importGlobal('env', 'g', ValueType.Int32, true);
+    mod.defineFunction('noop', null, [], (f, a) => {}).withExport();
+    const bytes = mod.toBytes();
+
+    const reader = new BinaryReader(bytes);
+    const info = reader.read();
+    const globalImport = info.imports.find((i) => i.kind === 3);
+    expect(globalImport).toBeDefined();
+    expect(globalImport!.moduleName).toBe('env');
+    expect(globalImport!.fieldName).toBe('g');
+    expect(globalImport!.globalType).toBeDefined();
+    // i32 is encoded as 0x7f (or signed -1)
+    expect(globalImport!.globalType!.valueType).toBe(-1);
+    expect(globalImport!.globalType!.mutable).toBe(true);
+  });
+
+  test('Element section roundtrip', () => {
+    const mod = new ModuleBuilder('test');
+    const fn1 = mod.defineFunction('fn1', [ValueType.Int32], [], (f, a) => {
+      a.const_i32(1);
+    });
+    const fn2 = mod.defineFunction('fn2', [ValueType.Int32], [], (f, a) => {
+      a.const_i32(2);
+    });
+    const fn3 = mod.defineFunction('fn3', [ValueType.Int32], [], (f, a) => {
+      a.const_i32(3);
+    });
+    const table = mod.defineTable(ElementType.AnyFunc, 3, 3);
+    table.defineTableSegment([fn1, fn2, fn3], 0);
+    mod.defineFunction('noop', null, [], (f, a) => {}).withExport();
+    const bytes = mod.toBytes();
+
+    const reader = new BinaryReader(bytes);
+    const info = reader.read();
+    expect(info.elements).toHaveLength(1);
+    expect(info.elements[0].tableIndex).toBe(0);
+    expect(info.elements[0].functionIndices).toEqual([
+      fn1._index,
+      fn2._index,
+      fn3._index,
+    ]);
+  });
+
+  test('Name section with local names roundtrip', () => {
+    const mod = new ModuleBuilder('localMod');
+    const fn = mod.defineFunction(
+      'myFunc',
+      ValueType.Int32,
+      [ValueType.Int32, ValueType.Int32],
+      (f, a) => {
+        a.const_i32(0);
+      }
+    );
+    fn.parameters[0].withName('x');
+    fn.parameters[1].withName('y');
+
+    // Also add a named local
+    const fn2 = mod.defineFunction('myFunc2', null, []);
+    const asm = fn2.createEmitter();
+    asm.declareLocal(ValueType.Int32, 'counter');
+    asm.end();
+
+    const bytes = mod.toBytes();
+    const reader = new BinaryReader(bytes);
+    const info = reader.read();
+
+    expect(info.nameSection).toBeDefined();
+    expect(info.nameSection!.localNames).toBeDefined();
+    const localNames = info.nameSection!.localNames!;
+
+    // fn has params x and y
+    const fnLocals = localNames.get(fn._index);
+    expect(fnLocals).toBeDefined();
+    expect(fnLocals!.get(0)).toBe('x');
+    expect(fnLocals!.get(1)).toBe('y');
+
+    // fn2 has local 'counter'
+    const fn2Locals = localNames.get(fn2._index);
+    expect(fn2Locals).toBeDefined();
+    expect(fn2Locals!.get(0)).toBe('counter');
+  });
+
+  test('Name section with global names roundtrip', () => {
+    const mod = new ModuleBuilder('globalMod');
+    const g1 = mod.defineGlobal(ValueType.Int32, false, 10);
+    g1.withName('alpha');
+    const g2 = mod.defineGlobal(ValueType.Float64, false, 3.14);
+    g2.withName('beta');
+
+    const bytes = mod.toBytes();
+    const reader = new BinaryReader(bytes);
+    const info = reader.read();
+
+    expect(info.nameSection).toBeDefined();
+    expect(info.nameSection!.globalNames).toBeDefined();
+    const globalNames = info.nameSection!.globalNames!;
+    expect(globalNames.get(g1._index)).toBe('alpha');
+    expect(globalNames.get(g2._index)).toBe('beta');
+  });
+});

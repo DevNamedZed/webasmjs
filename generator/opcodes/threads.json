@@ -1,0 +1,1258 @@
+[
+  {
+    "value": 0,
+    "name": "memory_atomic_notify",
+    "mnemonic": "memory.atomic.notify",
+    "friendlyName": "atomic_notify",
+    "immediate": "MemoryImmediate",
+    "controlFlow": null,
+    "pop": [
+      "Int32",
+      "Int32"
+    ],
+    "push": [
+      "Int32"
+    ],
+    "prefix": 254,
+    "feature": "threads",
+    "group": "atomics",
+    "order": 444
+  },
+  {
+    "value": 1,
+    "name": "memory_atomic_wait32",
+    "mnemonic": "memory.atomic.wait32",
+    "friendlyName": "atomic_wait32",
+    "immediate": "MemoryImmediate",
+    "controlFlow": null,
+    "pop": [
+      "Int32",
+      "Int32",
+      "Int64"
+    ],
+    "push": [
+      "Int32"
+    ],
+    "prefix": 254,
+    "feature": "threads",
+    "group": "atomics",
+    "order": 445
+  },
+  {
+    "value": 2,
+    "name": "memory_atomic_wait64",
+    "mnemonic": "memory.atomic.wait64",
+    "friendlyName": "atomic_wait64",
+    "immediate": "MemoryImmediate",
+    "controlFlow": null,
+    "pop": [
+      "Int32",
+      "Int64",
+      "Int64"
+    ],
+    "push": [
+      "Int32"
+    ],
+    "prefix": 254,
+    "feature": "threads",
+    "group": "atomics",
+    "order": 446
+  },
+  {
+    "value": 3,
+    "name": "atomic_fence",
+    "mnemonic": "atomic.fence",
+    "friendlyName": "atomic_fence",
+    "immediate": "VarUInt1",
+    "controlFlow": null,
+    "pop": null,
+    "push": null,
+    "prefix": 254,
+    "feature": "threads",
+    "group": "atomics",
+    "order": 447
+  },
+  {
+    "value": 16,
+    "name": "i32_atomic_load",
+    "mnemonic": "i32.atomic.load",
+    "friendlyName": "atomic_load_i32",
+    "immediate": "MemoryImmediate",
+    "controlFlow": null,
+    "pop": [
+      "Int32"
+    ],
+    "push": [
+      "Int32"
+    ],
+    "prefix": 254,
+    "feature": "threads",
+    "group": "atomics",
+    "order": 448
+  },
+  {
+    "value": 17,
+    "name": "i64_atomic_load",
+    "mnemonic": "i64.atomic.load",
+    "friendlyName": "atomic_load_i64",
+    "immediate": "MemoryImmediate",
+    "controlFlow": null,
+    "pop": [
+      "Int32"
+    ],
+    "push": [
+      "Int64"
+    ],
+    "prefix": 254,
+    "feature": "threads",
+    "group": "atomics",
+    "order": 449
+  },
+  {
+    "value": 18,
+    "name": "i32_atomic_load8_u",
+    "mnemonic": "i32.atomic.load8_u",
+    "friendlyName": "atomic_load8_u_i32",
+    "immediate": "MemoryImmediate",
+    "controlFlow": null,
+    "pop": [
+      "Int32"
+    ],
+    "push": [
+      "Int32"
+    ],
+    "prefix": 254,
+    "feature": "threads",
+    "group": "atomics",
+    "order": 450
+  },
+  {
+    "value": 19,
+    "name": "i32_atomic_load16_u",
+    "mnemonic": "i32.atomic.load16_u",
+    "friendlyName": "atomic_load16_u_i32",
+    "immediate": "MemoryImmediate",
+    "controlFlow": null,
+    "pop": [
+      "Int32"
+    ],
+    "push": [
+      "Int32"
+    ],
+    "prefix": 254,
+    "feature": "threads",
+    "group": "atomics",
+    "order": 451
+  },
+  {
+    "value": 20,
+    "name": "i64_atomic_load8_u",
+    "mnemonic": "i64.atomic.load8_u",
+    "friendlyName": "atomic_load8_u_i64",
+    "immediate": "MemoryImmediate",
+    "controlFlow": null,
+    "pop": [
+      "Int32"
+    ],
+    "push": [
+      "Int64"
+    ],
+    "prefix": 254,
+    "feature": "threads",
+    "group": "atomics",
+    "order": 452
+  },
+  {
+    "value": 21,
+    "name": "i64_atomic_load16_u",
+    "mnemonic": "i64.atomic.load16_u",
+    "friendlyName": "atomic_load16_u_i64",
+    "immediate": "MemoryImmediate",
+    "controlFlow": null,
+    "pop": [
+      "Int32"
+    ],
+    "push": [
+      "Int64"
+    ],
+    "prefix": 254,
+    "feature": "threads",
+    "group": "atomics",
+    "order": 453
+  },
+  {
+    "value": 22,
+    "name": "i64_atomic_load32_u",
+    "mnemonic": "i64.atomic.load32_u",
+    "friendlyName": "atomic_load32_u_i64",
+    "immediate": "MemoryImmediate",
+    "controlFlow": null,
+    "pop": [
+      "Int32"
+    ],
+    "push": [
+      "Int64"
+    ],
+    "prefix": 254,
+    "feature": "threads",
+    "group": "atomics",
+    "order": 454
+  },
+  {
+    "value": 23,
+    "name": "i32_atomic_store",
+    "mnemonic": "i32.atomic.store",
+    "friendlyName": "atomic_store_i32",
+    "immediate": "MemoryImmediate",
+    "controlFlow": null,
+    "pop": [
+      "Int32",
+      "Int32"
+    ],
+    "push": null,
+    "prefix": 254,
+    "feature": "threads",
+    "group": "atomics",
+    "order": 455
+  },
+  {
+    "value": 24,
+    "name": "i64_atomic_store",
+    "mnemonic": "i64.atomic.store",
+    "friendlyName": "atomic_store_i64",
+    "immediate": "MemoryImmediate",
+    "controlFlow": null,
+    "pop": [
+      "Int32",
+      "Int64"
+    ],
+    "push": null,
+    "prefix": 254,
+    "feature": "threads",
+    "group": "atomics",
+    "order": 456
+  },
+  {
+    "value": 25,
+    "name": "i32_atomic_store8",
+    "mnemonic": "i32.atomic.store8",
+    "friendlyName": "atomic_store8_i32",
+    "immediate": "MemoryImmediate",
+    "controlFlow": null,
+    "pop": [
+      "Int32",
+      "Int32"
+    ],
+    "push": null,
+    "prefix": 254,
+    "feature": "threads",
+    "group": "atomics",
+    "order": 457
+  },
+  {
+    "value": 26,
+    "name": "i32_atomic_store16",
+    "mnemonic": "i32.atomic.store16",
+    "friendlyName": "atomic_store16_i32",
+    "immediate": "MemoryImmediate",
+    "controlFlow": null,
+    "pop": [
+      "Int32",
+      "Int32"
+    ],
+    "push": null,
+    "prefix": 254,
+    "feature": "threads",
+    "group": "atomics",
+    "order": 458
+  },
+  {
+    "value": 27,
+    "name": "i64_atomic_store8",
+    "mnemonic": "i64.atomic.store8",
+    "friendlyName": "atomic_store8_i64",
+    "immediate": "MemoryImmediate",
+    "controlFlow": null,
+    "pop": [
+      "Int32",
+      "Int64"
+    ],
+    "push": null,
+    "prefix": 254,
+    "feature": "threads",
+    "group": "atomics",
+    "order": 459
+  },
+  {
+    "value": 28,
+    "name": "i64_atomic_store16",
+    "mnemonic": "i64.atomic.store16",
+    "friendlyName": "atomic_store16_i64",
+    "immediate": "MemoryImmediate",
+    "controlFlow": null,
+    "pop": [
+      "Int32",
+      "Int64"
+    ],
+    "push": null,
+    "prefix": 254,
+    "feature": "threads",
+    "group": "atomics",
+    "order": 460
+  },
+  {
+    "value": 29,
+    "name": "i64_atomic_store32",
+    "mnemonic": "i64.atomic.store32",
+    "friendlyName": "atomic_store32_i64",
+    "immediate": "MemoryImmediate",
+    "controlFlow": null,
+    "pop": [
+      "Int32",
+      "Int64"
+    ],
+    "push": null,
+    "prefix": 254,
+    "feature": "threads",
+    "group": "atomics",
+    "order": 461
+  },
+  {
+    "value": 30,
+    "name": "i32_atomic_rmw_add",
+    "mnemonic": "i32.atomic.rmw.add",
+    "friendlyName": "atomic_rmw_add_i32",
+    "immediate": "MemoryImmediate",
+    "controlFlow": null,
+    "pop": [
+      "Int32",
+      "Int32"
+    ],
+    "push": [
+      "Int32"
+    ],
+    "prefix": 254,
+    "feature": "threads",
+    "group": "atomics",
+    "order": 462
+  },
+  {
+    "value": 31,
+    "name": "i64_atomic_rmw_add",
+    "mnemonic": "i64.atomic.rmw.add",
+    "friendlyName": "atomic_rmw_add_i64",
+    "immediate": "MemoryImmediate",
+    "controlFlow": null,
+    "pop": [
+      "Int32",
+      "Int64"
+    ],
+    "push": [
+      "Int64"
+    ],
+    "prefix": 254,
+    "feature": "threads",
+    "group": "atomics",
+    "order": 463
+  },
+  {
+    "value": 32,
+    "name": "i32_atomic_rmw8_add_u",
+    "mnemonic": "i32.atomic.rmw8.add_u",
+    "friendlyName": "atomic_rmw8_add_u_i32",
+    "immediate": "MemoryImmediate",
+    "controlFlow": null,
+    "pop": [
+      "Int32",
+      "Int32"
+    ],
+    "push": [
+      "Int32"
+    ],
+    "prefix": 254,
+    "feature": "threads",
+    "group": "atomics",
+    "order": 464
+  },
+  {
+    "value": 33,
+    "name": "i32_atomic_rmw16_add_u",
+    "mnemonic": "i32.atomic.rmw16.add_u",
+    "friendlyName": "atomic_rmw16_add_u_i32",
+    "immediate": "MemoryImmediate",
+    "controlFlow": null,
+    "pop": [
+      "Int32",
+      "Int32"
+    ],
+    "push": [
+      "Int32"
+    ],
+    "prefix": 254,
+    "feature": "threads",
+    "group": "atomics",
+    "order": 465
+  },
+  {
+    "value": 34,
+    "name": "i64_atomic_rmw8_add_u",
+    "mnemonic": "i64.atomic.rmw8.add_u",
+    "friendlyName": "atomic_rmw8_add_u_i64",
+    "immediate": "MemoryImmediate",
+    "controlFlow": null,
+    "pop": [
+      "Int32",
+      "Int64"
+    ],
+    "push": [
+      "Int64"
+    ],
+    "prefix": 254,
+    "feature": "threads",
+    "group": "atomics",
+    "order": 466
+  },
+  {
+    "value": 35,
+    "name": "i64_atomic_rmw16_add_u",
+    "mnemonic": "i64.atomic.rmw16.add_u",
+    "friendlyName": "atomic_rmw16_add_u_i64",
+    "immediate": "MemoryImmediate",
+    "controlFlow": null,
+    "pop": [
+      "Int32",
+      "Int64"
+    ],
+    "push": [
+      "Int64"
+    ],
+    "prefix": 254,
+    "feature": "threads",
+    "group": "atomics",
+    "order": 467
+  },
+  {
+    "value": 36,
+    "name": "i64_atomic_rmw32_add_u",
+    "mnemonic": "i64.atomic.rmw32.add_u",
+    "friendlyName": "atomic_rmw32_add_u_i64",
+    "immediate": "MemoryImmediate",
+    "controlFlow": null,
+    "pop": [
+      "Int32",
+      "Int64"
+    ],
+    "push": [
+      "Int64"
+    ],
+    "prefix": 254,
+    "feature": "threads",
+    "group": "atomics",
+    "order": 468
+  },
+  {
+    "value": 37,
+    "name": "i32_atomic_rmw_sub",
+    "mnemonic": "i32.atomic.rmw.sub",
+    "friendlyName": "atomic_rmw_sub_i32",
+    "immediate": "MemoryImmediate",
+    "controlFlow": null,
+    "pop": [
+      "Int32",
+      "Int32"
+    ],
+    "push": [
+      "Int32"
+    ],
+    "prefix": 254,
+    "feature": "threads",
+    "group": "atomics",
+    "order": 469
+  },
+  {
+    "value": 38,
+    "name": "i64_atomic_rmw_sub",
+    "mnemonic": "i64.atomic.rmw.sub",
+    "friendlyName": "atomic_rmw_sub_i64",
+    "immediate": "MemoryImmediate",
+    "controlFlow": null,
+    "pop": [
+      "Int32",
+      "Int64"
+    ],
+    "push": [
+      "Int64"
+    ],
+    "prefix": 254,
+    "feature": "threads",
+    "group": "atomics",
+    "order": 470
+  },
+  {
+    "value": 39,
+    "name": "i32_atomic_rmw8_sub_u",
+    "mnemonic": "i32.atomic.rmw8.sub_u",
+    "friendlyName": "atomic_rmw8_sub_u_i32",
+    "immediate": "MemoryImmediate",
+    "controlFlow": null,
+    "pop": [
+      "Int32",
+      "Int32"
+    ],
+    "push": [
+      "Int32"
+    ],
+    "prefix": 254,
+    "feature": "threads",
+    "group": "atomics",
+    "order": 471
+  },
+  {
+    "value": 40,
+    "name": "i32_atomic_rmw16_sub_u",
+    "mnemonic": "i32.atomic.rmw16.sub_u",
+    "friendlyName": "atomic_rmw16_sub_u_i32",
+    "immediate": "MemoryImmediate",
+    "controlFlow": null,
+    "pop": [
+      "Int32",
+      "Int32"
+    ],
+    "push": [
+      "Int32"
+    ],
+    "prefix": 254,
+    "feature": "threads",
+    "group": "atomics",
+    "order": 472
+  },
+  {
+    "value": 41,
+    "name": "i64_atomic_rmw8_sub_u",
+    "mnemonic": "i64.atomic.rmw8.sub_u",
+    "friendlyName": "atomic_rmw8_sub_u_i64",
+    "immediate": "MemoryImmediate",
+    "controlFlow": null,
+    "pop": [
+      "Int32",
+      "Int64"
+    ],
+    "push": [
+      "Int64"
+    ],
+    "prefix": 254,
+    "feature": "threads",
+    "group": "atomics",
+    "order": 473
+  },
+  {
+    "value": 42,
+    "name": "i64_atomic_rmw16_sub_u",
+    "mnemonic": "i64.atomic.rmw16.sub_u",
+    "friendlyName": "atomic_rmw16_sub_u_i64",
+    "immediate": "MemoryImmediate",
+    "controlFlow": null,
+    "pop": [
+      "Int32",
+      "Int64"
+    ],
+    "push": [
+      "Int64"
+    ],
+    "prefix": 254,
+    "feature": "threads",
+    "group": "atomics",
+    "order": 474
+  },
+  {
+    "value": 43,
+    "name": "i64_atomic_rmw32_sub_u",
+    "mnemonic": "i64.atomic.rmw32.sub_u",
+    "friendlyName": "atomic_rmw32_sub_u_i64",
+    "immediate": "MemoryImmediate",
+    "controlFlow": null,
+    "pop": [
+      "Int32",
+      "Int64"
+    ],
+    "push": [
+      "Int64"
+    ],
+    "prefix": 254,
+    "feature": "threads",
+    "group": "atomics",
+    "order": 475
+  },
+  {
+    "value": 44,
+    "name": "i32_atomic_rmw_and",
+    "mnemonic": "i32.atomic.rmw.and",
+    "friendlyName": "atomic_rmw_and_i32",
+    "immediate": "MemoryImmediate",
+    "controlFlow": null,
+    "pop": [
+      "Int32",
+      "Int32"
+    ],
+    "push": [
+      "Int32"
+    ],
+    "prefix": 254,
+    "feature": "threads",
+    "group": "atomics",
+    "order": 476
+  },
+  {
+    "value": 45,
+    "name": "i64_atomic_rmw_and",
+    "mnemonic": "i64.atomic.rmw.and",
+    "friendlyName": "atomic_rmw_and_i64",
+    "immediate": "MemoryImmediate",
+    "controlFlow": null,
+    "pop": [
+      "Int32",
+      "Int64"
+    ],
+    "push": [
+      "Int64"
+    ],
+    "prefix": 254,
+    "feature": "threads",
+    "group": "atomics",
+    "order": 477
+  },
+  {
+    "value": 46,
+    "name": "i32_atomic_rmw8_and_u",
+    "mnemonic": "i32.atomic.rmw8.and_u",
+    "friendlyName": "atomic_rmw8_and_u_i32",
+    "immediate": "MemoryImmediate",
+    "controlFlow": null,
+    "pop": [
+      "Int32",
+      "Int32"
+    ],
+    "push": [
+      "Int32"
+    ],
+    "prefix": 254,
+    "feature": "threads",
+    "group": "atomics",
+    "order": 478
+  },
+  {
+    "value": 47,
+    "name": "i32_atomic_rmw16_and_u",
+    "mnemonic": "i32.atomic.rmw16.and_u",
+    "friendlyName": "atomic_rmw16_and_u_i32",
+    "immediate": "MemoryImmediate",
+    "controlFlow": null,
+    "pop": [
+      "Int32",
+      "Int32"
+    ],
+    "push": [
+      "Int32"
+    ],
+    "prefix": 254,
+    "feature": "threads",
+    "group": "atomics",
+    "order": 479
+  },
+  {
+    "value": 48,
+    "name": "i64_atomic_rmw8_and_u",
+    "mnemonic": "i64.atomic.rmw8.and_u",
+    "friendlyName": "atomic_rmw8_and_u_i64",
+    "immediate": "MemoryImmediate",
+    "controlFlow": null,
+    "pop": [
+      "Int32",
+      "Int64"
+    ],
+    "push": [
+      "Int64"
+    ],
+    "prefix": 254,
+    "feature": "threads",
+    "group": "atomics",
+    "order": 480
+  },
+  {
+    "value": 49,
+    "name": "i64_atomic_rmw16_and_u",
+    "mnemonic": "i64.atomic.rmw16.and_u",
+    "friendlyName": "atomic_rmw16_and_u_i64",
+    "immediate": "MemoryImmediate",
+    "controlFlow": null,
+    "pop": [
+      "Int32",
+      "Int64"
+    ],
+    "push": [
+      "Int64"
+    ],
+    "prefix": 254,
+    "feature": "threads",
+    "group": "atomics",
+    "order": 481
+  },
+  {
+    "value": 50,
+    "name": "i64_atomic_rmw32_and_u",
+    "mnemonic": "i64.atomic.rmw32.and_u",
+    "friendlyName": "atomic_rmw32_and_u_i64",
+    "immediate": "MemoryImmediate",
+    "controlFlow": null,
+    "pop": [
+      "Int32",
+      "Int64"
+    ],
+    "push": [
+      "Int64"
+    ],
+    "prefix": 254,
+    "feature": "threads",
+    "group": "atomics",
+    "order": 482
+  },
+  {
+    "value": 51,
+    "name": "i32_atomic_rmw_or",
+    "mnemonic": "i32.atomic.rmw.or",
+    "friendlyName": "atomic_rmw_or_i32",
+    "immediate": "MemoryImmediate",
+    "controlFlow": null,
+    "pop": [
+      "Int32",
+      "Int32"
+    ],
+    "push": [
+      "Int32"
+    ],
+    "prefix": 254,
+    "feature": "threads",
+    "group": "atomics",
+    "order": 483
+  },
+  {
+    "value": 52,
+    "name": "i64_atomic_rmw_or",
+    "mnemonic": "i64.atomic.rmw.or",
+    "friendlyName": "atomic_rmw_or_i64",
+    "immediate": "MemoryImmediate",
+    "controlFlow": null,
+    "pop": [
+      "Int32",
+      "Int64"
+    ],
+    "push": [
+      "Int64"
+    ],
+    "prefix": 254,
+    "feature": "threads",
+    "group": "atomics",
+    "order": 484
+  },
+  {
+    "value": 53,
+    "name": "i32_atomic_rmw8_or_u",
+    "mnemonic": "i32.atomic.rmw8.or_u",
+    "friendlyName": "atomic_rmw8_or_u_i32",
+    "immediate": "MemoryImmediate",
+    "controlFlow": null,
+    "pop": [
+      "Int32",
+      "Int32"
+    ],
+    "push": [
+      "Int32"
+    ],
+    "prefix": 254,
+    "feature": "threads",
+    "group": "atomics",
+    "order": 485
+  },
+  {
+    "value": 54,
+    "name": "i32_atomic_rmw16_or_u",
+    "mnemonic": "i32.atomic.rmw16.or_u",
+    "friendlyName": "atomic_rmw16_or_u_i32",
+    "immediate": "MemoryImmediate",
+    "controlFlow": null,
+    "pop": [
+      "Int32",
+      "Int32"
+    ],
+    "push": [
+      "Int32"
+    ],
+    "prefix": 254,
+    "feature": "threads",
+    "group": "atomics",
+    "order": 486
+  },
+  {
+    "value": 55,
+    "name": "i64_atomic_rmw8_or_u",
+    "mnemonic": "i64.atomic.rmw8.or_u",
+    "friendlyName": "atomic_rmw8_or_u_i64",
+    "immediate": "MemoryImmediate",
+    "controlFlow": null,
+    "pop": [
+      "Int32",
+      "Int64"
+    ],
+    "push": [
+      "Int64"
+    ],
+    "prefix": 254,
+    "feature": "threads",
+    "group": "atomics",
+    "order": 487
+  },
+  {
+    "value": 56,
+    "name": "i64_atomic_rmw16_or_u",
+    "mnemonic": "i64.atomic.rmw16.or_u",
+    "friendlyName": "atomic_rmw16_or_u_i64",
+    "immediate": "MemoryImmediate",
+    "controlFlow": null,
+    "pop": [
+      "Int32",
+      "Int64"
+    ],
+    "push": [
+      "Int64"
+    ],
+    "prefix": 254,
+    "feature": "threads",
+    "group": "atomics",
+    "order": 488
+  },
+  {
+    "value": 57,
+    "name": "i64_atomic_rmw32_or_u",
+    "mnemonic": "i64.atomic.rmw32.or_u",
+    "friendlyName": "atomic_rmw32_or_u_i64",
+    "immediate": "MemoryImmediate",
+    "controlFlow": null,
+    "pop": [
+      "Int32",
+      "Int64"
+    ],
+    "push": [
+      "Int64"
+    ],
+    "prefix": 254,
+    "feature": "threads",
+    "group": "atomics",
+    "order": 489
+  },
+  {
+    "value": 58,
+    "name": "i32_atomic_rmw_xor",
+    "mnemonic": "i32.atomic.rmw.xor",
+    "friendlyName": "atomic_rmw_xor_i32",
+    "immediate": "MemoryImmediate",
+    "controlFlow": null,
+    "pop": [
+      "Int32",
+      "Int32"
+    ],
+    "push": [
+      "Int32"
+    ],
+    "prefix": 254,
+    "feature": "threads",
+    "group": "atomics",
+    "order": 490
+  },
+  {
+    "value": 59,
+    "name": "i64_atomic_rmw_xor",
+    "mnemonic": "i64.atomic.rmw.xor",
+    "friendlyName": "atomic_rmw_xor_i64",
+    "immediate": "MemoryImmediate",
+    "controlFlow": null,
+    "pop": [
+      "Int32",
+      "Int64"
+    ],
+    "push": [
+      "Int64"
+    ],
+    "prefix": 254,
+    "feature": "threads",
+    "group": "atomics",
+    "order": 491
+  },
+  {
+    "value": 60,
+    "name": "i32_atomic_rmw8_xor_u",
+    "mnemonic": "i32.atomic.rmw8.xor_u",
+    "friendlyName": "atomic_rmw8_xor_u_i32",
+    "immediate": "MemoryImmediate",
+    "controlFlow": null,
+    "pop": [
+      "Int32",
+      "Int32"
+    ],
+    "push": [
+      "Int32"
+    ],
+    "prefix": 254,
+    "feature": "threads",
+    "group": "atomics",
+    "order": 492
+  },
+  {
+    "value": 61,
+    "name": "i32_atomic_rmw16_xor_u",
+    "mnemonic": "i32.atomic.rmw16.xor_u",
+    "friendlyName": "atomic_rmw16_xor_u_i32",
+    "immediate": "MemoryImmediate",
+    "controlFlow": null,
+    "pop": [
+      "Int32",
+      "Int32"
+    ],
+    "push": [
+      "Int32"
+    ],
+    "prefix": 254,
+    "feature": "threads",
+    "group": "atomics",
+    "order": 493
+  },
+  {
+    "value": 62,
+    "name": "i64_atomic_rmw8_xor_u",
+    "mnemonic": "i64.atomic.rmw8.xor_u",
+    "friendlyName": "atomic_rmw8_xor_u_i64",
+    "immediate": "MemoryImmediate",
+    "controlFlow": null,
+    "pop": [
+      "Int32",
+      "Int64"
+    ],
+    "push": [
+      "Int64"
+    ],
+    "prefix": 254,
+    "feature": "threads",
+    "group": "atomics",
+    "order": 494
+  },
+  {
+    "value": 63,
+    "name": "i64_atomic_rmw16_xor_u",
+    "mnemonic": "i64.atomic.rmw16.xor_u",
+    "friendlyName": "atomic_rmw16_xor_u_i64",
+    "immediate": "MemoryImmediate",
+    "controlFlow": null,
+    "pop": [
+      "Int32",
+      "Int64"
+    ],
+    "push": [
+      "Int64"
+    ],
+    "prefix": 254,
+    "feature": "threads",
+    "group": "atomics",
+    "order": 495
+  },
+  {
+    "value": 64,
+    "name": "i64_atomic_rmw32_xor_u",
+    "mnemonic": "i64.atomic.rmw32.xor_u",
+    "friendlyName": "atomic_rmw32_xor_u_i64",
+    "immediate": "MemoryImmediate",
+    "controlFlow": null,
+    "pop": [
+      "Int32",
+      "Int64"
+    ],
+    "push": [
+      "Int64"
+    ],
+    "prefix": 254,
+    "feature": "threads",
+    "group": "atomics",
+    "order": 496
+  },
+  {
+    "value": 65,
+    "name": "i32_atomic_rmw_xchg",
+    "mnemonic": "i32.atomic.rmw.xchg",
+    "friendlyName": "atomic_rmw_xchg_i32",
+    "immediate": "MemoryImmediate",
+    "controlFlow": null,
+    "pop": [
+      "Int32",
+      "Int32"
+    ],
+    "push": [
+      "Int32"
+    ],
+    "prefix": 254,
+    "feature": "threads",
+    "group": "atomics",
+    "order": 497
+  },
+  {
+    "value": 66,
+    "name": "i64_atomic_rmw_xchg",
+    "mnemonic": "i64.atomic.rmw.xchg",
+    "friendlyName": "atomic_rmw_xchg_i64",
+    "immediate": "MemoryImmediate",
+    "controlFlow": null,
+    "pop": [
+      "Int32",
+      "Int64"
+    ],
+    "push": [
+      "Int64"
+    ],
+    "prefix": 254,
+    "feature": "threads",
+    "group": "atomics",
+    "order": 498
+  },
+  {
+    "value": 67,
+    "name": "i32_atomic_rmw8_xchg_u",
+    "mnemonic": "i32.atomic.rmw8.xchg_u",
+    "friendlyName": "atomic_rmw8_xchg_u_i32",
+    "immediate": "MemoryImmediate",
+    "controlFlow": null,
+    "pop": [
+      "Int32",
+      "Int32"
+    ],
+    "push": [
+      "Int32"
+    ],
+    "prefix": 254,
+    "feature": "threads",
+    "group": "atomics",
+    "order": 499
+  },
+  {
+    "value": 68,
+    "name": "i32_atomic_rmw16_xchg_u",
+    "mnemonic": "i32.atomic.rmw16.xchg_u",
+    "friendlyName": "atomic_rmw16_xchg_u_i32",
+    "immediate": "MemoryImmediate",
+    "controlFlow": null,
+    "pop": [
+      "Int32",
+      "Int32"
+    ],
+    "push": [
+      "Int32"
+    ],
+    "prefix": 254,
+    "feature": "threads",
+    "group": "atomics",
+    "order": 500
+  },
+  {
+    "value": 69,
+    "name": "i64_atomic_rmw8_xchg_u",
+    "mnemonic": "i64.atomic.rmw8.xchg_u",
+    "friendlyName": "atomic_rmw8_xchg_u_i64",
+    "immediate": "MemoryImmediate",
+    "controlFlow": null,
+    "pop": [
+      "Int32",
+      "Int64"
+    ],
+    "push": [
+      "Int64"
+    ],
+    "prefix": 254,
+    "feature": "threads",
+    "group": "atomics",
+    "order": 501
+  },
+  {
+    "value": 70,
+    "name": "i64_atomic_rmw16_xchg_u",
+    "mnemonic": "i64.atomic.rmw16.xchg_u",
+    "friendlyName": "atomic_rmw16_xchg_u_i64",
+    "immediate": "MemoryImmediate",
+    "controlFlow": null,
+    "pop": [
+      "Int32",
+      "Int64"
+    ],
+    "push": [
+      "Int64"
+    ],
+    "prefix": 254,
+    "feature": "threads",
+    "group": "atomics",
+    "order": 502
+  },
+  {
+    "value": 71,
+    "name": "i64_atomic_rmw32_xchg_u",
+    "mnemonic": "i64.atomic.rmw32.xchg_u",
+    "friendlyName": "atomic_rmw32_xchg_u_i64",
+    "immediate": "MemoryImmediate",
+    "controlFlow": null,
+    "pop": [
+      "Int32",
+      "Int64"
+    ],
+    "push": [
+      "Int64"
+    ],
+    "prefix": 254,
+    "feature": "threads",
+    "group": "atomics",
+    "order": 503
+  },
+  {
+    "value": 72,
+    "name": "i32_atomic_rmw_cmpxchg",
+    "mnemonic": "i32.atomic.rmw.cmpxchg",
+    "friendlyName": "atomic_rmw_cmpxchg_i32",
+    "immediate": "MemoryImmediate",
+    "controlFlow": null,
+    "pop": [
+      "Int32",
+      "Int32",
+      "Int32"
+    ],
+    "push": [
+      "Int32"
+    ],
+    "prefix": 254,
+    "feature": "threads",
+    "group": "atomics",
+    "order": 504
+  },
+  {
+    "value": 73,
+    "name": "i64_atomic_rmw_cmpxchg",
+    "mnemonic": "i64.atomic.rmw.cmpxchg",
+    "friendlyName": "atomic_rmw_cmpxchg_i64",
+    "immediate": "MemoryImmediate",
+    "controlFlow": null,
+    "pop": [
+      "Int32",
+      "Int64",
+      "Int64"
+    ],
+    "push": [
+      "Int64"
+    ],
+    "prefix": 254,
+    "feature": "threads",
+    "group": "atomics",
+    "order": 505
+  },
+  {
+    "value": 74,
+    "name": "i32_atomic_rmw8_cmpxchg_u",
+    "mnemonic": "i32.atomic.rmw8.cmpxchg_u",
+    "friendlyName": "atomic_rmw8_cmpxchg_u_i32",
+    "immediate": "MemoryImmediate",
+    "controlFlow": null,
+    "pop": [
+      "Int32",
+      "Int32",
+      "Int32"
+    ],
+    "push": [
+      "Int32"
+    ],
+    "prefix": 254,
+    "feature": "threads",
+    "group": "atomics",
+    "order": 506
+  },
+  {
+    "value": 75,
+    "name": "i32_atomic_rmw16_cmpxchg_u",
+    "mnemonic": "i32.atomic.rmw16.cmpxchg_u",
+    "friendlyName": "atomic_rmw16_cmpxchg_u_i32",
+    "immediate": "MemoryImmediate",
+    "controlFlow": null,
+    "pop": [
+      "Int32",
+      "Int32",
+      "Int32"
+    ],
+    "push": [
+      "Int32"
+    ],
+    "prefix": 254,
+    "feature": "threads",
+    "group": "atomics",
+    "order": 507
+  },
+  {
+    "value": 76,
+    "name": "i64_atomic_rmw8_cmpxchg_u",
+    "mnemonic": "i64.atomic.rmw8.cmpxchg_u",
+    "friendlyName": "atomic_rmw8_cmpxchg_u_i64",
+    "immediate": "MemoryImmediate",
+    "controlFlow": null,
+    "pop": [
+      "Int32",
+      "Int64",
+      "Int64"
+    ],
+    "push": [
+      "Int64"
+    ],
+    "prefix": 254,
+    "feature": "threads",
+    "group": "atomics",
+    "order": 508
+  },
+  {
+    "value": 77,
+    "name": "i64_atomic_rmw16_cmpxchg_u",
+    "mnemonic": "i64.atomic.rmw16.cmpxchg_u",
+    "friendlyName": "atomic_rmw16_cmpxchg_u_i64",
+    "immediate": "MemoryImmediate",
+    "controlFlow": null,
+    "pop": [
+      "Int32",
+      "Int64",
+      "Int64"
+    ],
+    "push": [
+      "Int64"
+    ],
+    "prefix": 254,
+    "feature": "threads",
+    "group": "atomics",
+    "order": 509
+  },
+  {
+    "value": 78,
+    "name": "i64_atomic_rmw32_cmpxchg_u",
+    "mnemonic": "i64.atomic.rmw32.cmpxchg_u",
+    "friendlyName": "atomic_rmw32_cmpxchg_u_i64",
+    "immediate": "MemoryImmediate",
+    "controlFlow": null,
+    "pop": [
+      "Int32",
+      "Int64",
+      "Int64"
+    ],
+    "push": [
+      "Int64"
+    ],
+    "prefix": 254,
+    "feature": "threads",
+    "group": "atomics",
+    "order": 510
+  }
+]

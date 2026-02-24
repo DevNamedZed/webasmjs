@@ -1,0 +1,3103 @@
+[
+  {
+    "value": 0,
+    "name": "unreachable",
+    "mnemonic": "unreachable",
+    "friendlyName": "unreachable",
+    "immediate": null,
+    "controlFlow": null,
+    "pop": null,
+    "push": null,
+    "prefix": null,
+    "feature": null,
+    "group": "control-flow",
+    "order": 0
+  },
+  {
+    "value": 1,
+    "name": "nop",
+    "mnemonic": "nop",
+    "friendlyName": "nop",
+    "immediate": null,
+    "controlFlow": null,
+    "pop": null,
+    "push": null,
+    "prefix": null,
+    "feature": null,
+    "group": "control-flow",
+    "order": 1
+  },
+  {
+    "value": 2,
+    "name": "block",
+    "mnemonic": "block",
+    "friendlyName": "block",
+    "immediate": "BlockSignature",
+    "controlFlow": "Push",
+    "pop": null,
+    "push": null,
+    "prefix": null,
+    "feature": null,
+    "group": "control-flow",
+    "order": 2
+  },
+  {
+    "value": 3,
+    "name": "loop",
+    "mnemonic": "loop",
+    "friendlyName": "loop",
+    "immediate": "BlockSignature",
+    "controlFlow": "Push",
+    "pop": null,
+    "push": null,
+    "prefix": null,
+    "feature": null,
+    "group": "control-flow",
+    "order": 3
+  },
+  {
+    "value": 4,
+    "name": "if",
+    "mnemonic": "if",
+    "friendlyName": "if",
+    "immediate": "BlockSignature",
+    "controlFlow": "Push",
+    "pop": [
+      "Int32"
+    ],
+    "push": null,
+    "prefix": null,
+    "feature": null,
+    "group": "control-flow",
+    "order": 4
+  },
+  {
+    "value": 5,
+    "name": "else",
+    "mnemonic": "else",
+    "friendlyName": "else",
+    "immediate": null,
+    "controlFlow": null,
+    "pop": null,
+    "push": null,
+    "prefix": null,
+    "feature": null,
+    "group": "control-flow",
+    "order": 5
+  },
+  {
+    "value": 11,
+    "name": "end",
+    "mnemonic": "end",
+    "friendlyName": "end",
+    "immediate": null,
+    "controlFlow": "Pop",
+    "pop": null,
+    "push": null,
+    "prefix": null,
+    "feature": null,
+    "group": "control-flow",
+    "order": 10
+  },
+  {
+    "value": 12,
+    "name": "br",
+    "mnemonic": "br",
+    "friendlyName": "br",
+    "immediate": "RelativeDepth",
+    "controlFlow": null,
+    "pop": null,
+    "push": null,
+    "prefix": null,
+    "feature": null,
+    "group": "control-flow",
+    "order": 11
+  },
+  {
+    "value": 13,
+    "name": "br_if",
+    "mnemonic": "br_if",
+    "friendlyName": "br_if",
+    "immediate": "RelativeDepth",
+    "controlFlow": null,
+    "pop": [
+      "Int32"
+    ],
+    "push": null,
+    "prefix": null,
+    "feature": null,
+    "group": "control-flow",
+    "order": 12
+  },
+  {
+    "value": 14,
+    "name": "br_table",
+    "mnemonic": "br_table",
+    "friendlyName": "br_table",
+    "immediate": "BranchTable",
+    "controlFlow": null,
+    "pop": [
+      "Int32"
+    ],
+    "push": null,
+    "prefix": null,
+    "feature": null,
+    "group": "control-flow",
+    "order": 13
+  },
+  {
+    "value": 15,
+    "name": "return",
+    "mnemonic": "return",
+    "friendlyName": "return",
+    "immediate": null,
+    "controlFlow": null,
+    "pop": null,
+    "push": null,
+    "prefix": null,
+    "feature": null,
+    "group": "control-flow",
+    "order": 14
+  },
+  {
+    "value": 16,
+    "name": "call",
+    "mnemonic": "call",
+    "friendlyName": "call",
+    "immediate": "Function",
+    "controlFlow": null,
+    "pop": null,
+    "push": null,
+    "prefix": null,
+    "feature": null,
+    "group": "call",
+    "order": 15
+  },
+  {
+    "value": 17,
+    "name": "call_indirect",
+    "mnemonic": "call_indirect",
+    "friendlyName": "call_indirect",
+    "immediate": "IndirectFunction",
+    "controlFlow": null,
+    "pop": [
+      "Int32"
+    ],
+    "push": null,
+    "prefix": null,
+    "feature": null,
+    "group": "call",
+    "order": 16
+  },
+  {
+    "value": 26,
+    "name": "drop",
+    "mnemonic": "drop",
+    "friendlyName": "drop",
+    "immediate": null,
+    "controlFlow": null,
+    "pop": [
+      "Any"
+    ],
+    "push": null,
+    "prefix": null,
+    "feature": null,
+    "group": "parametric",
+    "order": 21
+  },
+  {
+    "value": 27,
+    "name": "select",
+    "mnemonic": "select",
+    "friendlyName": "select",
+    "immediate": null,
+    "controlFlow": null,
+    "pop": [
+      "Any",
+      "Any",
+      "Int32"
+    ],
+    "push": [
+      "Any"
+    ],
+    "prefix": null,
+    "feature": null,
+    "group": "parametric",
+    "order": 22
+  },
+  {
+    "value": 32,
+    "name": "get_local",
+    "mnemonic": "local.get",
+    "friendlyName": "get_local",
+    "immediate": "Local",
+    "controlFlow": null,
+    "pop": null,
+    "push": [
+      "Any"
+    ],
+    "prefix": null,
+    "feature": null,
+    "group": "variable",
+    "order": 23
+  },
+  {
+    "value": 33,
+    "name": "set_local",
+    "mnemonic": "local.set",
+    "friendlyName": "set_local",
+    "immediate": "Local",
+    "controlFlow": null,
+    "pop": [
+      "Any"
+    ],
+    "push": null,
+    "prefix": null,
+    "feature": null,
+    "group": "variable",
+    "order": 24
+  },
+  {
+    "value": 34,
+    "name": "tee_local",
+    "mnemonic": "local.tee",
+    "friendlyName": "tee_local",
+    "immediate": "Local",
+    "controlFlow": null,
+    "pop": [
+      "Any"
+    ],
+    "push": [
+      "Any"
+    ],
+    "prefix": null,
+    "feature": null,
+    "group": "variable",
+    "order": 25
+  },
+  {
+    "value": 35,
+    "name": "get_global",
+    "mnemonic": "global.get",
+    "friendlyName": "get_global",
+    "immediate": "Global",
+    "controlFlow": null,
+    "pop": null,
+    "push": [
+      "Any"
+    ],
+    "prefix": null,
+    "feature": null,
+    "group": "variable",
+    "order": 26
+  },
+  {
+    "value": 36,
+    "name": "set_global",
+    "mnemonic": "global.set",
+    "friendlyName": "set_global",
+    "immediate": "Global",
+    "controlFlow": null,
+    "pop": [
+      "Any"
+    ],
+    "push": null,
+    "prefix": null,
+    "feature": null,
+    "group": "variable",
+    "order": 27
+  },
+  {
+    "value": 40,
+    "name": "i32_load",
+    "mnemonic": "i32.load",
+    "friendlyName": "load_i32",
+    "immediate": "MemoryImmediate",
+    "controlFlow": null,
+    "pop": [
+      "Int32"
+    ],
+    "push": [
+      "Int32"
+    ],
+    "prefix": null,
+    "feature": null,
+    "group": "memory",
+    "order": 28
+  },
+  {
+    "value": 41,
+    "name": "i64_load",
+    "mnemonic": "i64.load",
+    "friendlyName": "load_i64",
+    "immediate": "MemoryImmediate",
+    "controlFlow": null,
+    "pop": [
+      "Int32"
+    ],
+    "push": [
+      "Int64"
+    ],
+    "prefix": null,
+    "feature": null,
+    "group": "memory",
+    "order": 29
+  },
+  {
+    "value": 42,
+    "name": "f32_load",
+    "mnemonic": "f32.load",
+    "friendlyName": "load_f32",
+    "immediate": "MemoryImmediate",
+    "controlFlow": null,
+    "pop": [
+      "Int32"
+    ],
+    "push": [
+      "Float32"
+    ],
+    "prefix": null,
+    "feature": null,
+    "group": "memory",
+    "order": 30
+  },
+  {
+    "value": 43,
+    "name": "f64_load",
+    "mnemonic": "f64.load",
+    "friendlyName": "load_f64",
+    "immediate": "MemoryImmediate",
+    "controlFlow": null,
+    "pop": [
+      "Int32"
+    ],
+    "push": [
+      "Float64"
+    ],
+    "prefix": null,
+    "feature": null,
+    "group": "memory",
+    "order": 31
+  },
+  {
+    "value": 44,
+    "name": "i32_load8_s",
+    "mnemonic": "i32.load8_s",
+    "friendlyName": "load8_i32",
+    "immediate": "MemoryImmediate",
+    "controlFlow": null,
+    "pop": [
+      "Int32"
+    ],
+    "push": [
+      "Int32"
+    ],
+    "prefix": null,
+    "feature": null,
+    "group": "memory",
+    "order": 32
+  },
+  {
+    "value": 45,
+    "name": "i32_load8_u",
+    "mnemonic": "i32.load8_u",
+    "friendlyName": "load8_i32_u",
+    "immediate": "MemoryImmediate",
+    "controlFlow": null,
+    "pop": [
+      "Int32"
+    ],
+    "push": [
+      "Int32"
+    ],
+    "prefix": null,
+    "feature": null,
+    "group": "memory",
+    "order": 33
+  },
+  {
+    "value": 46,
+    "name": "i32_load16_s",
+    "mnemonic": "i32.load16_s",
+    "friendlyName": "load16_i32",
+    "immediate": "MemoryImmediate",
+    "controlFlow": null,
+    "pop": [
+      "Int32"
+    ],
+    "push": [
+      "Int32"
+    ],
+    "prefix": null,
+    "feature": null,
+    "group": "memory",
+    "order": 34
+  },
+  {
+    "value": 47,
+    "name": "i32_load16_u",
+    "mnemonic": "i32.load16_u",
+    "friendlyName": "load16_i32_u",
+    "immediate": "MemoryImmediate",
+    "controlFlow": null,
+    "pop": [
+      "Int32"
+    ],
+    "push": [
+      "Int32"
+    ],
+    "prefix": null,
+    "feature": null,
+    "group": "memory",
+    "order": 35
+  },
+  {
+    "value": 48,
+    "name": "i64_load8_s",
+    "mnemonic": "i64.load8_s",
+    "friendlyName": "load8_i64",
+    "immediate": "MemoryImmediate",
+    "controlFlow": null,
+    "pop": [
+      "Int32"
+    ],
+    "push": [
+      "Int64"
+    ],
+    "prefix": null,
+    "feature": null,
+    "group": "memory",
+    "order": 36
+  },
+  {
+    "value": 49,
+    "name": "i64_load8_u",
+    "mnemonic": "i64.load8_u",
+    "friendlyName": "load8_i64_u",
+    "immediate": "MemoryImmediate",
+    "controlFlow": null,
+    "pop": [
+      "Int32"
+    ],
+    "push": [
+      "Int64"
+    ],
+    "prefix": null,
+    "feature": null,
+    "group": "memory",
+    "order": 37
+  },
+  {
+    "value": 50,
+    "name": "i64_load16_s",
+    "mnemonic": "i64.load16_s",
+    "friendlyName": "load16_i64",
+    "immediate": "MemoryImmediate",
+    "controlFlow": null,
+    "pop": [
+      "Int32"
+    ],
+    "push": [
+      "Int64"
+    ],
+    "prefix": null,
+    "feature": null,
+    "group": "memory",
+    "order": 38
+  },
+  {
+    "value": 51,
+    "name": "i64_load16_u",
+    "mnemonic": "i64.load16_u",
+    "friendlyName": "load16_i64_u",
+    "immediate": "MemoryImmediate",
+    "controlFlow": null,
+    "pop": [
+      "Int32"
+    ],
+    "push": [
+      "Int64"
+    ],
+    "prefix": null,
+    "feature": null,
+    "group": "memory",
+    "order": 39
+  },
+  {
+    "value": 52,
+    "name": "i64_load32_s",
+    "mnemonic": "i64.load32_s",
+    "friendlyName": "load32_i64",
+    "immediate": "MemoryImmediate",
+    "controlFlow": null,
+    "pop": [
+      "Int32"
+    ],
+    "push": [
+      "Int64"
+    ],
+    "prefix": null,
+    "feature": null,
+    "group": "memory",
+    "order": 40
+  },
+  {
+    "value": 53,
+    "name": "i64_load32_u",
+    "mnemonic": "i64.load32_u",
+    "friendlyName": "load32_i64_u",
+    "immediate": "MemoryImmediate",
+    "controlFlow": null,
+    "pop": [
+      "Int32"
+    ],
+    "push": [
+      "Int64"
+    ],
+    "prefix": null,
+    "feature": null,
+    "group": "memory",
+    "order": 41
+  },
+  {
+    "value": 54,
+    "name": "i32_store",
+    "mnemonic": "i32.store",
+    "friendlyName": "store_i32",
+    "immediate": "MemoryImmediate",
+    "controlFlow": null,
+    "pop": [
+      "Int32",
+      "Int32"
+    ],
+    "push": null,
+    "prefix": null,
+    "feature": null,
+    "group": "memory",
+    "order": 42
+  },
+  {
+    "value": 55,
+    "name": "i64_store",
+    "mnemonic": "i64.store",
+    "friendlyName": "store_i64",
+    "immediate": "MemoryImmediate",
+    "controlFlow": null,
+    "pop": [
+      "Int32",
+      "Int64"
+    ],
+    "push": null,
+    "prefix": null,
+    "feature": null,
+    "group": "memory",
+    "order": 43
+  },
+  {
+    "value": 56,
+    "name": "f32_store",
+    "mnemonic": "f32.store",
+    "friendlyName": "store_f32",
+    "immediate": "MemoryImmediate",
+    "controlFlow": null,
+    "pop": [
+      "Int32",
+      "Float32"
+    ],
+    "push": null,
+    "prefix": null,
+    "feature": null,
+    "group": "memory",
+    "order": 44
+  },
+  {
+    "value": 57,
+    "name": "f64_store",
+    "mnemonic": "f64.store",
+    "friendlyName": "store_f64",
+    "immediate": "MemoryImmediate",
+    "controlFlow": null,
+    "pop": [
+      "Int32",
+      "Float64"
+    ],
+    "push": null,
+    "prefix": null,
+    "feature": null,
+    "group": "memory",
+    "order": 45
+  },
+  {
+    "value": 58,
+    "name": "i32_store8",
+    "mnemonic": "i32.store8",
+    "friendlyName": "store8_i32",
+    "immediate": "MemoryImmediate",
+    "controlFlow": null,
+    "pop": [
+      "Int32",
+      "Int32"
+    ],
+    "push": null,
+    "prefix": null,
+    "feature": null,
+    "group": "memory",
+    "order": 46
+  },
+  {
+    "value": 59,
+    "name": "i32_store16",
+    "mnemonic": "i32.store16",
+    "friendlyName": "store16_i32",
+    "immediate": "MemoryImmediate",
+    "controlFlow": null,
+    "pop": [
+      "Int32",
+      "Int32"
+    ],
+    "push": null,
+    "prefix": null,
+    "feature": null,
+    "group": "memory",
+    "order": 47
+  },
+  {
+    "value": 60,
+    "name": "i64_store8",
+    "mnemonic": "i64.store8",
+    "friendlyName": "store8_i64",
+    "immediate": "MemoryImmediate",
+    "controlFlow": null,
+    "pop": [
+      "Int32",
+      "Int64"
+    ],
+    "push": null,
+    "prefix": null,
+    "feature": null,
+    "group": "memory",
+    "order": 48
+  },
+  {
+    "value": 61,
+    "name": "i64_store16",
+    "mnemonic": "i64.store16",
+    "friendlyName": "store16_i64",
+    "immediate": "MemoryImmediate",
+    "controlFlow": null,
+    "pop": [
+      "Int32",
+      "Int64"
+    ],
+    "push": null,
+    "prefix": null,
+    "feature": null,
+    "group": "memory",
+    "order": 49
+  },
+  {
+    "value": 62,
+    "name": "i64_store32",
+    "mnemonic": "i64.store32",
+    "friendlyName": "store32_i64",
+    "immediate": "MemoryImmediate",
+    "controlFlow": null,
+    "pop": [
+      "Int32",
+      "Int64"
+    ],
+    "push": null,
+    "prefix": null,
+    "feature": null,
+    "group": "memory",
+    "order": 50
+  },
+  {
+    "value": 63,
+    "name": "mem_size",
+    "mnemonic": "memory.size",
+    "friendlyName": "mem_size",
+    "immediate": "VarUInt1",
+    "controlFlow": null,
+    "pop": null,
+    "push": [
+      "Int32"
+    ],
+    "prefix": null,
+    "feature": null,
+    "group": "memory",
+    "order": 51
+  },
+  {
+    "value": 64,
+    "name": "mem_grow",
+    "mnemonic": "memory.grow",
+    "friendlyName": "mem_grow",
+    "immediate": "VarUInt1",
+    "controlFlow": null,
+    "pop": [
+      "Int32"
+    ],
+    "push": [
+      "Int32"
+    ],
+    "prefix": null,
+    "feature": null,
+    "group": "memory",
+    "order": 52
+  },
+  {
+    "value": 65,
+    "name": "i32_const",
+    "mnemonic": "i32.const",
+    "friendlyName": "const_i32",
+    "immediate": "VarInt32",
+    "controlFlow": null,
+    "pop": null,
+    "push": [
+      "Int32"
+    ],
+    "prefix": null,
+    "feature": null,
+    "group": "constant",
+    "order": 53
+  },
+  {
+    "value": 66,
+    "name": "i64_const",
+    "mnemonic": "i64.const",
+    "friendlyName": "const_i64",
+    "immediate": "VarInt64",
+    "controlFlow": null,
+    "pop": null,
+    "push": [
+      "Int64"
+    ],
+    "prefix": null,
+    "feature": null,
+    "group": "constant",
+    "order": 54
+  },
+  {
+    "value": 67,
+    "name": "f32_const",
+    "mnemonic": "f32.const",
+    "friendlyName": "const_f32",
+    "immediate": "Float32",
+    "controlFlow": null,
+    "pop": null,
+    "push": [
+      "Float32"
+    ],
+    "prefix": null,
+    "feature": null,
+    "group": "constant",
+    "order": 55
+  },
+  {
+    "value": 68,
+    "name": "f64_const",
+    "mnemonic": "f64.const",
+    "friendlyName": "const_f64",
+    "immediate": "Float64",
+    "controlFlow": null,
+    "pop": null,
+    "push": [
+      "Float64"
+    ],
+    "prefix": null,
+    "feature": null,
+    "group": "constant",
+    "order": 56
+  },
+  {
+    "value": 69,
+    "name": "i32_eqz",
+    "mnemonic": "i32.eqz",
+    "friendlyName": "eqz_i32",
+    "immediate": null,
+    "controlFlow": null,
+    "pop": [
+      "Int32"
+    ],
+    "push": [
+      "Int32"
+    ],
+    "prefix": null,
+    "feature": null,
+    "group": "i32-comparison",
+    "order": 57
+  },
+  {
+    "value": 70,
+    "name": "i32_eq",
+    "mnemonic": "i32.eq",
+    "friendlyName": "eq_i32",
+    "immediate": null,
+    "controlFlow": null,
+    "pop": [
+      "Int32",
+      "Int32"
+    ],
+    "push": [
+      "Int32"
+    ],
+    "prefix": null,
+    "feature": null,
+    "group": "i32-comparison",
+    "order": 58
+  },
+  {
+    "value": 71,
+    "name": "i32_ne",
+    "mnemonic": "i32.ne",
+    "friendlyName": "ne_i32",
+    "immediate": null,
+    "controlFlow": null,
+    "pop": [
+      "Int32",
+      "Int32"
+    ],
+    "push": [
+      "Int32"
+    ],
+    "prefix": null,
+    "feature": null,
+    "group": "i32-comparison",
+    "order": 59
+  },
+  {
+    "value": 72,
+    "name": "i32_lt_s",
+    "mnemonic": "i32.lt_s",
+    "friendlyName": "lt_i32",
+    "immediate": null,
+    "controlFlow": null,
+    "pop": [
+      "Int32",
+      "Int32"
+    ],
+    "push": [
+      "Int32"
+    ],
+    "prefix": null,
+    "feature": null,
+    "group": "i32-comparison",
+    "order": 60
+  },
+  {
+    "value": 73,
+    "name": "i32_lt_u",
+    "mnemonic": "i32.lt_u",
+    "friendlyName": "lt_i32_u",
+    "immediate": null,
+    "controlFlow": null,
+    "pop": [
+      "Int32",
+      "Int32"
+    ],
+    "push": [
+      "Int32"
+    ],
+    "prefix": null,
+    "feature": null,
+    "group": "i32-comparison",
+    "order": 61
+  },
+  {
+    "value": 74,
+    "name": "i32_gt_s",
+    "mnemonic": "i32.gt_s",
+    "friendlyName": "gt_i32",
+    "immediate": null,
+    "controlFlow": null,
+    "pop": [
+      "Int32",
+      "Int32"
+    ],
+    "push": [
+      "Int32"
+    ],
+    "prefix": null,
+    "feature": null,
+    "group": "i32-comparison",
+    "order": 62
+  },
+  {
+    "value": 75,
+    "name": "i32_gt_u",
+    "mnemonic": "i32.gt_u",
+    "friendlyName": "gt_i32_u",
+    "immediate": null,
+    "controlFlow": null,
+    "pop": [
+      "Int32",
+      "Int32"
+    ],
+    "push": [
+      "Int32"
+    ],
+    "prefix": null,
+    "feature": null,
+    "group": "i32-comparison",
+    "order": 63
+  },
+  {
+    "value": 76,
+    "name": "i32_le_s",
+    "mnemonic": "i32.le_s",
+    "friendlyName": "le_i32",
+    "immediate": null,
+    "controlFlow": null,
+    "pop": [
+      "Int32",
+      "Int32"
+    ],
+    "push": [
+      "Int32"
+    ],
+    "prefix": null,
+    "feature": null,
+    "group": "i32-comparison",
+    "order": 64
+  },
+  {
+    "value": 77,
+    "name": "i32_le_u",
+    "mnemonic": "i32.le_u",
+    "friendlyName": "le_i32_u",
+    "immediate": null,
+    "controlFlow": null,
+    "pop": [
+      "Int32",
+      "Int32"
+    ],
+    "push": [
+      "Int32"
+    ],
+    "prefix": null,
+    "feature": null,
+    "group": "i32-comparison",
+    "order": 65
+  },
+  {
+    "value": 78,
+    "name": "i32_ge_s",
+    "mnemonic": "i32.ge_s",
+    "friendlyName": "ge_i32",
+    "immediate": null,
+    "controlFlow": null,
+    "pop": [
+      "Int32",
+      "Int32"
+    ],
+    "push": [
+      "Int32"
+    ],
+    "prefix": null,
+    "feature": null,
+    "group": "i32-comparison",
+    "order": 66
+  },
+  {
+    "value": 79,
+    "name": "i32_ge_u",
+    "mnemonic": "i32.ge_u",
+    "friendlyName": "ge_i32_u",
+    "immediate": null,
+    "controlFlow": null,
+    "pop": [
+      "Int32",
+      "Int32"
+    ],
+    "push": [
+      "Int32"
+    ],
+    "prefix": null,
+    "feature": null,
+    "group": "i32-comparison",
+    "order": 67
+  },
+  {
+    "value": 80,
+    "name": "i64_eqz",
+    "mnemonic": "i64.eqz",
+    "friendlyName": "eqz_i64",
+    "immediate": null,
+    "controlFlow": null,
+    "pop": [
+      "Int64"
+    ],
+    "push": [
+      "Int32"
+    ],
+    "prefix": null,
+    "feature": null,
+    "group": "i64-comparison",
+    "order": 68
+  },
+  {
+    "value": 81,
+    "name": "i64_eq",
+    "mnemonic": "i64.eq",
+    "friendlyName": "eq_i64",
+    "immediate": null,
+    "controlFlow": null,
+    "pop": [
+      "Int64",
+      "Int64"
+    ],
+    "push": [
+      "Int32"
+    ],
+    "prefix": null,
+    "feature": null,
+    "group": "i64-comparison",
+    "order": 69
+  },
+  {
+    "value": 82,
+    "name": "i64_ne",
+    "mnemonic": "i64.ne",
+    "friendlyName": "ne_i64",
+    "immediate": null,
+    "controlFlow": null,
+    "pop": [
+      "Int64",
+      "Int64"
+    ],
+    "push": [
+      "Int32"
+    ],
+    "prefix": null,
+    "feature": null,
+    "group": "i64-comparison",
+    "order": 70
+  },
+  {
+    "value": 83,
+    "name": "i64_lt_s",
+    "mnemonic": "i64.lt_s",
+    "friendlyName": "lt_i64",
+    "immediate": null,
+    "controlFlow": null,
+    "pop": [
+      "Int64",
+      "Int64"
+    ],
+    "push": [
+      "Int32"
+    ],
+    "prefix": null,
+    "feature": null,
+    "group": "i64-comparison",
+    "order": 71
+  },
+  {
+    "value": 84,
+    "name": "i64_lt_u",
+    "mnemonic": "i64.lt_u",
+    "friendlyName": "lt_i64_u",
+    "immediate": null,
+    "controlFlow": null,
+    "pop": [
+      "Int64",
+      "Int64"
+    ],
+    "push": [
+      "Int32"
+    ],
+    "prefix": null,
+    "feature": null,
+    "group": "i64-comparison",
+    "order": 72
+  },
+  {
+    "value": 85,
+    "name": "i64_gt_s",
+    "mnemonic": "i64.gt_s",
+    "friendlyName": "gt_i64",
+    "immediate": null,
+    "controlFlow": null,
+    "pop": [
+      "Int64",
+      "Int64"
+    ],
+    "push": [
+      "Int32"
+    ],
+    "prefix": null,
+    "feature": null,
+    "group": "i64-comparison",
+    "order": 73
+  },
+  {
+    "value": 86,
+    "name": "i64_gt_u",
+    "mnemonic": "i64.gt_u",
+    "friendlyName": "gt_i64_u",
+    "immediate": null,
+    "controlFlow": null,
+    "pop": [
+      "Int64",
+      "Int64"
+    ],
+    "push": [
+      "Int32"
+    ],
+    "prefix": null,
+    "feature": null,
+    "group": "i64-comparison",
+    "order": 74
+  },
+  {
+    "value": 87,
+    "name": "i64_le_s",
+    "mnemonic": "i64.le_s",
+    "friendlyName": "le_i64",
+    "immediate": null,
+    "controlFlow": null,
+    "pop": [
+      "Int64",
+      "Int64"
+    ],
+    "push": [
+      "Int32"
+    ],
+    "prefix": null,
+    "feature": null,
+    "group": "i64-comparison",
+    "order": 75
+  },
+  {
+    "value": 88,
+    "name": "i64_le_u",
+    "mnemonic": "i64.le_u",
+    "friendlyName": "le_i64_u",
+    "immediate": null,
+    "controlFlow": null,
+    "pop": [
+      "Int64",
+      "Int64"
+    ],
+    "push": [
+      "Int32"
+    ],
+    "prefix": null,
+    "feature": null,
+    "group": "i64-comparison",
+    "order": 76
+  },
+  {
+    "value": 89,
+    "name": "i64_ge_s",
+    "mnemonic": "i64.ge_s",
+    "friendlyName": "ge_i64",
+    "immediate": null,
+    "controlFlow": null,
+    "pop": [
+      "Int64",
+      "Int64"
+    ],
+    "push": [
+      "Int32"
+    ],
+    "prefix": null,
+    "feature": null,
+    "group": "i64-comparison",
+    "order": 77
+  },
+  {
+    "value": 90,
+    "name": "i64_ge_u",
+    "mnemonic": "i64.ge_u",
+    "friendlyName": "ge_i64_u",
+    "immediate": null,
+    "controlFlow": null,
+    "pop": [
+      "Int64",
+      "Int64"
+    ],
+    "push": [
+      "Int32"
+    ],
+    "prefix": null,
+    "feature": null,
+    "group": "i64-comparison",
+    "order": 78
+  },
+  {
+    "value": 91,
+    "name": "f32_eq",
+    "mnemonic": "f32.eq",
+    "friendlyName": "eq_f32",
+    "immediate": null,
+    "controlFlow": null,
+    "pop": [
+      "Float32",
+      "Float32"
+    ],
+    "push": [
+      "Int32"
+    ],
+    "prefix": null,
+    "feature": null,
+    "group": "f32-comparison",
+    "order": 79
+  },
+  {
+    "value": 92,
+    "name": "f32_ne",
+    "mnemonic": "f32.ne",
+    "friendlyName": "ne_f32",
+    "immediate": null,
+    "controlFlow": null,
+    "pop": [
+      "Float32",
+      "Float32"
+    ],
+    "push": [
+      "Int32"
+    ],
+    "prefix": null,
+    "feature": null,
+    "group": "f32-comparison",
+    "order": 80
+  },
+  {
+    "value": 93,
+    "name": "f32_lt",
+    "mnemonic": "f32.lt",
+    "friendlyName": "lt_f32",
+    "immediate": null,
+    "controlFlow": null,
+    "pop": [
+      "Float32",
+      "Float32"
+    ],
+    "push": [
+      "Int32"
+    ],
+    "prefix": null,
+    "feature": null,
+    "group": "f32-comparison",
+    "order": 81
+  },
+  {
+    "value": 94,
+    "name": "f32_gt",
+    "mnemonic": "f32.gt",
+    "friendlyName": "gt_f32",
+    "immediate": null,
+    "controlFlow": null,
+    "pop": [
+      "Float32",
+      "Float32"
+    ],
+    "push": [
+      "Int32"
+    ],
+    "prefix": null,
+    "feature": null,
+    "group": "f32-comparison",
+    "order": 82
+  },
+  {
+    "value": 95,
+    "name": "f32_le",
+    "mnemonic": "f32.le",
+    "friendlyName": "le_f32",
+    "immediate": null,
+    "controlFlow": null,
+    "pop": [
+      "Float32",
+      "Float32"
+    ],
+    "push": [
+      "Int32"
+    ],
+    "prefix": null,
+    "feature": null,
+    "group": "f32-comparison",
+    "order": 83
+  },
+  {
+    "value": 96,
+    "name": "f32_ge",
+    "mnemonic": "f32.ge",
+    "friendlyName": "ge_f32",
+    "immediate": null,
+    "controlFlow": null,
+    "pop": [
+      "Float32",
+      "Float32"
+    ],
+    "push": [
+      "Int32"
+    ],
+    "prefix": null,
+    "feature": null,
+    "group": "f32-comparison",
+    "order": 84
+  },
+  {
+    "value": 97,
+    "name": "f64_eq",
+    "mnemonic": "f64.eq",
+    "friendlyName": "eq_f64",
+    "immediate": null,
+    "controlFlow": null,
+    "pop": [
+      "Float64",
+      "Float64"
+    ],
+    "push": [
+      "Int32"
+    ],
+    "prefix": null,
+    "feature": null,
+    "group": "f64-comparison",
+    "order": 85
+  },
+  {
+    "value": 98,
+    "name": "f64_ne",
+    "mnemonic": "f64.ne",
+    "friendlyName": "ne_f64",
+    "immediate": null,
+    "controlFlow": null,
+    "pop": [
+      "Float64",
+      "Float64"
+    ],
+    "push": [
+      "Int32"
+    ],
+    "prefix": null,
+    "feature": null,
+    "group": "f64-comparison",
+    "order": 86
+  },
+  {
+    "value": 99,
+    "name": "f64_lt",
+    "mnemonic": "f64.lt",
+    "friendlyName": "lt_f64",
+    "immediate": null,
+    "controlFlow": null,
+    "pop": [
+      "Float64",
+      "Float64"
+    ],
+    "push": [
+      "Int32"
+    ],
+    "prefix": null,
+    "feature": null,
+    "group": "f64-comparison",
+    "order": 87
+  },
+  {
+    "value": 100,
+    "name": "f64_gt",
+    "mnemonic": "f64.gt",
+    "friendlyName": "gt_f64",
+    "immediate": null,
+    "controlFlow": null,
+    "pop": [
+      "Float64",
+      "Float64"
+    ],
+    "push": [
+      "Int32"
+    ],
+    "prefix": null,
+    "feature": null,
+    "group": "f64-comparison",
+    "order": 88
+  },
+  {
+    "value": 101,
+    "name": "f64_le",
+    "mnemonic": "f64.le",
+    "friendlyName": "le_f64",
+    "immediate": null,
+    "controlFlow": null,
+    "pop": [
+      "Float64",
+      "Float64"
+    ],
+    "push": [
+      "Int32"
+    ],
+    "prefix": null,
+    "feature": null,
+    "group": "f64-comparison",
+    "order": 89
+  },
+  {
+    "value": 102,
+    "name": "f64_ge",
+    "mnemonic": "f64.ge",
+    "friendlyName": "ge_f64",
+    "immediate": null,
+    "controlFlow": null,
+    "pop": [
+      "Float64",
+      "Float64"
+    ],
+    "push": [
+      "Int32"
+    ],
+    "prefix": null,
+    "feature": null,
+    "group": "f64-comparison",
+    "order": 90
+  },
+  {
+    "value": 103,
+    "name": "i32_clz",
+    "mnemonic": "i32.clz",
+    "friendlyName": "clz_i32",
+    "immediate": null,
+    "controlFlow": null,
+    "pop": [
+      "Int32"
+    ],
+    "push": [
+      "Int32"
+    ],
+    "prefix": null,
+    "feature": null,
+    "group": "i32-bitwise",
+    "order": 91
+  },
+  {
+    "value": 104,
+    "name": "i32_ctz",
+    "mnemonic": "i32.ctz",
+    "friendlyName": "ctz_i32",
+    "immediate": null,
+    "controlFlow": null,
+    "pop": [
+      "Int32"
+    ],
+    "push": [
+      "Int32"
+    ],
+    "prefix": null,
+    "feature": null,
+    "group": "i32-bitwise",
+    "order": 92
+  },
+  {
+    "value": 105,
+    "name": "i32_popcnt",
+    "mnemonic": "i32.popcnt",
+    "friendlyName": "popcnt_i32",
+    "immediate": null,
+    "controlFlow": null,
+    "pop": [
+      "Int32"
+    ],
+    "push": [
+      "Int32"
+    ],
+    "prefix": null,
+    "feature": null,
+    "group": "i32-bitwise",
+    "order": 93
+  },
+  {
+    "value": 106,
+    "name": "i32_add",
+    "mnemonic": "i32.add",
+    "friendlyName": "add_i32",
+    "immediate": null,
+    "controlFlow": null,
+    "pop": [
+      "Int32",
+      "Int32"
+    ],
+    "push": [
+      "Int32"
+    ],
+    "prefix": null,
+    "feature": null,
+    "group": "i32-arithmetic",
+    "order": 94
+  },
+  {
+    "value": 107,
+    "name": "i32_sub",
+    "mnemonic": "i32.sub",
+    "friendlyName": "sub_i32",
+    "immediate": null,
+    "controlFlow": null,
+    "pop": [
+      "Int32",
+      "Int32"
+    ],
+    "push": [
+      "Int32"
+    ],
+    "prefix": null,
+    "feature": null,
+    "group": "i32-arithmetic",
+    "order": 95
+  },
+  {
+    "value": 108,
+    "name": "i32_mul",
+    "mnemonic": "i32.mul",
+    "friendlyName": "mul_i32",
+    "immediate": null,
+    "controlFlow": null,
+    "pop": [
+      "Int32",
+      "Int32"
+    ],
+    "push": [
+      "Int32"
+    ],
+    "prefix": null,
+    "feature": null,
+    "group": "i32-arithmetic",
+    "order": 96
+  },
+  {
+    "value": 109,
+    "name": "i32_div_s",
+    "mnemonic": "i32.div_s",
+    "friendlyName": "div_i32",
+    "immediate": null,
+    "controlFlow": null,
+    "pop": [
+      "Int32",
+      "Int32"
+    ],
+    "push": [
+      "Int32"
+    ],
+    "prefix": null,
+    "feature": null,
+    "group": "i32-arithmetic",
+    "order": 97
+  },
+  {
+    "value": 110,
+    "name": "i32_div_u",
+    "mnemonic": "i32.div_u",
+    "friendlyName": "div_i32_u",
+    "immediate": null,
+    "controlFlow": null,
+    "pop": [
+      "Int32",
+      "Int32"
+    ],
+    "push": [
+      "Int32"
+    ],
+    "prefix": null,
+    "feature": null,
+    "group": "i32-arithmetic",
+    "order": 98
+  },
+  {
+    "value": 111,
+    "name": "i32_rem_s",
+    "mnemonic": "i32.rem_s",
+    "friendlyName": "rem_i32",
+    "immediate": null,
+    "controlFlow": null,
+    "pop": [
+      "Int32",
+      "Int32"
+    ],
+    "push": [
+      "Int32"
+    ],
+    "prefix": null,
+    "feature": null,
+    "group": "i32-arithmetic",
+    "order": 99
+  },
+  {
+    "value": 112,
+    "name": "i32_rem_u",
+    "mnemonic": "i32.rem_u",
+    "friendlyName": "rem_i32_u",
+    "immediate": null,
+    "controlFlow": null,
+    "pop": [
+      "Int32",
+      "Int32"
+    ],
+    "push": [
+      "Int32"
+    ],
+    "prefix": null,
+    "feature": null,
+    "group": "i32-arithmetic",
+    "order": 100
+  },
+  {
+    "value": 113,
+    "name": "i32_and",
+    "mnemonic": "i32.and",
+    "friendlyName": "and_i32",
+    "immediate": null,
+    "controlFlow": null,
+    "pop": [
+      "Int32",
+      "Int32"
+    ],
+    "push": [
+      "Int32"
+    ],
+    "prefix": null,
+    "feature": null,
+    "group": "i32-bitwise",
+    "order": 101
+  },
+  {
+    "value": 114,
+    "name": "i32_or",
+    "mnemonic": "i32.or",
+    "friendlyName": "or_i32",
+    "immediate": null,
+    "controlFlow": null,
+    "pop": [
+      "Int32",
+      "Int32"
+    ],
+    "push": [
+      "Int32"
+    ],
+    "prefix": null,
+    "feature": null,
+    "group": "i32-bitwise",
+    "order": 102
+  },
+  {
+    "value": 115,
+    "name": "i32_xor",
+    "mnemonic": "i32.xor",
+    "friendlyName": "xor_i32",
+    "immediate": null,
+    "controlFlow": null,
+    "pop": [
+      "Int32",
+      "Int32"
+    ],
+    "push": [
+      "Int32"
+    ],
+    "prefix": null,
+    "feature": null,
+    "group": "i32-bitwise",
+    "order": 103
+  },
+  {
+    "value": 116,
+    "name": "i32_shl",
+    "mnemonic": "i32.shl",
+    "friendlyName": "shl_i32",
+    "immediate": null,
+    "controlFlow": null,
+    "pop": [
+      "Int32",
+      "Int32"
+    ],
+    "push": [
+      "Int32"
+    ],
+    "prefix": null,
+    "feature": null,
+    "group": "i32-bitwise",
+    "order": 104
+  },
+  {
+    "value": 117,
+    "name": "i32_shr_s",
+    "mnemonic": "i32.shr_s",
+    "friendlyName": "shr_i32",
+    "immediate": null,
+    "controlFlow": null,
+    "pop": [
+      "Int32",
+      "Int32"
+    ],
+    "push": [
+      "Int32"
+    ],
+    "prefix": null,
+    "feature": null,
+    "group": "i32-bitwise",
+    "order": 105
+  },
+  {
+    "value": 118,
+    "name": "i32_shr_u",
+    "mnemonic": "i32.shr_u",
+    "friendlyName": "shr_i32_u",
+    "immediate": null,
+    "controlFlow": null,
+    "pop": [
+      "Int32",
+      "Int32"
+    ],
+    "push": [
+      "Int32"
+    ],
+    "prefix": null,
+    "feature": null,
+    "group": "i32-bitwise",
+    "order": 106
+  },
+  {
+    "value": 119,
+    "name": "i32_rotl",
+    "mnemonic": "i32.rotl",
+    "friendlyName": "rotl_i32",
+    "immediate": null,
+    "controlFlow": null,
+    "pop": [
+      "Int32",
+      "Int32"
+    ],
+    "push": [
+      "Int32"
+    ],
+    "prefix": null,
+    "feature": null,
+    "group": "i32-bitwise",
+    "order": 107
+  },
+  {
+    "value": 120,
+    "name": "i32_rotr",
+    "mnemonic": "i32.rotr",
+    "friendlyName": "rotr_i32",
+    "immediate": null,
+    "controlFlow": null,
+    "pop": [
+      "Int32",
+      "Int32"
+    ],
+    "push": [
+      "Int32"
+    ],
+    "prefix": null,
+    "feature": null,
+    "group": "i32-bitwise",
+    "order": 108
+  },
+  {
+    "value": 121,
+    "name": "i64_clz",
+    "mnemonic": "i64.clz",
+    "friendlyName": "clz_i64",
+    "immediate": null,
+    "controlFlow": null,
+    "pop": [
+      "Int64"
+    ],
+    "push": [
+      "Int64"
+    ],
+    "prefix": null,
+    "feature": null,
+    "group": "i64-bitwise",
+    "order": 109
+  },
+  {
+    "value": 122,
+    "name": "i64_ctz",
+    "mnemonic": "i64.ctz",
+    "friendlyName": "ctz_i64",
+    "immediate": null,
+    "controlFlow": null,
+    "pop": [
+      "Int64"
+    ],
+    "push": [
+      "Int64"
+    ],
+    "prefix": null,
+    "feature": null,
+    "group": "i64-bitwise",
+    "order": 110
+  },
+  {
+    "value": 123,
+    "name": "i64_popcnt",
+    "mnemonic": "i64.popcnt",
+    "friendlyName": "popcnt_i64",
+    "immediate": null,
+    "controlFlow": null,
+    "pop": [
+      "Int64"
+    ],
+    "push": [
+      "Int64"
+    ],
+    "prefix": null,
+    "feature": null,
+    "group": "i64-bitwise",
+    "order": 111
+  },
+  {
+    "value": 124,
+    "name": "i64_add",
+    "mnemonic": "i64.add",
+    "friendlyName": "add_i64",
+    "immediate": null,
+    "controlFlow": null,
+    "pop": [
+      "Int64",
+      "Int64"
+    ],
+    "push": [
+      "Int64"
+    ],
+    "prefix": null,
+    "feature": null,
+    "group": "i64-arithmetic",
+    "order": 112
+  },
+  {
+    "value": 125,
+    "name": "i64_sub",
+    "mnemonic": "i64.sub",
+    "friendlyName": "sub_i64",
+    "immediate": null,
+    "controlFlow": null,
+    "pop": [
+      "Int64",
+      "Int64"
+    ],
+    "push": [
+      "Int64"
+    ],
+    "prefix": null,
+    "feature": null,
+    "group": "i64-arithmetic",
+    "order": 113
+  },
+  {
+    "value": 126,
+    "name": "i64_mul",
+    "mnemonic": "i64.mul",
+    "friendlyName": "mul_i64",
+    "immediate": null,
+    "controlFlow": null,
+    "pop": [
+      "Int64",
+      "Int64"
+    ],
+    "push": [
+      "Int64"
+    ],
+    "prefix": null,
+    "feature": null,
+    "group": "i64-arithmetic",
+    "order": 114
+  },
+  {
+    "value": 127,
+    "name": "i64_div_s",
+    "mnemonic": "i64.div_s",
+    "friendlyName": "div_i64",
+    "immediate": null,
+    "controlFlow": null,
+    "pop": [
+      "Int64",
+      "Int64"
+    ],
+    "push": [
+      "Int64"
+    ],
+    "prefix": null,
+    "feature": null,
+    "group": "i64-arithmetic",
+    "order": 115
+  },
+  {
+    "value": 128,
+    "name": "i64_div_u",
+    "mnemonic": "i64.div_u",
+    "friendlyName": "div_i64_u",
+    "immediate": null,
+    "controlFlow": null,
+    "pop": [
+      "Int64",
+      "Int64"
+    ],
+    "push": [
+      "Int64"
+    ],
+    "prefix": null,
+    "feature": null,
+    "group": "i64-arithmetic",
+    "order": 116
+  },
+  {
+    "value": 129,
+    "name": "i64_rem_s",
+    "mnemonic": "i64.rem_s",
+    "friendlyName": "rem_i64",
+    "immediate": null,
+    "controlFlow": null,
+    "pop": [
+      "Int64",
+      "Int64"
+    ],
+    "push": [
+      "Int64"
+    ],
+    "prefix": null,
+    "feature": null,
+    "group": "i64-arithmetic",
+    "order": 117
+  },
+  {
+    "value": 130,
+    "name": "i64_rem_u",
+    "mnemonic": "i64.rem_u",
+    "friendlyName": "rem_i64_u",
+    "immediate": null,
+    "controlFlow": null,
+    "pop": [
+      "Int64",
+      "Int64"
+    ],
+    "push": [
+      "Int64"
+    ],
+    "prefix": null,
+    "feature": null,
+    "group": "i64-arithmetic",
+    "order": 118
+  },
+  {
+    "value": 131,
+    "name": "i64_and",
+    "mnemonic": "i64.and",
+    "friendlyName": "and_i64",
+    "immediate": null,
+    "controlFlow": null,
+    "pop": [
+      "Int64",
+      "Int64"
+    ],
+    "push": [
+      "Int64"
+    ],
+    "prefix": null,
+    "feature": null,
+    "group": "i64-bitwise",
+    "order": 119
+  },
+  {
+    "value": 132,
+    "name": "i64_or",
+    "mnemonic": "i64.or",
+    "friendlyName": "or_i64",
+    "immediate": null,
+    "controlFlow": null,
+    "pop": [
+      "Int64",
+      "Int64"
+    ],
+    "push": [
+      "Int64"
+    ],
+    "prefix": null,
+    "feature": null,
+    "group": "i64-bitwise",
+    "order": 120
+  },
+  {
+    "value": 133,
+    "name": "i64_xor",
+    "mnemonic": "i64.xor",
+    "friendlyName": "xor_i64",
+    "immediate": null,
+    "controlFlow": null,
+    "pop": [
+      "Int64",
+      "Int64"
+    ],
+    "push": [
+      "Int64"
+    ],
+    "prefix": null,
+    "feature": null,
+    "group": "i64-bitwise",
+    "order": 121
+  },
+  {
+    "value": 134,
+    "name": "i64_shl",
+    "mnemonic": "i64.shl",
+    "friendlyName": "shl_i64",
+    "immediate": null,
+    "controlFlow": null,
+    "pop": [
+      "Int64",
+      "Int64"
+    ],
+    "push": [
+      "Int64"
+    ],
+    "prefix": null,
+    "feature": null,
+    "group": "i64-bitwise",
+    "order": 122
+  },
+  {
+    "value": 135,
+    "name": "i64_shr_s",
+    "mnemonic": "i64.shr_s",
+    "friendlyName": "shr_i64",
+    "immediate": null,
+    "controlFlow": null,
+    "pop": [
+      "Int64",
+      "Int64"
+    ],
+    "push": [
+      "Int64"
+    ],
+    "prefix": null,
+    "feature": null,
+    "group": "i64-bitwise",
+    "order": 123
+  },
+  {
+    "value": 136,
+    "name": "i64_shr_u",
+    "mnemonic": "i64.shr_u",
+    "friendlyName": "shr_i64_u",
+    "immediate": null,
+    "controlFlow": null,
+    "pop": [
+      "Int64",
+      "Int64"
+    ],
+    "push": [
+      "Int64"
+    ],
+    "prefix": null,
+    "feature": null,
+    "group": "i64-bitwise",
+    "order": 124
+  },
+  {
+    "value": 137,
+    "name": "i64_rotl",
+    "mnemonic": "i64.rotl",
+    "friendlyName": "rotl_i64",
+    "immediate": null,
+    "controlFlow": null,
+    "pop": [
+      "Int64",
+      "Int64"
+    ],
+    "push": [
+      "Int64"
+    ],
+    "prefix": null,
+    "feature": null,
+    "group": "i64-bitwise",
+    "order": 125
+  },
+  {
+    "value": 138,
+    "name": "i64_rotr",
+    "mnemonic": "i64.rotr",
+    "friendlyName": "rotr_i64",
+    "immediate": null,
+    "controlFlow": null,
+    "pop": [
+      "Int64",
+      "Int64"
+    ],
+    "push": [
+      "Int64"
+    ],
+    "prefix": null,
+    "feature": null,
+    "group": "i64-bitwise",
+    "order": 126
+  },
+  {
+    "value": 139,
+    "name": "f32_abs",
+    "mnemonic": "f32.abs",
+    "friendlyName": "abs_f32",
+    "immediate": null,
+    "controlFlow": null,
+    "pop": [
+      "Float32"
+    ],
+    "push": [
+      "Float32"
+    ],
+    "prefix": null,
+    "feature": null,
+    "group": "f32-arithmetic",
+    "order": 127
+  },
+  {
+    "value": 140,
+    "name": "f32_neg",
+    "mnemonic": "f32.neg",
+    "friendlyName": "neg_f32",
+    "immediate": null,
+    "controlFlow": null,
+    "pop": [
+      "Float32"
+    ],
+    "push": [
+      "Float32"
+    ],
+    "prefix": null,
+    "feature": null,
+    "group": "f32-arithmetic",
+    "order": 128
+  },
+  {
+    "value": 141,
+    "name": "f32_ceil",
+    "mnemonic": "f32.ceil",
+    "friendlyName": "ceil_f32",
+    "immediate": null,
+    "controlFlow": null,
+    "pop": [
+      "Float32"
+    ],
+    "push": [
+      "Float32"
+    ],
+    "prefix": null,
+    "feature": null,
+    "group": "f32-arithmetic",
+    "order": 129
+  },
+  {
+    "value": 142,
+    "name": "f32_floor",
+    "mnemonic": "f32.floor",
+    "friendlyName": "floor_f32",
+    "immediate": null,
+    "controlFlow": null,
+    "pop": [
+      "Float32"
+    ],
+    "push": [
+      "Float32"
+    ],
+    "prefix": null,
+    "feature": null,
+    "group": "f32-arithmetic",
+    "order": 130
+  },
+  {
+    "value": 143,
+    "name": "f32_trunc",
+    "mnemonic": "f32.trunc",
+    "friendlyName": "trunc_f32",
+    "immediate": null,
+    "controlFlow": null,
+    "pop": [
+      "Float32"
+    ],
+    "push": [
+      "Float32"
+    ],
+    "prefix": null,
+    "feature": null,
+    "group": "f32-arithmetic",
+    "order": 131
+  },
+  {
+    "value": 144,
+    "name": "f32_nearest",
+    "mnemonic": "f32.nearest",
+    "friendlyName": "nearest_f32",
+    "immediate": null,
+    "controlFlow": null,
+    "pop": [
+      "Float32"
+    ],
+    "push": [
+      "Float32"
+    ],
+    "prefix": null,
+    "feature": null,
+    "group": "f32-arithmetic",
+    "order": 132
+  },
+  {
+    "value": 145,
+    "name": "f32_sqrt",
+    "mnemonic": "f32.sqrt",
+    "friendlyName": "sqrt_f32",
+    "immediate": null,
+    "controlFlow": null,
+    "pop": [
+      "Float32"
+    ],
+    "push": [
+      "Float32"
+    ],
+    "prefix": null,
+    "feature": null,
+    "group": "f32-arithmetic",
+    "order": 133
+  },
+  {
+    "value": 146,
+    "name": "f32_add",
+    "mnemonic": "f32.add",
+    "friendlyName": "add_f32",
+    "immediate": null,
+    "controlFlow": null,
+    "pop": [
+      "Float32",
+      "Float32"
+    ],
+    "push": [
+      "Float32"
+    ],
+    "prefix": null,
+    "feature": null,
+    "group": "f32-arithmetic",
+    "order": 134
+  },
+  {
+    "value": 147,
+    "name": "f32_sub",
+    "mnemonic": "f32.sub",
+    "friendlyName": "sub_f32",
+    "immediate": null,
+    "controlFlow": null,
+    "pop": [
+      "Float32",
+      "Float32"
+    ],
+    "push": [
+      "Float32"
+    ],
+    "prefix": null,
+    "feature": null,
+    "group": "f32-arithmetic",
+    "order": 135
+  },
+  {
+    "value": 148,
+    "name": "f32_mul",
+    "mnemonic": "f32.mul",
+    "friendlyName": "mul_f32",
+    "immediate": null,
+    "controlFlow": null,
+    "pop": [
+      "Float32",
+      "Float32"
+    ],
+    "push": [
+      "Float32"
+    ],
+    "prefix": null,
+    "feature": null,
+    "group": "f32-arithmetic",
+    "order": 136
+  },
+  {
+    "value": 149,
+    "name": "f32_div",
+    "mnemonic": "f32.div",
+    "friendlyName": "div_f32",
+    "immediate": null,
+    "controlFlow": null,
+    "pop": [
+      "Float32",
+      "Float32"
+    ],
+    "push": [
+      "Float32"
+    ],
+    "prefix": null,
+    "feature": null,
+    "group": "f32-arithmetic",
+    "order": 137
+  },
+  {
+    "value": 150,
+    "name": "f32_min",
+    "mnemonic": "f32.min",
+    "friendlyName": "min_f32",
+    "immediate": null,
+    "controlFlow": null,
+    "pop": [
+      "Float32",
+      "Float32"
+    ],
+    "push": [
+      "Float32"
+    ],
+    "prefix": null,
+    "feature": null,
+    "group": "f32-arithmetic",
+    "order": 138
+  },
+  {
+    "value": 151,
+    "name": "f32_max",
+    "mnemonic": "f32.max",
+    "friendlyName": "max_f32",
+    "immediate": null,
+    "controlFlow": null,
+    "pop": [
+      "Float32",
+      "Float32"
+    ],
+    "push": [
+      "Float32"
+    ],
+    "prefix": null,
+    "feature": null,
+    "group": "f32-arithmetic",
+    "order": 139
+  },
+  {
+    "value": 152,
+    "name": "f32_copysign",
+    "mnemonic": "f32.copysign",
+    "friendlyName": "copysign_f32",
+    "immediate": null,
+    "controlFlow": null,
+    "pop": [
+      "Float32",
+      "Float32"
+    ],
+    "push": [
+      "Float32"
+    ],
+    "prefix": null,
+    "feature": null,
+    "group": "f32-arithmetic",
+    "order": 140
+  },
+  {
+    "value": 153,
+    "name": "f64_abs",
+    "mnemonic": "f64.abs",
+    "friendlyName": "abs_f64",
+    "immediate": null,
+    "controlFlow": null,
+    "pop": [
+      "Float64"
+    ],
+    "push": [
+      "Float64"
+    ],
+    "prefix": null,
+    "feature": null,
+    "group": "f64-arithmetic",
+    "order": 141
+  },
+  {
+    "value": 154,
+    "name": "f64_neg",
+    "mnemonic": "f64.neg",
+    "friendlyName": "neg_f64",
+    "immediate": null,
+    "controlFlow": null,
+    "pop": [
+      "Float64"
+    ],
+    "push": [
+      "Float64"
+    ],
+    "prefix": null,
+    "feature": null,
+    "group": "f64-arithmetic",
+    "order": 142
+  },
+  {
+    "value": 155,
+    "name": "f64_ceil",
+    "mnemonic": "f64.ceil",
+    "friendlyName": "ceil_f64",
+    "immediate": null,
+    "controlFlow": null,
+    "pop": [
+      "Float64"
+    ],
+    "push": [
+      "Float64"
+    ],
+    "prefix": null,
+    "feature": null,
+    "group": "f64-arithmetic",
+    "order": 143
+  },
+  {
+    "value": 156,
+    "name": "f64_floor",
+    "mnemonic": "f64.floor",
+    "friendlyName": "floor_f64",
+    "immediate": null,
+    "controlFlow": null,
+    "pop": [
+      "Float64"
+    ],
+    "push": [
+      "Float64"
+    ],
+    "prefix": null,
+    "feature": null,
+    "group": "f64-arithmetic",
+    "order": 144
+  },
+  {
+    "value": 157,
+    "name": "f64_trunc",
+    "mnemonic": "f64.trunc",
+    "friendlyName": "trunc_f64",
+    "immediate": null,
+    "controlFlow": null,
+    "pop": [
+      "Float64"
+    ],
+    "push": [
+      "Float64"
+    ],
+    "prefix": null,
+    "feature": null,
+    "group": "f64-arithmetic",
+    "order": 145
+  },
+  {
+    "value": 158,
+    "name": "f64_nearest",
+    "mnemonic": "f64.nearest",
+    "friendlyName": "nearest_f64",
+    "immediate": null,
+    "controlFlow": null,
+    "pop": [
+      "Float64"
+    ],
+    "push": [
+      "Float64"
+    ],
+    "prefix": null,
+    "feature": null,
+    "group": "f64-arithmetic",
+    "order": 146
+  },
+  {
+    "value": 159,
+    "name": "f64_sqrt",
+    "mnemonic": "f64.sqrt",
+    "friendlyName": "sqrt_f64",
+    "immediate": null,
+    "controlFlow": null,
+    "pop": [
+      "Float64"
+    ],
+    "push": [
+      "Float64"
+    ],
+    "prefix": null,
+    "feature": null,
+    "group": "f64-arithmetic",
+    "order": 147
+  },
+  {
+    "value": 160,
+    "name": "f64_add",
+    "mnemonic": "f64.add",
+    "friendlyName": "add_f64",
+    "immediate": null,
+    "controlFlow": null,
+    "pop": [
+      "Float64",
+      "Float64"
+    ],
+    "push": [
+      "Float64"
+    ],
+    "prefix": null,
+    "feature": null,
+    "group": "f64-arithmetic",
+    "order": 148
+  },
+  {
+    "value": 161,
+    "name": "f64_sub",
+    "mnemonic": "f64.sub",
+    "friendlyName": "sub_f64",
+    "immediate": null,
+    "controlFlow": null,
+    "pop": [
+      "Float64",
+      "Float64"
+    ],
+    "push": [
+      "Float64"
+    ],
+    "prefix": null,
+    "feature": null,
+    "group": "f64-arithmetic",
+    "order": 149
+  },
+  {
+    "value": 162,
+    "name": "f64_mul",
+    "mnemonic": "f64.mul",
+    "friendlyName": "mul_f64",
+    "immediate": null,
+    "controlFlow": null,
+    "pop": [
+      "Float64",
+      "Float64"
+    ],
+    "push": [
+      "Float64"
+    ],
+    "prefix": null,
+    "feature": null,
+    "group": "f64-arithmetic",
+    "order": 150
+  },
+  {
+    "value": 163,
+    "name": "f64_div",
+    "mnemonic": "f64.div",
+    "friendlyName": "div_f64",
+    "immediate": null,
+    "controlFlow": null,
+    "pop": [
+      "Float64",
+      "Float64"
+    ],
+    "push": [
+      "Float64"
+    ],
+    "prefix": null,
+    "feature": null,
+    "group": "f64-arithmetic",
+    "order": 151
+  },
+  {
+    "value": 164,
+    "name": "f64_min",
+    "mnemonic": "f64.min",
+    "friendlyName": "min_f64",
+    "immediate": null,
+    "controlFlow": null,
+    "pop": [
+      "Float64",
+      "Float64"
+    ],
+    "push": [
+      "Float64"
+    ],
+    "prefix": null,
+    "feature": null,
+    "group": "f64-arithmetic",
+    "order": 152
+  },
+  {
+    "value": 165,
+    "name": "f64_max",
+    "mnemonic": "f64.max",
+    "friendlyName": "max_f64",
+    "immediate": null,
+    "controlFlow": null,
+    "pop": [
+      "Float64",
+      "Float64"
+    ],
+    "push": [
+      "Float64"
+    ],
+    "prefix": null,
+    "feature": null,
+    "group": "f64-arithmetic",
+    "order": 153
+  },
+  {
+    "value": 166,
+    "name": "f64_copysign",
+    "mnemonic": "f64.copysign",
+    "friendlyName": "copysign_f64",
+    "immediate": null,
+    "controlFlow": null,
+    "pop": [
+      "Float64",
+      "Float64"
+    ],
+    "push": [
+      "Float64"
+    ],
+    "prefix": null,
+    "feature": null,
+    "group": "f64-arithmetic",
+    "order": 154
+  },
+  {
+    "value": 167,
+    "name": "i32_wrap_i64",
+    "mnemonic": "i32.wrap_i64",
+    "friendlyName": "wrap_i64_i32",
+    "immediate": null,
+    "controlFlow": null,
+    "pop": [
+      "Int64"
+    ],
+    "push": [
+      "Int32"
+    ],
+    "prefix": null,
+    "feature": null,
+    "group": "conversion",
+    "order": 155
+  },
+  {
+    "value": 168,
+    "name": "i32_trunc_f32_s",
+    "mnemonic": "i32.trunc_f32_s",
+    "friendlyName": "trunc_f32_s_i32",
+    "immediate": null,
+    "controlFlow": null,
+    "pop": [
+      "Float32"
+    ],
+    "push": [
+      "Int32"
+    ],
+    "prefix": null,
+    "feature": null,
+    "group": "conversion",
+    "order": 156
+  },
+  {
+    "value": 169,
+    "name": "i32_trunc_f32_u",
+    "mnemonic": "i32.trunc_f32_u",
+    "friendlyName": "trunc_f32_u_i32",
+    "immediate": null,
+    "controlFlow": null,
+    "pop": [
+      "Float32"
+    ],
+    "push": [
+      "Int32"
+    ],
+    "prefix": null,
+    "feature": null,
+    "group": "conversion",
+    "order": 157
+  },
+  {
+    "value": 170,
+    "name": "i32_trunc_f64_s",
+    "mnemonic": "i32.trunc_f64_s",
+    "friendlyName": "trunc_f64_s_i32",
+    "immediate": null,
+    "controlFlow": null,
+    "pop": [
+      "Float64"
+    ],
+    "push": [
+      "Int32"
+    ],
+    "prefix": null,
+    "feature": null,
+    "group": "conversion",
+    "order": 158
+  },
+  {
+    "value": 171,
+    "name": "i32_trunc_f64_u",
+    "mnemonic": "i32.trunc_f64_u",
+    "friendlyName": "trunc_f64_u_i32",
+    "immediate": null,
+    "controlFlow": null,
+    "pop": [
+      "Float64"
+    ],
+    "push": [
+      "Int32"
+    ],
+    "prefix": null,
+    "feature": null,
+    "group": "conversion",
+    "order": 159
+  },
+  {
+    "value": 172,
+    "name": "i64_extend_i32_s",
+    "mnemonic": "i64.extend_i32_s",
+    "friendlyName": "extend_i32_s_i64",
+    "immediate": null,
+    "controlFlow": null,
+    "pop": [
+      "Int32"
+    ],
+    "push": [
+      "Int64"
+    ],
+    "prefix": null,
+    "feature": null,
+    "group": "conversion",
+    "order": 160
+  },
+  {
+    "value": 173,
+    "name": "i64_extend_i32_u",
+    "mnemonic": "i64.extend_i32_u",
+    "friendlyName": "extend_i32_u_i64",
+    "immediate": null,
+    "controlFlow": null,
+    "pop": [
+      "Int32"
+    ],
+    "push": [
+      "Int64"
+    ],
+    "prefix": null,
+    "feature": null,
+    "group": "conversion",
+    "order": 161
+  },
+  {
+    "value": 174,
+    "name": "i64_trunc_f32_s",
+    "mnemonic": "i64.trunc_f32_s",
+    "friendlyName": "trunc_f32_s_i64",
+    "immediate": null,
+    "controlFlow": null,
+    "pop": [
+      "Float32"
+    ],
+    "push": [
+      "Int64"
+    ],
+    "prefix": null,
+    "feature": null,
+    "group": "conversion",
+    "order": 162
+  },
+  {
+    "value": 175,
+    "name": "i64_trunc_f32_u",
+    "mnemonic": "i64.trunc_f32_u",
+    "friendlyName": "trunc_f32_u_i64",
+    "immediate": null,
+    "controlFlow": null,
+    "pop": [
+      "Float32"
+    ],
+    "push": [
+      "Int64"
+    ],
+    "prefix": null,
+    "feature": null,
+    "group": "conversion",
+    "order": 163
+  },
+  {
+    "value": 176,
+    "name": "i64_trunc_f64_s",
+    "mnemonic": "i64.trunc_f64_s",
+    "friendlyName": "trunc_f64_s_i64",
+    "immediate": null,
+    "controlFlow": null,
+    "pop": [
+      "Float64"
+    ],
+    "push": [
+      "Int64"
+    ],
+    "prefix": null,
+    "feature": null,
+    "group": "conversion",
+    "order": 164
+  },
+  {
+    "value": 177,
+    "name": "i64_trunc_f64_u",
+    "mnemonic": "i64.trunc_f64_u",
+    "friendlyName": "trunc_f64_u_i64",
+    "immediate": null,
+    "controlFlow": null,
+    "pop": [
+      "Float64"
+    ],
+    "push": [
+      "Int64"
+    ],
+    "prefix": null,
+    "feature": null,
+    "group": "conversion",
+    "order": 165
+  },
+  {
+    "value": 178,
+    "name": "f32_convert_i32_s",
+    "mnemonic": "f32.convert_i32_s",
+    "friendlyName": "convert_i32_s_f32",
+    "immediate": null,
+    "controlFlow": null,
+    "pop": [
+      "Int32"
+    ],
+    "push": [
+      "Float32"
+    ],
+    "prefix": null,
+    "feature": null,
+    "group": "conversion",
+    "order": 166
+  },
+  {
+    "value": 179,
+    "name": "f32_convert_i32_u",
+    "mnemonic": "f32.convert_i32_u",
+    "friendlyName": "convert_i32_u_f32",
+    "immediate": null,
+    "controlFlow": null,
+    "pop": [
+      "Int32"
+    ],
+    "push": [
+      "Float32"
+    ],
+    "prefix": null,
+    "feature": null,
+    "group": "conversion",
+    "order": 167
+  },
+  {
+    "value": 180,
+    "name": "f32_convert_i64_s",
+    "mnemonic": "f32.convert_i64_s",
+    "friendlyName": "convert_i64_s_f32",
+    "immediate": null,
+    "controlFlow": null,
+    "pop": [
+      "Int64"
+    ],
+    "push": [
+      "Float32"
+    ],
+    "prefix": null,
+    "feature": null,
+    "group": "conversion",
+    "order": 168
+  },
+  {
+    "value": 181,
+    "name": "f32_convert_i64_u",
+    "mnemonic": "f32.convert_i64_u",
+    "friendlyName": "convert_i64_u_f32",
+    "immediate": null,
+    "controlFlow": null,
+    "pop": [
+      "Int64"
+    ],
+    "push": [
+      "Float32"
+    ],
+    "prefix": null,
+    "feature": null,
+    "group": "conversion",
+    "order": 169
+  },
+  {
+    "value": 182,
+    "name": "f32_demote_f64",
+    "mnemonic": "f32.demote_f64",
+    "friendlyName": "demote_f64_f32",
+    "immediate": null,
+    "controlFlow": null,
+    "pop": [
+      "Float64"
+    ],
+    "push": [
+      "Float32"
+    ],
+    "prefix": null,
+    "feature": null,
+    "group": "conversion",
+    "order": 170
+  },
+  {
+    "value": 183,
+    "name": "f64_convert_i32_s",
+    "mnemonic": "f64.convert_i32_s",
+    "friendlyName": "convert_i32_s_f64",
+    "immediate": null,
+    "controlFlow": null,
+    "pop": [
+      "Int32"
+    ],
+    "push": [
+      "Float64"
+    ],
+    "prefix": null,
+    "feature": null,
+    "group": "conversion",
+    "order": 171
+  },
+  {
+    "value": 184,
+    "name": "f64_convert_i32_u",
+    "mnemonic": "f64.convert_i32_u",
+    "friendlyName": "convert_i32_u_f64",
+    "immediate": null,
+    "controlFlow": null,
+    "pop": [
+      "Int32"
+    ],
+    "push": [
+      "Float64"
+    ],
+    "prefix": null,
+    "feature": null,
+    "group": "conversion",
+    "order": 172
+  },
+  {
+    "value": 185,
+    "name": "f64_convert_i64_s",
+    "mnemonic": "f64.convert_i64_s",
+    "friendlyName": "convert_i64_s_f64",
+    "immediate": null,
+    "controlFlow": null,
+    "pop": [
+      "Int64"
+    ],
+    "push": [
+      "Float64"
+    ],
+    "prefix": null,
+    "feature": null,
+    "group": "conversion",
+    "order": 173
+  },
+  {
+    "value": 186,
+    "name": "f64_convert_i64_u",
+    "mnemonic": "f64.convert_i64_u",
+    "friendlyName": "convert_i64_u_f64",
+    "immediate": null,
+    "controlFlow": null,
+    "pop": [
+      "Int64"
+    ],
+    "push": [
+      "Float64"
+    ],
+    "prefix": null,
+    "feature": null,
+    "group": "conversion",
+    "order": 174
+  },
+  {
+    "value": 187,
+    "name": "f64_promote_f32",
+    "mnemonic": "f64.promote_f32",
+    "friendlyName": "promote_f32_f64",
+    "immediate": null,
+    "controlFlow": null,
+    "pop": [
+      "Float32"
+    ],
+    "push": [
+      "Float64"
+    ],
+    "prefix": null,
+    "feature": null,
+    "group": "conversion",
+    "order": 175
+  },
+  {
+    "value": 188,
+    "name": "i32_reinterpret_f32",
+    "mnemonic": "i32.reinterpret_f32",
+    "friendlyName": "reinterpret_f32_i32",
+    "immediate": null,
+    "controlFlow": null,
+    "pop": [
+      "Float32"
+    ],
+    "push": [
+      "Int32"
+    ],
+    "prefix": null,
+    "feature": null,
+    "group": "conversion",
+    "order": 176
+  },
+  {
+    "value": 189,
+    "name": "i64_reinterpret_f64",
+    "mnemonic": "i64.reinterpret_f64",
+    "friendlyName": "reinterpret_f64_i64",
+    "immediate": null,
+    "controlFlow": null,
+    "pop": [
+      "Float64"
+    ],
+    "push": [
+      "Int64"
+    ],
+    "prefix": null,
+    "feature": null,
+    "group": "conversion",
+    "order": 177
+  },
+  {
+    "value": 190,
+    "name": "f32_reinterpret_i32",
+    "mnemonic": "f32.reinterpret_i32",
+    "friendlyName": "reinterpret_i32_f32",
+    "immediate": null,
+    "controlFlow": null,
+    "pop": [
+      "Int32"
+    ],
+    "push": [
+      "Float32"
+    ],
+    "prefix": null,
+    "feature": null,
+    "group": "conversion",
+    "order": 178
+  },
+  {
+    "value": 191,
+    "name": "f64_reinterpret_i64",
+    "mnemonic": "f64.reinterpret_i64",
+    "friendlyName": "reinterpret_i64_f64",
+    "immediate": null,
+    "controlFlow": null,
+    "pop": [
+      "Int64"
+    ],
+    "push": [
+      "Float64"
+    ],
+    "prefix": null,
+    "feature": null,
+    "group": "conversion",
+    "order": 179
+  }
+]

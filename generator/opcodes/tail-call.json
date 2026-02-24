@@ -1,0 +1,32 @@
+[
+  {
+    "value": 18,
+    "name": "return_call",
+    "mnemonic": "return_call",
+    "friendlyName": "return_call",
+    "immediate": "Function",
+    "controlFlow": null,
+    "pop": null,
+    "push": null,
+    "prefix": null,
+    "feature": "tail-call",
+    "group": "call",
+    "order": 17
+  },
+  {
+    "value": 19,
+    "name": "return_call_indirect",
+    "mnemonic": "return_call_indirect",
+    "friendlyName": "return_call_indirect",
+    "immediate": "IndirectFunction",
+    "controlFlow": null,
+    "pop": [
+      "Int32"
+    ],
+    "push": null,
+    "prefix": null,
+    "feature": "tail-call",
+    "group": "call",
+    "order": 18
+  }
+]

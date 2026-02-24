@@ -84,6 +84,10 @@ export default class BinaryModuleWriter {
     BinaryModuleWriter.writeSection(writer, SectionType.Export, this.moduleBuilder._exports);
   }
 
+  writeTagSection(writer: BinaryWriter): void {
+    BinaryModuleWriter.writeSection(writer, SectionType.Tag, this.moduleBuilder._tags);
+  }
+
   writeStartSection(writer: BinaryWriter): void {
     if (!this.moduleBuilder._startFunction) {
       return;
@@ -236,6 +240,7 @@ export default class BinaryModuleWriter {
     this.writeTableSection(writer);
     this.writeMemorySection(writer);
     this.writeGlobalSection(writer);
+    this.writeTagSection(writer);
     this.writeExportSection(writer);
     this.writeStartSection(writer);
     this.writeElementSection(writer);

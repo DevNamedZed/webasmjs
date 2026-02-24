@@ -52,7 +52,7 @@ export default class FuncTypeBuilder {
       writer.writeVarInt7(x.value);
     });
 
-    writer.writeVarUInt1(this.returnTypes.length);
+    writer.writeVarUInt32(this.returnTypes.length);
     this.returnTypes.forEach((x) => {
       writer.writeVarInt7(x.value);
     });
