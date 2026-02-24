@@ -8,6 +8,7 @@ import {
   ImmediateType,
   LanguageType,
 } from './types';
+import OpCodes from './OpCodes';
 
 export interface ModuleInfo {
   version: number;
@@ -418,27 +419,26 @@ export default class BinaryReader {
 
   private readInitExpr(): Uint8Array {
     const start = this.offset;
-    // Read until we hit 0x0b (end opcode)
     while (this.offset < this.buffer.length) {
       const byte = this.buffer[this.offset++];
-      if (byte === 0x0b) {
+      if (byte === OpCodes.end.value) {
         break;
       }
       // Skip over immediate operands for known init expression opcodes
       switch (byte) {
-        case 0x41: // i32.const
+        case OpCodes.i32_const.value:
           this.readVarInt32();
           break;
-        case 0x42: // i64.const
+        case OpCodes.i64_const.value:
           this.readVarInt64();
           break;
-        case 0x43: // f32.const
+        case OpCodes.f32_const.value:
           this.offset += 4;
           break;
-        case 0x44: // f64.const
+        case OpCodes.f64_const.value:
           this.offset += 8;
           break;
-        case 0x23: // global.get
+        case OpCodes.get_global.value:
           this.readVarUInt32();
           break;
       }

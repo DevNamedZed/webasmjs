@@ -644,3 +644,993 @@ for (const section of info.customSections) {
 // author: webasmjs
 // version: 1.0.0
 ```
+
+## Target System
+
+Show how to use targets and feature flags:
+
+```typescript
+import { ModuleBuilder, ValueType } from 'webasmjs';
+
+// Default: target 'latest' — all features enabled
+const mod1 = new ModuleBuilder('latest');
+
+// Target WebAssembly 2.0 — only widely-deployed features
+const mod2 = new ModuleBuilder('compat', { target: '2.0' });
+
+// MVP with specific features added
+const mod3 = new ModuleBuilder('custom', {
+  target: 'mvp',
+  features: ['simd', 'bulk-memory'],
+});
+
+// Check if a feature is available
+console.log(mod1.hasFeature('threads'));      // true
+console.log(mod2.hasFeature('threads'));      // false
+console.log(mod3.hasFeature('simd'));         // true
+console.log(mod3.hasFeature('threads'));      // false
+```
+
+## Multi-Value Returns
+
+Function returning two values:
+
+```typescript
+import { ModuleBuilder, ValueType } from 'webasmjs';
+
+const mod = new ModuleBuilder('multiValue');
+
+// divmod returns both quotient and remainder
+mod.defineFunction('divmod', [ValueType.Int32, ValueType.Int32],
+  [ValueType.Int32, ValueType.Int32], (f, a) => {
+  const dividend = f.getParameter(0);
+  const divisor = f.getParameter(1);
+
+  // quotient
+  a.get_local(dividend);
+  a.get_local(divisor);
+  a.div_s_i32();
+
+  // remainder
+  a.get_local(dividend);
+  a.get_local(divisor);
+  a.rem_s_i32();
+}).withExport();
+
+const instance = await mod.instantiate();
+const divmod = instance.instance.exports.divmod as Function;
+
+const [quotient, remainder] = divmod(17, 5);
+console.log(`17 / 5 = ${quotient} remainder ${remainder}`); // 17 / 5 = 3 remainder 2
+```
+
+## Mutable Global Export
+
+Export a mutable global so JavaScript can read it:
+
+```typescript
+import { ModuleBuilder, ValueType } from 'webasmjs';
+
+const mod = new ModuleBuilder('mutableGlobal');
+
+const counter = mod.defineGlobal(ValueType.Int32, true, 0);
+mod.exportGlobal(counter, 'counter');
+
+mod.defineFunction('increment', null, [], (f, a) => {
+  a.get_global(counter);
+  a.const_i32(1);
+  a.add_i32();
+  a.set_global(counter);
+}).withExport();
+
+const instance = await mod.instantiate();
+const { increment, counter: counterGlobal } = instance.instance.exports as any;
+
+console.log(counterGlobal.value);  // 0
+increment();
+increment();
+increment();
+console.log(counterGlobal.value);  // 3
+```
+
+## Tail Calls
+
+Tail-recursive factorial using `return_call` — no stack overflow for deep recursion:
+
+```typescript
+import { ModuleBuilder, ValueType, BlockType } from 'webasmjs';
+
+const mod = new ModuleBuilder('tailCall');
+
+// Helper: tail-recursive accumulator
+const factHelper = mod.defineFunction('fact_helper', [ValueType.Int64],
+  [ValueType.Int64, ValueType.Int64], (f, a) => {
+  const n = f.getParameter(0);
+  const acc = f.getParameter(1);
+
+  // if n <= 1, return acc
+  a.get_local(n);
+  a.const_i64(1n);
+  a.le_s_i64();
+  a.if(BlockType.Void, () => {
+    a.get_local(acc);
+    a.return();
+  });
+
+  // return_call fact_helper(n - 1, n * acc)
+  a.get_local(n);
+  a.const_i64(1n);
+  a.sub_i64();
+  a.get_local(n);
+  a.get_local(acc);
+  a.mul_i64();
+  a.return_call(factHelper);
+});
+
+// Public entry point
+mod.defineFunction('factorial', [ValueType.Int64], [ValueType.Int64], (f, a) => {
+  a.get_local(f.getParameter(0));
+  a.const_i64(1n);
+  a.call(factHelper);
+}).withExport();
+
+const instance = await mod.instantiate();
+const factorial = instance.instance.exports.factorial as Function;
+
+console.log(factorial(20n));  // 2432902008176640000n
+```
+
+## Shared Memory and Atomics
+
+Use shared memory with atomic operations for thread-safe access:
+
+```typescript
+import { ModuleBuilder, ValueType } from 'webasmjs';
+
+const mod = new ModuleBuilder('atomics');
+
+// Shared memory requires both initial and maximum size
+const mem = mod.defineMemory(1, 10, true); // shared = true
+mod.exportMemory(mem, 'memory');
+
+// Atomic increment: atomically adds 1 to the i32 at the given address
+mod.defineFunction('atomicIncrement', [ValueType.Int32], [ValueType.Int32], (f, a) => {
+  a.get_local(f.getParameter(0)); // address
+  a.const_i32(1);                  // value to add
+  a.atomic_rmw_add_i32(2, 0);     // returns old value
+}).withExport();
+
+// Atomic load: read an i32 atomically
+mod.defineFunction('atomicLoad', [ValueType.Int32], [ValueType.Int32], (f, a) => {
+  a.get_local(f.getParameter(0));
+  a.atomic_load_i32(2, 0);
+}).withExport();
+
+// Atomic store: write an i32 atomically
+mod.defineFunction('atomicStore', null, [ValueType.Int32, ValueType.Int32], (f, a) => {
+  a.get_local(f.getParameter(0)); // address
+  a.get_local(f.getParameter(1)); // value
+  a.atomic_store_i32(2, 0);
+}).withExport();
+
+const instance = await mod.instantiate();
+const { atomicIncrement, atomicLoad, atomicStore } = instance.instance.exports as any;
+
+atomicStore(0, 100);
+console.log(atomicLoad(0));         // 100
+atomicIncrement(0);
+atomicIncrement(0);
+console.log(atomicLoad(0));         // 102
+```
+
+## Exception Handling
+
+Define exception tags and throw exceptions:
+
+```typescript
+import { ModuleBuilder, ValueType, BlockType } from 'webasmjs';
+
+const mod = new ModuleBuilder('exceptions', { disableVerification: true });
+
+// Define a tag with an i32 payload (like an error code)
+const errorTag = mod.defineTag([ValueType.Int32]);
+
+// Function that throws when input is negative
+mod.defineFunction('checkPositive', null, [ValueType.Int32], (f, a) => {
+  a.get_local(f.getParameter(0));
+  a.const_i32(0);
+  a.lt_s_i32();
+  a.if(BlockType.Void, () => {
+    a.get_local(f.getParameter(0));
+    a.throw(errorTag._index);
+  });
+}).withExport();
+
+const bytes = mod.toBytes();
+console.log(`Module compiled: ${bytes.length} bytes`);
+
+// WAT output shows the tag and throw instruction
+const wat = mod.toString();
+console.log(wat);
+```
+
+## Memory64
+
+Use 64-bit addressed memory for very large address spaces:
+
+```typescript
+import { ModuleBuilder, ValueType } from 'webasmjs';
+
+const mod = new ModuleBuilder('memory64');
+
+// memory64 flag makes addresses 64-bit
+const mem = mod.defineMemory(1, 100, false, true); // memory64 = true
+mod.exportMemory(mem, 'memory');
+
+// Store: address is i64
+mod.defineFunction('store64', null, [ValueType.Int64, ValueType.Int32], (f, a) => {
+  a.get_local(f.getParameter(0)); // i64 address
+  a.get_local(f.getParameter(1)); // i32 value
+  a.store_i32(2, 0);
+}).withExport();
+
+// Load: address is i64
+mod.defineFunction('load64', [ValueType.Int32], [ValueType.Int64], (f, a) => {
+  a.get_local(f.getParameter(0)); // i64 address
+  a.load_i32(2, 0);
+}).withExport();
+
+// Compile to bytes (runtime instantiation requires engine support for memory64)
+const bytes = mod.toBytes();
+console.log(`Module compiled: ${bytes.length} bytes`);
+
+const wat = mod.toString();
+console.log(wat); // shows (memory i64 1 100)
+```
+
+## Passive Data Segments
+
+Use passive data segments with `memory.init` for lazy initialization:
+
+```typescript
+import { ModuleBuilder, ValueType } from 'webasmjs';
+
+const mod = new ModuleBuilder('passiveData');
+const mem = mod.defineMemory(1);
+mod.exportMemory(mem, 'memory');
+
+// Define a passive data segment (not placed in memory automatically)
+const greeting = new TextEncoder().encode('Hello, WebAssembly!');
+const dataSegment = mod.defineData(new Uint8Array([...greeting]));
+
+// Copy passive data into memory at runtime using memory.init
+mod.defineFunction('init', null, [ValueType.Int32], (f, a) => {
+  a.get_local(f.getParameter(0)); // destination offset
+  a.const_i32(0);                  // source offset in data segment
+  a.const_i32(greeting.length);    // length
+  a.memory_init(dataSegment._index, 0);
+}).withExport();
+
+const instance = await mod.instantiate();
+const { init, memory } = instance.instance.exports as any;
+
+init(0); // copy data to offset 0
+const view = new Uint8Array(memory.buffer);
+const text = new TextDecoder().decode(view.slice(0, greeting.length));
+console.log(text); // Hello, WebAssembly!
+```
+
+## Extended Constants
+
+Use arithmetic in global initialization expressions with the extended-const feature:
+
+```typescript
+import { ModuleBuilder, ValueType } from 'webasmjs';
+
+const mod = new ModuleBuilder('extConst', {
+  target: 'mvp',
+  features: ['extended-const'],
+});
+
+// Base offset as an immutable global
+const base = mod.defineGlobal(ValueType.Int32, false, 100);
+
+// Computed global: base + 50 (uses i32.add in init expression)
+const offset1 = mod.defineGlobal(ValueType.Int32, false, (asm) => {
+  asm.get_global(base);
+  asm.const_i32(50);
+  asm.add_i32();
+});
+
+// Computed global: base * 3 (uses i32.mul in init expression)
+const scaled = mod.defineGlobal(ValueType.Int32, false, (asm) => {
+  asm.get_global(base);
+  asm.const_i32(3);
+  asm.mul_i32();
+});
+
+mod.defineFunction('getBase', [ValueType.Int32], [], (f, a) => {
+  a.get_global(base);
+}).withExport();
+
+mod.defineFunction('getOffset1', [ValueType.Int32], [], (f, a) => {
+  a.get_global(offset1);
+}).withExport();
+
+mod.defineFunction('getScaled', [ValueType.Int32], [], (f, a) => {
+  a.get_global(scaled);
+}).withExport();
+
+const instance = await mod.instantiate();
+const { getBase, getOffset1, getScaled } = instance.instance.exports as any;
+
+console.log(getBase());     // 100
+console.log(getOffset1());  // 150
+console.log(getScaled());   // 300
+```
+
+## Multi-Memory
+
+Define and use multiple linear memories in a single module:
+
+```typescript
+import { ModuleBuilder, ValueType } from 'webasmjs';
+
+const mod = new ModuleBuilder('multiMem', {
+  target: 'mvp',
+  features: ['multi-memory'],
+});
+
+const mem0 = mod.defineMemory(1);
+mod.exportMemory(mem0, 'mem0');
+const mem1 = mod.defineMemory(1);
+mod.exportMemory(mem1, 'mem1');
+
+// Store to memory 0
+mod.defineFunction('store0', null,
+  [ValueType.Int32, ValueType.Int32], (f, a) => {
+  a.get_local(f.getParameter(0));
+  a.get_local(f.getParameter(1));
+  a.store_i32(2, 0, 0); // memIndex=0
+}).withExport();
+
+// Load from memory 0
+mod.defineFunction('load0', [ValueType.Int32],
+  [ValueType.Int32], (f, a) => {
+  a.get_local(f.getParameter(0));
+  a.load_i32(2, 0, 0); // memIndex=0
+}).withExport();
+
+// Store to memory 1
+mod.defineFunction('store1', null,
+  [ValueType.Int32, ValueType.Int32], (f, a) => {
+  a.get_local(f.getParameter(0));
+  a.get_local(f.getParameter(1));
+  a.store_i32(2, 0, 1); // memIndex=1
+}).withExport();
+
+// Load from memory 1
+mod.defineFunction('load1', [ValueType.Int32],
+  [ValueType.Int32], (f, a) => {
+  a.get_local(f.getParameter(0));
+  a.load_i32(2, 0, 1); // memIndex=1
+}).withExport();
+
+const bytes = mod.toBytes();
+console.log(`Module compiled: ${bytes.length} bytes`);
+console.log(`Valid: ${WebAssembly.validate(bytes.buffer)}`);
+```
+
+## Multi-Table
+
+Define multiple function tables and dispatch through each:
+
+```typescript
+import { ModuleBuilder, ValueType, ElementType } from 'webasmjs';
+
+const mod = new ModuleBuilder('multiTable', {
+  target: 'mvp',
+  features: ['multi-table'],
+});
+
+const add = mod.defineFunction('add', [ValueType.Int32],
+  [ValueType.Int32, ValueType.Int32], (f, a) => {
+  a.get_local(f.getParameter(0));
+  a.get_local(f.getParameter(1));
+  a.add_i32();
+});
+
+const sub = mod.defineFunction('sub', [ValueType.Int32],
+  [ValueType.Int32, ValueType.Int32], (f, a) => {
+  a.get_local(f.getParameter(0));
+  a.get_local(f.getParameter(1));
+  a.sub_i32();
+});
+
+const mul = mod.defineFunction('mul', [ValueType.Int32],
+  [ValueType.Int32, ValueType.Int32], (f, a) => {
+  a.get_local(f.getParameter(0));
+  a.get_local(f.getParameter(1));
+  a.mul_i32();
+});
+
+// Two tables with different function arrangements
+const table0 = mod.defineTable(ElementType.AnyFunc, 3);
+mod.defineTableSegment(table0, [add, sub, mul], 0);
+
+const table1 = mod.defineTable(ElementType.AnyFunc, 2);
+mod.defineTableSegment(table1, [mul, add], 0);
+
+const bytes = mod.toBytes();
+console.log(`Module compiled: ${bytes.length} bytes`);
+console.log(`Valid: ${WebAssembly.validate(bytes.buffer)}`);
+```
+
+## Relaxed SIMD
+
+Use relaxed SIMD operations for performance-sensitive vector code:
+
+```typescript
+import { ModuleBuilder, ValueType } from 'webasmjs';
+
+const mod = new ModuleBuilder('relaxedSimd');
+mod.defineMemory(1);
+
+// relaxed_madd: a * b + c (fused multiply-add)
+mod.defineFunction('madd_f32x4', null,
+  [ValueType.Int32, ValueType.Int32,
+   ValueType.Int32, ValueType.Int32], (f, a) => {
+  a.get_local(f.getParameter(3)); // dest address
+  a.get_local(f.getParameter(0));
+  a.load_v128(2, 0);  // load A
+  a.get_local(f.getParameter(1));
+  a.load_v128(2, 0);  // load B
+  a.get_local(f.getParameter(2));
+  a.load_v128(2, 0);  // load C
+  a.relaxed_madd_f32x4();  // A * B + C
+  a.store_v128(2, 0);
+}).withExport();
+
+const bytes = mod.toBytes();
+console.log(`Module compiled: ${bytes.length} bytes`);
+console.log(`Valid: ${WebAssembly.validate(bytes.buffer)}`);
+```
+
+## Atomic Read-Modify-Write Operations
+
+Demonstrate all RMW variants: sub, and, or, xor, exchange on shared memory:
+
+```typescript
+import { ModuleBuilder, ValueType } from 'webasmjs';
+
+const mod = new ModuleBuilder('atomicRMW');
+const mem = mod.defineMemory(1, 10, true); // shared
+mod.exportMemory(mem, 'memory');
+
+mod.defineFunction('store', null,
+  [ValueType.Int32, ValueType.Int32], (f, a) => {
+  a.get_local(f.getParameter(0));
+  a.get_local(f.getParameter(1));
+  a.atomic_store_i32(2, 0);
+}).withExport();
+
+mod.defineFunction('load', [ValueType.Int32],
+  [ValueType.Int32], (f, a) => {
+  a.get_local(f.getParameter(0));
+  a.atomic_load_i32(2, 0);
+}).withExport();
+
+// Each RMW op returns the old value
+mod.defineFunction('atomicSub', [ValueType.Int32],
+  [ValueType.Int32, ValueType.Int32], (f, a) => {
+  a.get_local(f.getParameter(0));
+  a.get_local(f.getParameter(1));
+  a.atomic_rmw_sub_i32(2, 0);
+}).withExport();
+
+mod.defineFunction('atomicAnd', [ValueType.Int32],
+  [ValueType.Int32, ValueType.Int32], (f, a) => {
+  a.get_local(f.getParameter(0));
+  a.get_local(f.getParameter(1));
+  a.atomic_rmw_and_i32(2, 0);
+}).withExport();
+
+mod.defineFunction('atomicOr', [ValueType.Int32],
+  [ValueType.Int32, ValueType.Int32], (f, a) => {
+  a.get_local(f.getParameter(0));
+  a.get_local(f.getParameter(1));
+  a.atomic_rmw_or_i32(2, 0);
+}).withExport();
+
+mod.defineFunction('atomicXor', [ValueType.Int32],
+  [ValueType.Int32, ValueType.Int32], (f, a) => {
+  a.get_local(f.getParameter(0));
+  a.get_local(f.getParameter(1));
+  a.atomic_rmw_xor_i32(2, 0);
+}).withExport();
+
+mod.defineFunction('atomicXchg', [ValueType.Int32],
+  [ValueType.Int32, ValueType.Int32], (f, a) => {
+  a.get_local(f.getParameter(0));
+  a.get_local(f.getParameter(1));
+  a.atomic_rmw_xchg_i32(2, 0);
+}).withExport();
+
+const instance = await mod.instantiate();
+const { store, load, atomicSub, atomicAnd, atomicXchg } = instance.instance.exports as any;
+
+store(0, 100);
+console.log(atomicSub(0, 30)); // old: 100, new value at addr 0 is 70
+console.log(load(0));           // 70
+
+store(0, 0xFF);
+console.log(atomicAnd(0, 0x0F)); // old: 255, new: 15
+
+store(0, 42);
+console.log(atomicXchg(0, 99));  // old: 42, new: 99
+```
+
+## Atomic Wait, Notify & Fence
+
+Thread synchronization primitives — wait/notify for blocking coordination, fence for memory ordering:
+
+```typescript
+import { ModuleBuilder, ValueType } from 'webasmjs';
+
+const mod = new ModuleBuilder('waitNotify', { disableVerification: true });
+const mem = mod.defineMemory(1, 10, true);
+mod.exportMemory(mem, 'memory');
+
+// wait32(addr, expected, timeout_ns) -> 0=ok, 1=not-equal, 2=timed-out
+mod.defineFunction('wait32', [ValueType.Int32],
+  [ValueType.Int32, ValueType.Int32, ValueType.Int64], (f, a) => {
+  a.get_local(f.getParameter(0));
+  a.get_local(f.getParameter(1));
+  a.get_local(f.getParameter(2));
+  a.atomic_wait32(2, 0);
+}).withExport();
+
+// notify(addr, count) -> number of waiters woken
+mod.defineFunction('notify', [ValueType.Int32],
+  [ValueType.Int32, ValueType.Int32], (f, a) => {
+  a.get_local(f.getParameter(0));
+  a.get_local(f.getParameter(1));
+  a.atomic_notify(2, 0);
+}).withExport();
+
+// fence — full memory barrier
+mod.defineFunction('fence', null, [], (f, a) => {
+  a.atomic_fence(0);
+}).withExport();
+
+const bytes = mod.toBytes();
+console.log(`Module compiled: ${bytes.length} bytes`);
+console.log(`Valid: ${WebAssembly.validate(bytes.buffer)}`);
+
+// In a multi-threaded setup:
+// Thread A: wait32(addr, 0, -1n)  // block until value != 0
+// Thread B: store(addr, 1); notify(addr, 1)  // wake thread A
+```
+
+## SIMD Integer Ops
+
+Integer SIMD: i32x4 add, min, lane extract, and splat:
+
+```typescript
+import { ModuleBuilder, ValueType } from 'webasmjs';
+
+const mod = new ModuleBuilder('simdInt');
+mod.defineMemory(1);
+
+// Add two i32x4 vectors
+mod.defineFunction('add_i32x4', null,
+  [ValueType.Int32, ValueType.Int32, ValueType.Int32], (f, a) => {
+  a.get_local(f.getParameter(2));
+  a.get_local(f.getParameter(0));
+  a.load_v128(2, 0);
+  a.get_local(f.getParameter(1));
+  a.load_v128(2, 0);
+  a.add_i32x4();
+  a.store_v128(2, 0);
+}).withExport();
+
+// Element-wise min (signed)
+mod.defineFunction('min_s_i32x4', null,
+  [ValueType.Int32, ValueType.Int32, ValueType.Int32], (f, a) => {
+  a.get_local(f.getParameter(2));
+  a.get_local(f.getParameter(0));
+  a.load_v128(2, 0);
+  a.get_local(f.getParameter(1));
+  a.load_v128(2, 0);
+  a.min_s_i32x4();
+  a.store_v128(2, 0);
+}).withExport();
+
+// Extract lane 0
+mod.defineFunction('extract', [ValueType.Int32],
+  [ValueType.Int32, ValueType.Int32], (f, a) => {
+  a.get_local(f.getParameter(0));
+  a.load_v128(2, 0);
+  a.extract_lane_i32x4(0);
+}).withExport();
+
+// Splat a scalar to all 4 lanes
+mod.defineFunction('splat_i32x4', null,
+  [ValueType.Int32, ValueType.Int32], (f, a) => {
+  a.get_local(f.getParameter(0)); // dest
+  a.get_local(f.getParameter(1)); // scalar
+  a.splat_i32x4();
+  a.store_v128(2, 0);
+}).withExport();
+```
+
+## SIMD Shuffle & Swizzle
+
+Rearrange vector lanes with shuffle (static indices) and swizzle (dynamic indices):
+
+```typescript
+import { ModuleBuilder, ValueType } from 'webasmjs';
+
+const mod = new ModuleBuilder('simdShuffle');
+mod.defineMemory(1);
+
+// shuffle: pick 16 bytes from two source vectors by index
+// Indices 0-15 = first vector, 16-31 = second vector
+mod.defineFunction('interleave', null,
+  [ValueType.Int32, ValueType.Int32, ValueType.Int32], (f, a) => {
+  a.get_local(f.getParameter(2)); // dest
+  a.get_local(f.getParameter(0));
+  a.load_v128(2, 0); // vector A
+  a.get_local(f.getParameter(1));
+  a.load_v128(2, 0); // vector B
+  a.shuffle_i8x16(new Uint8Array([0, 16, 1, 17, 2, 18, 3, 19, 4, 20, 5, 21, 6, 22, 7, 23]));
+  a.store_v128(2, 0);
+}).withExport();
+
+// Reverse bytes within a vector
+mod.defineFunction('reverse', null,
+  [ValueType.Int32, ValueType.Int32], (f, a) => {
+  a.get_local(f.getParameter(1)); // dest
+  a.get_local(f.getParameter(0));
+  a.load_v128(2, 0);
+  a.get_local(f.getParameter(0));
+  a.load_v128(2, 0);
+  a.shuffle_i8x16(new Uint8Array([15, 14, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1, 0]));
+  a.store_v128(2, 0);
+}).withExport();
+
+// swizzle: rearrange bytes using a dynamic index vector
+mod.defineFunction('swizzle', null,
+  [ValueType.Int32, ValueType.Int32, ValueType.Int32], (f, a) => {
+  a.get_local(f.getParameter(2)); // dest
+  a.get_local(f.getParameter(0));
+  a.load_v128(2, 0); // data
+  a.get_local(f.getParameter(1));
+  a.load_v128(2, 0); // indices
+  a.swizzle_i8x16();
+  a.store_v128(2, 0);
+}).withExport();
+```
+
+## SIMD Widen & Narrow
+
+Convert between vector widths — narrow i16x8 to i8x16, extend i8x16 to i16x8:
+
+```typescript
+import { ModuleBuilder, ValueType } from 'webasmjs';
+
+const mod = new ModuleBuilder('simdWidenNarrow');
+mod.defineMemory(1);
+
+// Narrow two i16x8 vectors into one i8x16 (saturating, unsigned)
+mod.defineFunction('narrow_u', null,
+  [ValueType.Int32, ValueType.Int32, ValueType.Int32], (f, a) => {
+  a.get_local(f.getParameter(2));
+  a.get_local(f.getParameter(0));
+  a.load_v128(2, 0);
+  a.get_local(f.getParameter(1));
+  a.load_v128(2, 0);
+  a.narrow_i16x8_u_i8x16();
+  a.store_v128(2, 0);
+}).withExport();
+
+// Extend low half of i8x16 to i16x8 (signed)
+mod.defineFunction('extend_low_s', null,
+  [ValueType.Int32, ValueType.Int32], (f, a) => {
+  a.get_local(f.getParameter(1));
+  a.get_local(f.getParameter(0));
+  a.load_v128(2, 0);
+  a.extend_low_i8x16_s_i16x8();
+  a.store_v128(2, 0);
+}).withExport();
+```
+
+## SIMD Saturating Math
+
+Saturating add/sub that clamp on overflow instead of wrapping:
+
+```typescript
+import { ModuleBuilder, ValueType } from 'webasmjs';
+
+const mod = new ModuleBuilder('simdSat');
+mod.defineMemory(1);
+
+// Saturating unsigned add on i8x16
+mod.defineFunction('add_sat_u', null,
+  [ValueType.Int32, ValueType.Int32, ValueType.Int32], (f, a) => {
+  a.get_local(f.getParameter(2));
+  a.get_local(f.getParameter(0));
+  a.load_v128(2, 0);
+  a.get_local(f.getParameter(1));
+  a.load_v128(2, 0);
+  a.add_sat_u_i8x16();
+  a.store_v128(2, 0);
+}).withExport();
+
+// Saturating unsigned sub on i8x16
+mod.defineFunction('sub_sat_u', null,
+  [ValueType.Int32, ValueType.Int32, ValueType.Int32], (f, a) => {
+  a.get_local(f.getParameter(2));
+  a.get_local(f.getParameter(0));
+  a.load_v128(2, 0);
+  a.get_local(f.getParameter(1));
+  a.load_v128(2, 0);
+  a.sub_sat_u_i8x16();
+  a.store_v128(2, 0);
+}).withExport();
+
+// Regular (wrapping) add for comparison
+mod.defineFunction('add_wrap', null,
+  [ValueType.Int32, ValueType.Int32, ValueType.Int32], (f, a) => {
+  a.get_local(f.getParameter(2));
+  a.get_local(f.getParameter(0));
+  a.load_v128(2, 0);
+  a.get_local(f.getParameter(1));
+  a.load_v128(2, 0);
+  a.add_i8x16();
+  a.store_v128(2, 0);
+}).withExport();
+
+const instance = await mod.instantiate();
+const { add_sat_u, sub_sat_u, add_wrap, setByte, getByte } = instance.instance.exports;
+
+// A = [200, 100, 255, 0, 128, 50, 250, 10]
+// B = [100, 200, 10, 5, 128, 250, 50, 0]
+// add_sat_u: 200+100=255(clamped), 100+200=255, 255+10=255, ...
+// add_wrap:  200+100=44(wrapped),   100+200=44, ...
+```
+
+## Passive Data Segments
+
+Lazy-init memory with passive data segments and memory.init:
+
+```typescript
+import { ModuleBuilder, ValueType, BlockType } from 'webasmjs';
+
+const mod = new ModuleBuilder('passiveData');
+const mem = mod.defineMemory(1);
+mod.exportMemory(mem, 'memory');
+
+// Passive segment: not placed in memory until memory.init is called
+const greeting = new TextEncoder().encode('Hello, WebAssembly!');
+const dataSegment = mod.defineData(new Uint8Array([...greeting]));
+
+// Copy passive data into memory
+mod.defineFunction('init', null, [ValueType.Int32], (f, a) => {
+  a.get_local(f.getParameter(0)); // destination offset
+  a.const_i32(0);                  // source offset in data segment
+  a.const_i32(19);                 // length
+  a.memory_init(dataSegment._index, 0);
+}).withExport();
+
+// Drop data segment (free it after init)
+mod.defineFunction('drop', null, [], (f, a) => {
+  a.data_drop(dataSegment._index);
+}).withExport();
+
+const instance = await mod.instantiate();
+const { init, drop: dataDrop, memory } = instance.instance.exports;
+const view = new Uint8Array(memory.buffer);
+
+// Memory starts empty (passive segment not yet loaded)
+console.log('Before init:', view[0]); // 0
+
+init(0); // Load passive data at offset 0
+console.log('After init:', new TextDecoder().decode(view.slice(0, 19)));
+
+dataDrop(); // Free the data segment
+```
+
+## Bulk Table Operations
+
+table.fill and table.copy for bulk table manipulation:
+
+```typescript
+import { ModuleBuilder, ValueType, ElementType } from 'webasmjs';
+
+const mod = new ModuleBuilder('bulkTable');
+
+const add = mod.defineFunction('add', [ValueType.Int32],
+  [ValueType.Int32, ValueType.Int32], (f, a) => {
+  a.get_local(f.getParameter(0));
+  a.get_local(f.getParameter(1));
+  a.add_i32();
+}).withExport();
+
+const mul = mod.defineFunction('mul', [ValueType.Int32],
+  [ValueType.Int32, ValueType.Int32], (f, a) => {
+  a.get_local(f.getParameter(0));
+  a.get_local(f.getParameter(1));
+  a.mul_i32();
+}).withExport();
+
+const table = mod.defineTable(ElementType.AnyFunc, 8);
+mod.defineTableSegment(table, [add, mul], 0);
+
+// table.fill(start, ref, count)
+mod.defineFunction('fillWithAdd', null, [], (f, a) => {
+  a.const_i32(2);
+  a.ref_func(add);
+  a.const_i32(4);
+  a.table_fill(0);
+}).withExport();
+
+// table.copy(dest, src, count)
+mod.defineFunction('copySlots', null, [], (f, a) => {
+  a.const_i32(6);
+  a.const_i32(0);
+  a.const_i32(2);
+  a.table_copy(0, 0);
+}).withExport();
+```
+
+## Table Get/Set/Grow
+
+Dynamic table manipulation with table.get, table.set, and table.grow:
+
+```typescript
+import { ModuleBuilder, ValueType, ElementType } from 'webasmjs';
+
+const mod = new ModuleBuilder('tableOps');
+
+const double = mod.defineFunction('double', [ValueType.Int32],
+  [ValueType.Int32], (f, a) => {
+  a.get_local(f.getParameter(0));
+  a.const_i32(2);
+  a.mul_i32();
+}).withExport();
+
+const table = mod.defineTable(ElementType.AnyFunc, 2);
+mod.defineTableSegment(table, [double], 0);
+
+// table.set: place a function ref at an index
+mod.defineFunction('setSlot', null, [ValueType.Int32], (f, a) => {
+  a.get_local(f.getParameter(0));
+  a.ref_func(double);
+  a.table_set(0);
+}).withExport();
+
+// table.grow: add N slots (returns old size, or -1 on failure)
+mod.defineFunction('growTable', [ValueType.Int32],
+  [ValueType.Int32], (f, a) => {
+  a.ref_null(0x70); // fill new slots with null
+  a.get_local(f.getParameter(0));
+  a.table_grow(0);
+}).withExport();
+
+// table.size
+mod.defineFunction('size', [ValueType.Int32], [], (f, a) => {
+  a.table_size(0);
+}).withExport();
+
+// Check if a slot is null
+mod.defineFunction('isNull', [ValueType.Int32],
+  [ValueType.Int32], (f, a) => {
+  a.get_local(f.getParameter(0));
+  a.table_get(0);
+  a.ref_is_null();
+}).withExport();
+```
+
+## Try/Catch Exception Handling
+
+Full try/catch exception handling with multiple tags:
+
+```typescript
+import { ModuleBuilder, ValueType, BlockType } from 'webasmjs';
+
+const mod = new ModuleBuilder('tryCatch', { disableVerification: true });
+
+// Define two exception tags with different payloads
+const errorTag = mod.defineTag([ValueType.Int32]);     // error code
+const overflowTag = mod.defineTag([ValueType.Int32]);  // overflow value
+
+// Function that may throw
+mod.defineFunction('checkedAdd', [ValueType.Int32],
+  [ValueType.Int32, ValueType.Int32], (f, a) => {
+  const x = f.getParameter(0);
+  const y = f.getParameter(1);
+  const result = a.declareLocal(ValueType.Int32, 'result');
+
+  a.get_local(x);
+  a.get_local(y);
+  a.add_i32();
+  a.set_local(result);
+
+  // Check for "overflow" (result > 1000)
+  a.get_local(result);
+  a.const_i32(1000);
+  a.gt_i32();
+  a.if(BlockType.Void, () => {
+    a.get_local(result);
+    a.throw(overflowTag._index);
+  });
+
+  a.get_local(result);
+}).withExport();
+
+const bytes = mod.toBytes();
+console.log(`Module compiled: ${bytes.length} bytes`);
+console.log(`Valid: ${WebAssembly.validate(bytes.buffer)}`);
+```
+
+## f32 Math
+
+Single-precision float operations — min, max, abs, neg, sqrt, and f32 vs f64 precision:
+
+```typescript
+import { ModuleBuilder, ValueType } from 'webasmjs';
+
+const mod = new ModuleBuilder('f32math');
+
+mod.defineFunction('min', [ValueType.Float32],
+  [ValueType.Float32, ValueType.Float32], (f, a) => {
+  a.get_local(f.getParameter(0));
+  a.get_local(f.getParameter(1));
+  a.min_f32();
+}).withExport();
+
+mod.defineFunction('max', [ValueType.Float32],
+  [ValueType.Float32, ValueType.Float32], (f, a) => {
+  a.get_local(f.getParameter(0));
+  a.get_local(f.getParameter(1));
+  a.max_f32();
+}).withExport();
+
+mod.defineFunction('abs', [ValueType.Float32],
+  [ValueType.Float32], (f, a) => {
+  a.get_local(f.getParameter(0));
+  a.abs_f32();
+}).withExport();
+
+mod.defineFunction('sqrt', [ValueType.Float32],
+  [ValueType.Float32], (f, a) => {
+  a.get_local(f.getParameter(0));
+  a.sqrt_f32();
+}).withExport();
+
+// Compare f32 vs f64 precision
+mod.defineFunction('addF32', [ValueType.Float32],
+  [ValueType.Float32, ValueType.Float32], (f, a) => {
+  a.get_local(f.getParameter(0));
+  a.get_local(f.getParameter(1));
+  a.add_f32();
+}).withExport();
+
+mod.defineFunction('addF64', [ValueType.Float64],
+  [ValueType.Float64, ValueType.Float64], (f, a) => {
+  a.get_local(f.getParameter(0));
+  a.get_local(f.getParameter(1));
+  a.add_f64();
+}).withExport();
+
+const instance = await mod.instantiate();
+const { min, max, abs, sqrt, addF32, addF64 } = instance.instance.exports;
+
+console.log('min(3.14, 2.71) =', min(3.14, 2.71));
+console.log('max(3.14, 2.71) =', max(3.14, 2.71));
+console.log('abs(-42.5) =', abs(-42.5));
+console.log('sqrt(9.0) =', sqrt(9.0));
+console.log('f32: 0.1 + 0.2 =', addF32(0.1, 0.2));
+console.log('f64: 0.1 + 0.2 =', addF64(0.1, 0.2));
+```

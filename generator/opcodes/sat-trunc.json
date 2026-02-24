@@ -1,0 +1,146 @@
+[
+  {
+    "value": 0,
+    "name": "i32_trunc_sat_f32_s",
+    "mnemonic": "i32.trunc_sat_f32_s",
+    "friendlyName": "trunc_sat_f32_s_i32",
+    "immediate": null,
+    "controlFlow": null,
+    "pop": [
+      "Float32"
+    ],
+    "push": [
+      "Int32"
+    ],
+    "prefix": 252,
+    "feature": "sat-trunc",
+    "group": "sat-trunc",
+    "order": 185
+  },
+  {
+    "value": 1,
+    "name": "i32_trunc_sat_f32_u",
+    "mnemonic": "i32.trunc_sat_f32_u",
+    "friendlyName": "trunc_sat_f32_u_i32",
+    "immediate": null,
+    "controlFlow": null,
+    "pop": [
+      "Float32"
+    ],
+    "push": [
+      "Int32"
+    ],
+    "prefix": 252,
+    "feature": "sat-trunc",
+    "group": "sat-trunc",
+    "order": 186
+  },
+  {
+    "value": 2,
+    "name": "i32_trunc_sat_f64_s",
+    "mnemonic": "i32.trunc_sat_f64_s",
+    "friendlyName": "trunc_sat_f64_s_i32",
+    "immediate": null,
+    "controlFlow": null,
+    "pop": [
+      "Float64"
+    ],
+    "push": [
+      "Int32"
+    ],
+    "prefix": 252,
+    "feature": "sat-trunc",
+    "group": "sat-trunc",
+    "order": 187
+  },
+  {
+    "value": 3,
+    "name": "i32_trunc_sat_f64_u",
+    "mnemonic": "i32.trunc_sat_f64_u",
+    "friendlyName": "trunc_sat_f64_u_i32",
+    "immediate": null,
+    "controlFlow": null,
+    "pop": [
+      "Float64"
+    ],
+    "push": [
+      "Int32"
+    ],
+    "prefix": 252,
+    "feature": "sat-trunc",
+    "group": "sat-trunc",
+    "order": 188
+  },
+  {
+    "value": 4,
+    "name": "i64_trunc_sat_f32_s",
+    "mnemonic": "i64.trunc_sat_f32_s",
+    "friendlyName": "trunc_sat_f32_s_i64",
+    "immediate": null,
+    "controlFlow": null,
+    "pop": [
+      "Float32"
+    ],
+    "push": [
+      "Int64"
+    ],
+    "prefix": 252,
+    "feature": "sat-trunc",
+    "group": "sat-trunc",
+    "order": 189
+  },
+  {
+    "value": 5,
+    "name": "i64_trunc_sat_f32_u",
+    "mnemonic": "i64.trunc_sat_f32_u",
+    "friendlyName": "trunc_sat_f32_u_i64",
+    "immediate": null,
+    "controlFlow": null,
+    "pop": [
+      "Float32"
+    ],
+    "push": [
+      "Int64"
+    ],
+    "prefix": 252,
+    "feature": "sat-trunc",
+    "group": "sat-trunc",
+    "order": 190
+  },
+  {
+    "value": 6,
+    "name": "i64_trunc_sat_f64_s",
+    "mnemonic": "i64.trunc_sat_f64_s",
+    "friendlyName": "trunc_sat_f64_s_i64",
+    "immediate": null,
+    "controlFlow": null,
+    "pop": [
+      "Float64"
+    ],
+    "push": [
+      "Int64"
+    ],
+    "prefix": 252,
+    "feature": "sat-trunc",
+    "group": "sat-trunc",
+    "order": 191
+  },
+  {
+    "value": 7,
+    "name": "i64_trunc_sat_f64_u",
+    "mnemonic": "i64.trunc_sat_f64_u",
+    "friendlyName": "trunc_sat_f64_u_i64",
+    "immediate": null,
+    "controlFlow": null,
+    "pop": [
+      "Float64"
+    ],
+    "push": [
+      "Int64"
+    ],
+    "prefix": 252,
+    "feature": "sat-trunc",
+    "group": "sat-trunc",
+    "order": 192
+  }
+]

@@ -1,0 +1,15 @@
+{
+  "description": "WebAssembly opcode definitions, split by feature/proposal.",
+  "includes": [
+    "opcodes/core.json",
+    "opcodes/exception-handling.json",
+    "opcodes/tail-call.json",
+    "opcodes/sign-extend.json",
+    "opcodes/sat-trunc.json",
+    "opcodes/bulk-memory.json",
+    "opcodes/reference-types.json",
+    "opcodes/simd.json",
+    "opcodes/threads.json",
+    "opcodes/relaxed-simd.json"
+  ]
+}

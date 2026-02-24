@@ -45,8 +45,8 @@ test('Import Memory', async () => {
   expect((module.instance.exports.readMemory as CallableFunction)(0)).toBe(77);
 });
 
-test('Import Memory - Only one allowed', () => {
-  const moduleBuilder = new ModuleBuilder('test');
+test('Import Memory - Only one allowed (mvp)', () => {
+  const moduleBuilder = new ModuleBuilder('test', { target: 'mvp' });
   moduleBuilder.importMemory('mod', 'mem1', 1);
   expect(() => moduleBuilder.importMemory('mod', 'mem2', 1)).toThrow();
 });

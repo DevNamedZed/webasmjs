@@ -10,15 +10,20 @@ TypeScript library for programmatically generating WebAssembly modules. Build WA
 ## Features
 
 - Fluent builder pattern for constructing WASM modules
-- Full instruction set — arithmetic, control flow, memory, tables, globals
-- i32, i64, f32, f64 value types with BigInt support for i64
+- **531 instructions** — arithmetic, control flow, memory, tables, globals, SIMD, atomics, exception handling
+- **Target system** — `mvp`, `2.0`, `3.0`, `latest` with automatic feature gating
+- i32, i64, f32, f64, v128 value types with BigInt support for i64
+- **128-bit SIMD** — 236 vector instructions + 20 relaxed SIMD
+- **Threads & atomics** — shared memory, 67 atomic operations
+- **Exception handling** — tags, throw, try/catch/rethrow
+- **Memory64** — 64-bit addressed memory
+- Tail calls, multi-value returns, bulk memory, reference types
 - Function imports/exports with host interop
 - Memory and table management with import/export
-- WAT text format output via `TextModuleWriter`
-- WAT text format parsing via `parseWat()`
+- WAT text format output and parsing
 - Binary reader for inspecting compiled modules
 - Compile-time verification (control flow + operand stack)
-- Debug name section generation
+- Data-driven — opcodes generated from `generator/opcodes.json`
 - Zero production dependencies
 
 ## Install
@@ -53,6 +58,8 @@ The entry point for building a module. Create an instance, define functions/memo
 
 ```typescript
 const mod = new ModuleBuilder('myModule', {
+  target: 'latest',              // 'mvp' | '2.0' | '3.0' | 'latest'
+  features: [],                  // additional features beyond target
   generateNameSection: true,
   disableVerification: false,
 });
@@ -120,10 +127,16 @@ const instance = await mod.instantiate({
 ### Memory
 
 ```typescript
-const mem = mod.defineMemory(1, 4); // 1 page initial, 4 max (64KB per page)
+const mem = mod.defineMemory(1, 4);       // 1 page initial, 4 max (64KB per page)
 mod.exportMemory(mem, 'memory');
 
-// Or import memory
+// Shared memory (for threads/atomics — requires maximum size)
+const shared = mod.defineMemory(1, 10, true); // shared = true
+
+// 64-bit addressed memory
+const mem64 = mod.defineMemory(1, 100, false, true); // memory64 = true
+
+// Import memory
 mod.importMemory('env', 'mem', 1, 4);
 ```
 
@@ -152,7 +165,7 @@ See the [API Reference](docs/api.md) for complete documentation.
 
 ## Playground
 
-Try webasmjs in the browser with the [interactive playground](https://devnamedzed.github.io/webasmjs/). It includes examples for arithmetic, control flow, memory, tables, imports, floating point, i64/BigInt, algorithms, and WAT parsing.
+Try webasmjs in the browser with the [interactive playground](https://devnamedzed.github.io/webasmjs/). It includes 40+ examples covering arithmetic, control flow, memory, tables, imports, floating point, i64/BigInt, SIMD, algorithms, WAT parsing, and post-MVP features.
 
 To run the playground locally:
 

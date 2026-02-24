@@ -130,3 +130,154 @@ test('TextModuleWriter - block/loop indentation', () => {
   expect(text).toContain('loop');
   expect(text).toContain('end');
 });
+
+describe('TextModuleWriter formatting', () => {
+  test('function with no body outputs single line', () => {
+    const mod = new ModuleBuilder('test', { disableVerification: true });
+    mod.defineFunction('empty', null, []);
+    const wat = mod.toString();
+    expect(wat).toContain('(func $empty');
+    expect(wat).toContain(')');
+  });
+
+  test('function with locals in WAT output', () => {
+    const mod = new ModuleBuilder('test');
+    mod.defineFunction('withLocals', [ValueType.Int32], [], (f, a) => {
+      const x = a.declareLocal(ValueType.Int32);
+      a.const_i32(5);
+      a.set_local(x);
+      a.get_local(x);
+    }).withExport();
+    const wat = mod.toString();
+    expect(wat).toContain('(local i32)');
+  });
+
+  test('block with result type in WAT output', () => {
+    const mod = new ModuleBuilder('test');
+    mod.defineFunction('blockResult', [ValueType.Int32], [], (f, a) => {
+      const label = a.block(BlockType.Int32);
+      a.const_i32(42);
+      a.br(label);
+      a.end();
+    }).withExport();
+    const wat = mod.toString();
+    expect(wat).toContain('block');
+    expect(wat).toContain('(result i32)');
+  });
+
+  test('if/else indentation in WAT output', () => {
+    const mod = new ModuleBuilder('test');
+    mod.defineFunction('ifElse', [ValueType.Int32], [ValueType.Int32], (f, a) => {
+      a.get_local(f.getParameter(0));
+      a.if(BlockType.Int32);
+      a.const_i32(1);
+      a.else();
+      a.const_i32(0);
+      a.end();
+    }).withExport();
+    const wat = mod.toString();
+    expect(wat).toContain('if');
+    expect(wat).toContain('else');
+    expect(wat).toContain('end');
+  });
+
+  test('memory immediate offset/align in WAT output', () => {
+    const mod = new ModuleBuilder('test');
+    mod.defineMemory(1);
+    mod.defineFunction('loadAligned', [ValueType.Int32], [], (f, a) => {
+      a.const_i32(8);
+      a.load_i32(2, 4);
+    }).withExport();
+    const wat = mod.toString();
+    expect(wat).toContain('offset=');
+    expect(wat).toContain('align=');
+  });
+
+  test('WAT output for start section', () => {
+    const mod = new ModuleBuilder('test');
+    const init = mod.defineFunction('init', null, [], (f, a) => {});
+    mod.setStartFunction(init);
+    const wat = mod.toString();
+    expect(wat).toContain('(start');
+  });
+
+  test('WAT global init expression with get_global', () => {
+    const mod = new ModuleBuilder('test', { disableVerification: true });
+    const base = mod.defineGlobal(ValueType.Int32, false, 10);
+    const g = mod.defineGlobal(ValueType.Int32, false);
+    g.value(base);
+    const wat = mod.toString();
+    expect(wat).toContain('global.get');
+  });
+});
+
+describe('TextModuleWriter sections', () => {
+  test('WAT output for imported table', () => {
+    const mod = new ModuleBuilder('test');
+    mod.importTable('env', 'tbl', ElementType.AnyFunc, 2, 10);
+    mod.defineFunction('noop', null, [], (f, a) => {}).withExport();
+    const text = mod.toString();
+
+    expect(text).toContain('(import "env" "tbl"');
+    expect(text).toContain('(table');
+    expect(text).toContain('anyfunc');
+    expect(text).toContain('2 10');
+  });
+
+  test('WAT output for imported memory', () => {
+    const mod = new ModuleBuilder('test');
+    mod.importMemory('env', 'mem', 1, 16);
+    mod.defineFunction('noop', null, [], (f, a) => {}).withExport();
+    const text = mod.toString();
+
+    expect(text).toContain('(import "env" "mem"');
+    expect(text).toContain('(memory');
+    expect(text).toContain('1 16');
+  });
+
+  test('WAT output for imported global (mutable)', () => {
+    const mod = new ModuleBuilder('test');
+    mod.importGlobal('env', 'g', ValueType.Int32, true);
+    mod.defineFunction('noop', null, [], (f, a) => {}).withExport();
+    const text = mod.toString();
+
+    expect(text).toContain('(import "env" "g"');
+    expect(text).toContain('(global');
+    expect(text).toContain('(mut i32)');
+  });
+
+  test('WAT output for element segment', () => {
+    const mod = new ModuleBuilder('test');
+    const fn1 = mod.defineFunction('fn1', [ValueType.Int32], [], (f, a) => {
+      a.const_i32(1);
+    });
+    const fn2 = mod.defineFunction('fn2', [ValueType.Int32], [], (f, a) => {
+      a.const_i32(2);
+    });
+    const table = mod.defineTable(ElementType.AnyFunc, 2, 2);
+    table.defineTableSegment([fn1, fn2], 0);
+    mod.defineFunction('noop', null, [], (f, a) => {}).withExport();
+    const text = mod.toString();
+
+    expect(text).toContain('(elem');
+    expect(text).toContain('i32.const 0');
+    expect(text).toContain('func');
+  });
+
+  test('WAT output with non-ASCII data - bytes < 0x20 should be escaped', () => {
+    const mod = new ModuleBuilder('test');
+    mod.defineFunction('noop', null, [], (f, a) => {}).withExport();
+    // Data with bytes that need escaping: 0x00, 0x01, 0x0a (newline), 0x1f
+    mod.defineData(new Uint8Array([0x00, 0x01, 0x0a, 0x1f, 0x41]), 0);
+    mod.defineMemory(1);
+    const text = mod.toString();
+
+    // Bytes < 0x20 should be escaped as \XX hex
+    expect(text).toContain('\\00');
+    expect(text).toContain('\\01');
+    expect(text).toContain('\\0a');
+    expect(text).toContain('\\1f');
+    // 0x41 = 'A', should appear as literal
+    expect(text).toContain('A');
+  });
+});

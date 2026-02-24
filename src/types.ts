@@ -94,6 +94,8 @@ export const SectionType = {
   Element: { name: 'Element', value: 9 } as const,
   Code: { name: 'Code', value: 10 } as const,
   Data: { name: 'Data', value: 11 } as const,
+  DataCount: { name: 'DataCount', value: 12 } as const,
+  Tag: { name: 'Tag', value: 13 } as const,
   createCustom(name: string): SectionTypeDescriptor {
     return { name, value: 0 };
   },
@@ -148,12 +150,22 @@ export type WasmFeature =
   | 'bulk-memory'
   | 'reference-types'
   | 'simd'
-  | 'multi-value';
+  | 'multi-value'
+  | 'mutable-globals'
+  | 'tail-call'
+  | 'extended-const'
+  | 'threads'
+  | 'exception-handling'
+  | 'multi-memory'
+  | 'multi-table'
+  | 'relaxed-simd'
+  | 'memory64'
+  | 'gc';
 
 /**
  * WASM version targets. Each target enables a set of features.
  */
-export type WasmTarget = 'mvp' | '2.0' | 'latest';
+export type WasmTarget = 'mvp' | '2.0' | '3.0' | 'latest';
 
 /**
  * Options for module building.

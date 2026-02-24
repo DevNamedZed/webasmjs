@@ -117,3 +117,33 @@ test('writeBytes from Uint8Array', () => {
   w.writeBytes(new Uint8Array([10, 20, 30]));
   expect(Array.from(w.toArray())).toEqual([10, 20, 30]);
 });
+
+describe('BinaryWriter encoding', () => {
+  test('writeString with UTF-8 characters', () => {
+    const writer = new BinaryWriter();
+    writer.writeString('café');
+    const bytes = writer.toArray();
+    expect(bytes.length).toBeGreaterThan(4); // UTF-8 'é' is 2 bytes
+  });
+
+  test('writeVarInt64 with negative bigint', () => {
+    const writer = new BinaryWriter();
+    writer.writeVarInt64(-1n);
+    const bytes = writer.toArray();
+    expect(bytes.length).toBeGreaterThan(0);
+  });
+
+  test('writeVarInt64 with large positive bigint', () => {
+    const writer = new BinaryWriter();
+    writer.writeVarInt64(0x7FFFFFFFFFFFFFFFn);
+    const bytes = writer.toArray();
+    expect(bytes.length).toBeGreaterThan(0);
+  });
+
+  test('writeVarUInt32 with max safe value', () => {
+    const writer = new BinaryWriter();
+    writer.writeVarUInt32(0xFFFFFFFF);
+    const bytes = writer.toArray();
+    expect(bytes.length).toBe(5); // Max 5 bytes for 32-bit varuint
+  });
+});

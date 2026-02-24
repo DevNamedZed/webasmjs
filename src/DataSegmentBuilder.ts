@@ -1,14 +1,28 @@
 import InitExpressionEmitter from './InitExpressionEmitter';
 import BinaryWriter from './BinaryWriter';
 import GlobalBuilder from './GlobalBuilder';
-import { InitExpressionType, ValueType } from './types';
+import { InitExpressionType, ValueType, WasmFeature } from './types';
 
 export default class DataSegmentBuilder {
   _data: Uint8Array;
   _initExpressionEmitter: InitExpressionEmitter | null = null;
+  _passive: boolean = false;
+  _memoryIndex: number = 0;
+  _features: Set<WasmFeature>;
 
-  constructor(data: Uint8Array) {
+  constructor(data: Uint8Array, features?: Set<WasmFeature>) {
     this._data = data;
+    this._features = features || new Set();
+  }
+
+  passive(): this {
+    this._passive = true;
+    return this;
+  }
+
+  memoryIndex(index: number): this {
+    this._memoryIndex = index;
+    return this;
   }
 
   createInitEmitter(callback?: (asm: InitExpressionEmitter) => void): InitExpressionEmitter {
@@ -18,7 +32,8 @@ export default class DataSegmentBuilder {
 
     this._initExpressionEmitter = new InitExpressionEmitter(
       InitExpressionType.Data,
-      ValueType.Int32
+      ValueType.Int32,
+      this._features
     );
     if (callback) {
       callback(this._initExpressionEmitter);
@@ -45,11 +60,26 @@ export default class DataSegmentBuilder {
   }
 
   write(writer: BinaryWriter): void {
+    if (this._passive) {
+      // Passive segment: kind=1, no memory index, no offset expression
+      writer.writeVarUInt32(1);
+      writer.writeVarUInt32(this._data.length);
+      writer.writeBytes(this._data);
+      return;
+    }
+
     if (!this._initExpressionEmitter) {
       throw new Error('The initialization expression was not defined.');
     }
 
-    writer.writeVarUInt32(0);
+    if (this._memoryIndex !== 0) {
+      // Active segment with explicit memory index: kind=2
+      writer.writeVarUInt32(2);
+      writer.writeVarUInt32(this._memoryIndex);
+    } else {
+      // Active segment with default memory 0: kind=0
+      writer.writeVarUInt32(0);
+    }
     this._initExpressionEmitter.write(writer);
     writer.writeVarUInt32(this._data.length);
     writer.writeBytes(this._data);

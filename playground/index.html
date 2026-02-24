@@ -91,23 +91,22 @@
     margin-left: auto;
   }
 
-  .panels {
+  /* ─── Main split view ─── */
+
+  .main {
     display: flex;
     flex: 1;
     overflow: hidden;
   }
 
-  .panel {
+  .editor-pane {
     flex: 1;
     display: flex;
     flex-direction: column;
-    border-right: 1px solid #313244;
-    min-width: 0;
+    min-width: 200px;
   }
 
-  .panel:last-child { border-right: none; }
-
-  .panel-header {
+  .pane-header {
     padding: 8px 16px;
     font-size: 11px;
     font-weight: 600;
@@ -134,6 +133,65 @@
     outline: none;
   }
 
+  /* ─── Resize handle ─── */
+
+  .resize-handle {
+    width: 4px;
+    cursor: col-resize;
+    background: #313244;
+    flex-shrink: 0;
+    transition: background 0.15s;
+  }
+
+  .resize-handle:hover,
+  .resize-handle.active {
+    background: #89b4fa;
+  }
+
+  /* ─── Output pane with tabs ─── */
+
+  .output-pane {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    min-width: 200px;
+  }
+
+  .tab-bar {
+    display: flex;
+    background: #181825;
+    border-bottom: 1px solid #313244;
+    flex-shrink: 0;
+  }
+
+  .tab {
+    padding: 8px 16px;
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.8px;
+    color: #6c7086;
+    background: transparent;
+    border: none;
+    border-bottom: 2px solid transparent;
+    cursor: pointer;
+    transition: all 0.15s;
+    font-family: inherit;
+  }
+
+  .tab:hover { color: #a6adc8; }
+  .tab.active {
+    color: #cdd6f4;
+    border-bottom-color: #89b4fa;
+  }
+
+  .tab-content {
+    flex: 1;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+  }
+
   .output {
     flex: 1;
     overflow: auto;
@@ -147,8 +205,101 @@
 
   .output .error { color: #f38ba8; }
 
+  .tab-panel { display: none; }
+  .tab-panel.active { display: flex; flex-direction: column; flex: 1; }
+
   #watOutput { color: #a6e3a1; }
   #runOutput { color: #f9e2af; }
+
+  /* ─── Console drawer ─── */
+
+  .console-drawer {
+    flex-shrink: 0;
+    background: #181825;
+    border-top: 1px solid #313244;
+    display: flex;
+    flex-direction: column;
+  }
+
+  .console-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 16px;
+    cursor: pointer;
+    user-select: none;
+    flex-shrink: 0;
+  }
+
+  .console-header:hover { background: #1e1e2e; }
+
+  .console-chevron {
+    font-size: 10px;
+    color: #6c7086;
+    transition: transform 0.2s;
+    display: inline-block;
+  }
+
+  .console-drawer.open .console-chevron {
+    transform: rotate(180deg);
+  }
+
+  .console-label {
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.8px;
+    color: #a6adc8;
+  }
+
+  .console-badge {
+    font-size: 10px;
+    padding: 0 6px;
+    border-radius: 8px;
+    background: #45475a;
+    color: #a6adc8;
+    display: none;
+  }
+
+  .console-drawer:not(.open) .console-badge.has-messages {
+    display: inline;
+  }
+
+  .console-clear {
+    margin-left: auto;
+    padding: 2px 8px;
+    border-radius: 4px;
+    border: 1px solid #45475a;
+    background: transparent;
+    color: #6c7086;
+    font-size: 11px;
+    cursor: pointer;
+    font-family: inherit;
+  }
+
+  .console-clear:hover {
+    background: #313244;
+    color: #a6adc8;
+  }
+
+  .console-body {
+    display: none;
+    overflow: auto;
+    padding: 8px 16px;
+    font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
+    font-size: 13px;
+    line-height: 1.6;
+    white-space: pre-wrap;
+    word-break: break-all;
+    color: #f9e2af;
+    height: 180px;
+  }
+
+  .console-drawer.open .console-body {
+    display: block;
+  }
+
+  .console-body .error { color: #f38ba8; }
 
   /* ─── Example Picker Dialog ─── */
 
@@ -167,7 +318,7 @@
     background: #1e1e2e;
     border: 1px solid #45475a;
     border-radius: 12px;
-    width: 720px;
+    width: 840px;
     max-width: 90vw;
     max-height: 80vh;
     display: flex;
@@ -202,6 +353,30 @@
 
   .dialog-search::placeholder { color: #6c7086; }
   .dialog-search:focus { border-color: #89b4fa; }
+
+  .dialog-search-row {
+    display: flex;
+    gap: 8px;
+  }
+
+  .filter-select {
+    padding: 8px 12px;
+    border-radius: 6px;
+    border: 1px solid #45475a;
+    background: #313244;
+    color: #cdd6f4;
+    font-size: 13px;
+    outline: none;
+    cursor: pointer;
+    font-family: inherit;
+    min-width: 140px;
+    transition: border-color 0.15s;
+  }
+
+  .filter-select:focus { border-color: #89b4fa; }
+
+  .filter-select option { background: #313244; color: #cdd6f4; }
+  .filter-select optgroup { color: #6c7086; font-style: normal; }
 
   .dialog-body {
     overflow-y: auto;
@@ -274,6 +449,29 @@
     white-space: nowrap;
     width: 100%;
   }
+
+  .dialog-card-meta {
+    display: flex;
+    gap: 4px;
+    margin-top: 4px;
+    flex-wrap: wrap;
+  }
+
+  .card-target {
+    font-size: 9px;
+    padding: 1px 5px;
+    border-radius: 4px;
+    background: #313244;
+    color: #6c7086;
+  }
+
+  .card-feature {
+    font-size: 9px;
+    padding: 1px 5px;
+    border-radius: 4px;
+    background: #1e3a5f;
+    color: #89b4fa;
+  }
 </style>
 </head>
 <body>
@@ -287,19 +485,31 @@
     <button id="runBtn">&#9654; Run</button>
     <span class="hint">Ctrl+Enter to run</span>
   </header>
-  <div class="panels">
-    <div class="panel">
-      <div class="panel-header">JavaScript</div>
+  <div class="main">
+    <div class="editor-pane">
+      <div class="pane-header">JavaScript</div>
       <textarea id="editor" spellcheck="false"></textarea>
     </div>
-    <div class="panel">
-      <div class="panel-header">WAT Output</div>
-      <div id="watOutput" class="output"></div>
+    <div class="resize-handle" id="resizeHandle"></div>
+    <div class="output-pane">
+      <div class="tab-bar">
+        <button class="tab active" data-tab="wat">WAT</button>
+        <button class="tab" data-tab="output">Output</button>
+      </div>
+      <div class="tab-content">
+        <div id="watOutput" class="output tab-panel active"></div>
+        <div id="runOutput" class="output tab-panel"></div>
+      </div>
     </div>
-    <div class="panel">
-      <div class="panel-header">Run Output</div>
-      <div id="runOutput" class="output"></div>
+  </div>
+  <div class="console-drawer" id="consoleDrawer">
+    <div class="console-header" id="consoleToggle">
+      <span class="console-chevron">&#9662;</span>
+      <span class="console-label">Console</span>
+      <span class="console-badge" id="consoleBadge">0</span>
+      <button class="console-clear" id="consoleClear">Clear</button>
     </div>
+    <div class="console-body" id="consoleOutput"></div>
   </div>
   <script src="playground.bundle.js"></script>
 </body>

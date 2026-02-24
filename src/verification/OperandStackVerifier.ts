@@ -285,7 +285,7 @@ export default class OperandStackVerifier {
   _getFuncType(opCode: OpCodeDef, immediate: Immediate | null): FuncTypeBuilder | null {
     let funcType: FuncTypeBuilder | null = null;
 
-    if (opCode === (OpCodes as any).call) {
+    if (opCode === (OpCodes as any).call || opCode === (OpCodes as any).return_call) {
       if (immediate!.values[0] instanceof ImportBuilder) {
         funcType = immediate!.values[0].data as FuncTypeBuilder;
       } else if (immediate!.values[0] && 'funcTypeBuilder' in immediate!.values[0]) {
@@ -293,7 +293,7 @@ export default class OperandStackVerifier {
       } else {
         throw new VerificationError('Error getting funcType for call, invalid immediate.');
       }
-    } else if (opCode === (OpCodes as any).call_indirect) {
+    } else if (opCode === (OpCodes as any).call_indirect || opCode === (OpCodes as any).return_call_indirect) {
       if (immediate!.values[0] instanceof FuncTypeBuilder) {
         funcType = immediate!.values[0];
       } else {

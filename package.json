@@ -8,6 +8,7 @@
     "lib"
   ],
   "scripts": {
+    "generate": "npx tsx generator/index.ts",
     "build": "tsc --build",
     "clean": "tsc --build --clean",
     "clean:build": "rm -rf build",
@@ -18,7 +19,7 @@
     "examples": "npx tsx examples/showcase/run-examples.ts",
     "examples:cdk": "npx tsx examples/aws-cdk-comparison/run-examples.ts",
     "examples:all": "npm run examples && npm run examples:cdk",
-    "playground": "npm run dev --prefix playground",
+    "playground": "npx tsx playground/build.ts --serve",
     "prepare": "husky"
   },
   "jest-junit": {

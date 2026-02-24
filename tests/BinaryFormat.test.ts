@@ -1,4 +1,19 @@
-import { ModuleBuilder, BinaryReader, ValueType, ElementType } from '../src/index';
+import {
+  ModuleBuilder,
+  BinaryReader,
+  ValueType,
+  ElementType,
+  ElementSegmentBuilder,
+  Instruction,
+  LocalBuilder,
+  LabelBuilder,
+  ResizableLimits,
+  GlobalType,
+  MemoryType,
+  TableType,
+} from '../src/index';
+import BinaryWriter from '../src/BinaryWriter';
+import OpCodes from '../src/OpCodes';
 
 test('Binary Format - magic header and version', () => {
   const mod = new ModuleBuilder('empty');
@@ -148,4 +163,185 @@ test('Binary Format - section ordering', () => {
   expect(standardSections).toContain(3); // Function
   expect(standardSections).toContain(7); // Export
   expect(standardSections).toContain(10); // Code
+});
+
+describe('ElementSegmentBuilder', () => {
+  test('unsupported offset type throws', () => {
+    const mod = new ModuleBuilder('test');
+    const table = mod.defineTable(ElementType.AnyFunc, 1);
+    const fn = mod.defineFunction('f', null, [], (f, a) => {});
+    const seg = new ElementSegmentBuilder(table, [fn]);
+    expect(() => (seg as any).offset(true)).toThrow('Unsupported offset');
+  });
+
+  test('write() without init expression throws', () => {
+    const mod = new ModuleBuilder('test');
+    const table = mod.defineTable(ElementType.AnyFunc, 1);
+    const fn = mod.defineFunction('f', null, [], (f, a) => {});
+    const seg = new ElementSegmentBuilder(table, [fn]);
+    const writer = new BinaryWriter();
+    expect(() => seg.write(writer)).toThrow('initialization expression was not defined');
+  });
+
+  test('toBytes() with ImportBuilder function entries', () => {
+    const mod = new ModuleBuilder('test');
+    const table = mod.defineTable(ElementType.AnyFunc, 2);
+    const imp = mod.importFunction('env', 'log', null, [ValueType.Int32]);
+    const fn = mod.defineFunction('f', null, [], (f, a) => {});
+    const seg = new ElementSegmentBuilder(table, [imp, fn]);
+    seg.offset(0);
+    const bytes = seg.toBytes();
+    expect(bytes).toBeInstanceOf(Uint8Array);
+    expect(bytes.length).toBeGreaterThan(0);
+  });
+});
+
+describe('Builder toBytes()', () => {
+  test('ExportBuilder toBytes()', () => {
+    const mod = new ModuleBuilder('test');
+    const fn = mod.defineFunction('f', null, [], (f, a) => {});
+    const exp = mod.exportFunction(fn, 'f');
+    const bytes = exp.toBytes();
+    expect(bytes).toBeInstanceOf(Uint8Array);
+    expect(bytes.length).toBeGreaterThan(0);
+  });
+
+  test('ImportBuilder toBytes()', () => {
+    const mod = new ModuleBuilder('test');
+    const imp = mod.importFunction('env', 'log', null, [ValueType.Int32]);
+    const bytes = imp.toBytes();
+    expect(bytes).toBeInstanceOf(Uint8Array);
+    expect(bytes.length).toBeGreaterThan(0);
+  });
+
+  test('CustomSectionBuilder toBytes()', () => {
+    const mod = new ModuleBuilder('test');
+    const cs = mod.defineCustomSection('mySection', new Uint8Array([0xDE, 0xAD]));
+    const bytes = cs.toBytes();
+    expect(bytes).toBeInstanceOf(Uint8Array);
+    expect(bytes.length).toBeGreaterThan(0);
+  });
+
+  test('Instruction toBytes()', () => {
+    const instr = new Instruction(OpCodes.nop, null);
+    const bytes = instr.toBytes();
+    expect(bytes).toBeInstanceOf(Uint8Array);
+    expect(bytes.length).toBeGreaterThan(0);
+  });
+
+  test('LocalBuilder toBytes()', () => {
+    const local = new LocalBuilder(ValueType.Int32, null, 0, 1);
+    const bytes = local.toBytes();
+    expect(bytes).toBeInstanceOf(Uint8Array);
+  });
+
+  test('LabelBuilder properties', () => {
+    const label = new LabelBuilder();
+    expect(label.isResolved).toBe(false);
+    expect(label.block).toBeNull();
+  });
+
+  test('ResizableLimits toBytes()', () => {
+    const limits = new ResizableLimits(1, 10);
+    const bytes = limits.toBytes();
+    expect(bytes).toBeInstanceOf(Uint8Array);
+    expect(bytes.length).toBeGreaterThan(0);
+  });
+
+  test('GlobalType toBytes()', () => {
+    const gt = new GlobalType(ValueType.Int32, true);
+    const bytes = gt.toBytes();
+    expect(bytes).toBeInstanceOf(Uint8Array);
+    expect(gt.mutable).toBe(true);
+    expect(gt.valueType).toBe(ValueType.Int32);
+  });
+
+  test('MemoryType toBytes()', () => {
+    const mt = new MemoryType(new ResizableLimits(1, 16));
+    const bytes = mt.toBytes();
+    expect(bytes).toBeInstanceOf(Uint8Array);
+  });
+
+  test('TableType toBytes()', () => {
+    const tt = new TableType(ElementType.AnyFunc, new ResizableLimits(1, 10));
+    const bytes = tt.toBytes();
+    expect(bytes).toBeInstanceOf(Uint8Array);
+  });
+});
+
+describe('ElementSegmentBuilder offsets', () => {
+  test('Callback offset for element segment', async () => {
+    const mod = new ModuleBuilder('test');
+    const fn1 = mod.defineFunction('fn1', [ValueType.Int32], [], (f, a) => {
+      a.const_i32(10);
+    });
+    const fn2 = mod.defineFunction('fn2', [ValueType.Int32], [], (f, a) => {
+      a.const_i32(20);
+    });
+    const table = mod.defineTable(ElementType.AnyFunc, 4, 4);
+    // Use callback to set offset to 1
+    mod.defineTableSegment(table, [fn1, fn2], (asm: any) => {
+      asm.const_i32(1);
+    });
+    const funcType = mod.defineFuncType([ValueType.Int32], []);
+    mod.defineFunction('dispatch', [ValueType.Int32], [ValueType.Int32], (f, a) => {
+      a.get_local(0);
+      a.call_indirect(funcType);
+    }).withExport();
+
+    const instance = await mod.instantiate();
+    const exports = instance.instance.exports as any;
+    // fn1 is at table index 1, fn2 at table index 2
+    expect(exports.dispatch(1)).toBe(10);
+    expect(exports.dispatch(2)).toBe(20);
+  });
+
+  test('createInitEmitter called twice throws', () => {
+    const mod = new ModuleBuilder('test');
+    const fn = mod.defineFunction('fn', null, [], (f, a) => {});
+    const table = mod.defineTable(ElementType.AnyFunc, 1, 1);
+    const seg = new ElementSegmentBuilder(table, [fn]);
+    seg.createInitEmitter((asm) => {
+      asm.const_i32(0);
+    });
+    expect(() => {
+      seg.createInitEmitter((asm) => {
+        asm.const_i32(0);
+      });
+    }).toThrow('Initialization expression emitter has already been created.');
+  });
+
+  test('Element segment runtime verification - table.get to read back entries', async () => {
+    const mod = new ModuleBuilder('test');
+    const fn1 = mod.defineFunction('fn1', [ValueType.Int32], [], (f, a) => {
+      a.const_i32(100);
+    });
+    const fn2 = mod.defineFunction('fn2', [ValueType.Int32], [], (f, a) => {
+      a.const_i32(200);
+    });
+    const table = mod.defineTable(ElementType.AnyFunc, 2, 2);
+    table.withExport('tbl');
+    table.defineTableSegment([fn1, fn2], 0);
+
+    // Also export functions so we can verify via indirect call
+    const funcType = mod.defineFuncType([ValueType.Int32], []);
+    mod.defineFunction('callAt', [ValueType.Int32], [ValueType.Int32], (f, a) => {
+      a.get_local(0);
+      a.call_indirect(funcType);
+    }).withExport();
+
+    const instance = await mod.instantiate();
+    const exports = instance.instance.exports as any;
+    // Verify via indirect call
+    expect(exports.callAt(0)).toBe(100);
+    expect(exports.callAt(1)).toBe(200);
+
+    // Verify table export exists
+    const tbl = exports.tbl as WebAssembly.Table;
+    expect(tbl).toBeDefined();
+    expect(tbl.length).toBe(2);
+    // table.get returns a wrapped function
+    expect(tbl.get(0)!()).toBe(100);
+    expect(tbl.get(1)!()).toBe(200);
+  });
 });

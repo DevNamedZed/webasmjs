@@ -22,6 +22,7 @@ import ResizableLimits from './ResizableLimits';
 import TableBuilder from './TableBuilder';
 import TableType from './TableType';
 import TextModuleWriter from './TextModuleWriter';
+import TagBuilder from './TagBuilder';
 import CustomSectionBuilder from './CustomSectionBuilder';
 import FunctionEmitter from './FunctionEmitter';
 import VerificationError from './verification/VerificationError';
@@ -34,8 +35,12 @@ export default class ModuleBuilder {
 
   static readonly targetFeatures: Record<WasmTarget, WasmFeature[]> = {
     'mvp': [],
-    '2.0': ['sign-extend', 'sat-trunc', 'bulk-memory', 'reference-types', 'multi-value'],
-    'latest': ['sign-extend', 'sat-trunc', 'bulk-memory', 'reference-types', 'simd', 'multi-value'],
+    '2.0': ['sign-extend', 'sat-trunc', 'bulk-memory', 'reference-types', 'multi-value', 'mutable-globals'],
+    '3.0': ['sign-extend', 'sat-trunc', 'bulk-memory', 'reference-types', 'multi-value', 'mutable-globals',
+            'simd', 'tail-call', 'exception-handling', 'threads', 'multi-memory', 'multi-table', 'memory64', 'extended-const'],
+    'latest': ['sign-extend', 'sat-trunc', 'bulk-memory', 'reference-types', 'multi-value', 'mutable-globals',
+               'simd', 'tail-call', 'exception-handling', 'threads', 'multi-memory', 'multi-table', 'memory64', 'extended-const',
+               'relaxed-simd', 'gc'],
   };
 
   _name: string;
@@ -48,6 +53,7 @@ export default class ModuleBuilder {
   _exports: ExportBuilder[] = [];
   _elements: ElementSegmentBuilder[] = [];
   _data: DataSegmentBuilder[] = [];
+  _tags: TagBuilder[] = [];
   _customSections: CustomSectionBuilder[] = [];
   _startFunction: FunctionBuilder | null = null;
   _importsIndexSpace = {
@@ -101,8 +107,8 @@ export default class ModuleBuilder {
       normalizedReturnTypes = returnTypes;
     }
 
-    if (normalizedReturnTypes.length > 1) {
-      throw new Error('A method can only return zero to one values.');
+    if (normalizedReturnTypes.length > 1 && !this._resolvedFeatures.has('multi-value')) {
+      throw new Error('A method can only return zero to one values. Enable the multi-value feature to allow multiple return values.');
     }
 
     const funcTypeKey = FuncTypeBuilder.createKey(normalizedReturnTypes, parameters);
@@ -194,7 +200,8 @@ export default class ModuleBuilder {
     moduleName: string,
     name: string,
     initialSize: number,
-    maximumSize: number | null = null
+    maximumSize: number | null = null,
+    shared: boolean = false
   ): ImportBuilder {
     Arg.string('moduleName', moduleName);
     Arg.string('name', name);
@@ -211,11 +218,11 @@ export default class ModuleBuilder {
       throw new Error(`An import already existing for ${moduleName}.${name}`);
     }
 
-    if (this._memories.length !== 0 || this._importsIndexSpace.memory !== 0) {
-      throw new VerificationError('Only one memory is allowed per module.');
+    if ((this._memories.length !== 0 || this._importsIndexSpace.memory !== 0) && !this._resolvedFeatures.has('multi-memory')) {
+      throw new VerificationError('Only one memory is allowed per module. Enable the multi-memory feature to allow multiple memories.');
     }
 
-    const memoryType = new MemoryType(new ResizableLimits(initialSize, maximumSize));
+    const memoryType = new MemoryType(new ResizableLimits(initialSize, maximumSize), shared);
     const importBuilder = new ImportBuilder(
       moduleName,
       name,
@@ -295,8 +302,8 @@ export default class ModuleBuilder {
     initialSize: number,
     maximumSize: number | null = null
   ): TableBuilder {
-    if (this._tables.length === 1) {
-      throw new Error('Only one table can be created per module.');
+    if (this._tables.length >= 1 && !this._resolvedFeatures.has('multi-table')) {
+      throw new Error('Only one table can be created per module. Enable the multi-table feature to allow multiple tables.');
     }
 
     const table = new TableBuilder(
@@ -309,15 +316,17 @@ export default class ModuleBuilder {
     return table;
   }
 
-  defineMemory(initialSize: number, maximumSize: number | null = null): MemoryBuilder {
-    if (this._memories.length !== 0 || this._importsIndexSpace.memory !== 0) {
-      throw new VerificationError('Only one memory is allowed per module.');
+  defineMemory(initialSize: number, maximumSize: number | null = null, shared: boolean = false, memory64: boolean = false): MemoryBuilder {
+    if ((this._memories.length !== 0 || this._importsIndexSpace.memory !== 0) && !this._resolvedFeatures.has('multi-memory')) {
+      throw new VerificationError('Only one memory is allowed per module. Enable the multi-memory feature to allow multiple memories.');
     }
 
     const memory = new MemoryBuilder(
       this,
       new ResizableLimits(initialSize, maximumSize),
-      this._memories.length + this._importsIndexSpace.memory
+      this._memories.length + this._importsIndexSpace.memory,
+      shared,
+      memory64
     );
     this._memories.push(memory);
     return memory;
@@ -340,6 +349,20 @@ export default class ModuleBuilder {
 
     this._globals.push(globalBuilder);
     return globalBuilder;
+  }
+
+  defineTag(
+    parameters: ValueTypeDescriptor[]
+  ): TagBuilder {
+    // Tags have no return types — they describe the exception payload
+    const funcType = this.defineFuncType(null, parameters);
+    const tagBuilder = new TagBuilder(
+      this,
+      funcType,
+      this._tags.length
+    );
+    this._tags.push(tagBuilder);
+    return tagBuilder;
   }
 
   setStartFunction(functionBuilder: FunctionBuilder): void {
@@ -407,8 +430,8 @@ export default class ModuleBuilder {
   exportGlobal(globalBuilder: GlobalBuilder, name: string): ExportBuilder {
     Arg.notEmptyString('name', name);
     Arg.instanceOf('globalBuilder', globalBuilder, GlobalBuilder);
-    if (globalBuilder.globalType.mutable && !this.disableVerification) {
-      throw new VerificationError('Cannot export a mutable global.');
+    if (globalBuilder.globalType.mutable && !this.disableVerification && !this._resolvedFeatures.has('mutable-globals')) {
+      throw new VerificationError('Cannot export a mutable global. Enable the mutable-globals feature to allow this.');
     }
 
     if (
@@ -428,13 +451,23 @@ export default class ModuleBuilder {
     table: TableBuilder,
     elements: (FunctionBuilder | ImportBuilder)[],
     offset?: number | GlobalBuilder | ((asm: any) => void)
-  ): void {
-    const segment = new ElementSegmentBuilder(table, elements);
+  ): ElementSegmentBuilder {
+    const segment = new ElementSegmentBuilder(table, elements, this._resolvedFeatures);
     if (offset !== undefined) {
       segment.offset(offset as any);
     }
 
     this._elements.push(segment);
+    return segment;
+  }
+
+  definePassiveElementSegment(
+    elements: (FunctionBuilder | ImportBuilder)[]
+  ): ElementSegmentBuilder {
+    const segment = new ElementSegmentBuilder(null, elements, this._resolvedFeatures);
+    segment.passive();
+    this._elements.push(segment);
+    return segment;
   }
 
   defineData(
@@ -443,7 +476,7 @@ export default class ModuleBuilder {
   ): DataSegmentBuilder {
     Arg.instanceOf('data', data, Uint8Array);
 
-    const dataSegmentBuilder = new DataSegmentBuilder(data);
+    const dataSegmentBuilder = new DataSegmentBuilder(data, this._resolvedFeatures);
     if (offset !== undefined) {
       dataSegmentBuilder.offset(offset as any);
     }
