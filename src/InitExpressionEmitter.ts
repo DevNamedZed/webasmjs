@@ -1,6 +1,7 @@
 import AssemblyEmitter from './AssemblyEmitter';
 import GlobalBuilder from './GlobalBuilder';
-import { InitExpressionType, ValueTypeDescriptor, OpCodeDef, WasmFeature } from './types';
+import ImportBuilder from './ImportBuilder';
+import { ExternalKind, InitExpressionType, ValueTypeDescriptor, OpCodeDef, WasmFeature } from './types';
 import OpCodes from './OpCodes';
 import FuncTypeSignature from './FuncTypeSignature';
 import BinaryWriter from './BinaryWriter';
@@ -71,14 +72,19 @@ export default class InitExpressionEmitter extends AssemblyEmitter {
           );
         }
 
-        if (!(globalBuilder instanceof GlobalBuilder)) {
-          throw new Error('A global builder was expected.');
-        }
-
-        if (globalBuilder.globalType.mutable && !hasExtendedConst) {
-          throw new Error(
-            'An initializer expression cannot reference a mutable global.'
-          );
+        if (globalBuilder instanceof GlobalBuilder) {
+          if (globalBuilder.globalType.mutable && !hasExtendedConst) {
+            throw new Error(
+              'An initializer expression cannot reference a mutable global.'
+            );
+          }
+        } else if (globalBuilder instanceof ImportBuilder) {
+          if (globalBuilder.externalKind !== ExternalKind.Global) {
+            throw new Error('Import must be a global import to use in global.get.');
+          }
+          // Imported globals are always valid in init expressions (they're immutable by default in this context)
+        } else {
+          throw new Error('A GlobalBuilder or global ImportBuilder was expected.');
         }
 
         break;

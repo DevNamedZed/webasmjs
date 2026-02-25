@@ -117,7 +117,7 @@ export const ValueType = {
   Int64: LanguageType.Int64,
   Float32: LanguageType.Float32,
   Float64: LanguageType.Float64,
-  V128: { name: 'v128', value: 0x7b, short: 'v' } as const,
+  V128: { name: 'v128', value: 0x7b, short: 'V' } as const,
   FuncRef: RefType.FuncRef,
   ExternRef: RefType.ExternRef,
   AnyRef: RefType.AnyRef,

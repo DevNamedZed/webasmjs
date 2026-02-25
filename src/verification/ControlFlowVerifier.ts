@@ -19,7 +19,7 @@ export default class ControlFlowVerifier {
 
   push(
     operandStack: OperandStack,
-    blockType: BlockTypeDescriptor,
+    blockType: BlockTypeDescriptor | number,
     label: LabelBuilder | null = null,
     isLoop: boolean = false,
     isTry: boolean = false

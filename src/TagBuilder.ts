@@ -11,15 +11,27 @@ export default class TagBuilder {
   _moduleBuilder: ModuleBuilder;
   _funcType: FuncTypeBuilder;
   _index: number;
+  name: string;
 
   constructor(moduleBuilder: ModuleBuilder, funcType: FuncTypeBuilder, index: number) {
     this._moduleBuilder = moduleBuilder;
     this._funcType = funcType;
     this._index = index;
+    this.name = '';
   }
 
   get funcType(): FuncTypeBuilder {
     return this._funcType;
+  }
+
+  withName(name: string): this {
+    this.name = name;
+    return this;
+  }
+
+  withExport(name: string): this {
+    this._moduleBuilder.exportTag(this, name);
+    return this;
   }
 
   write(writer: BinaryWriter): void {

@@ -24,7 +24,7 @@ export default class Immediate {
     this.values = values;
   }
 
-  static createBlockSignature(blockType: BlockTypeDescriptor): Immediate {
+  static createBlockSignature(blockType: BlockTypeDescriptor | number): Immediate {
     return new Immediate(ImmediateType.BlockSignature, [blockType]);
   }
 
@@ -52,15 +52,15 @@ export default class Immediate {
     return new Immediate(ImmediateType.Global, [global]);
   }
 
-  static createIndirectFunction(funcType: FuncTypeBuilder): Immediate {
-    return new Immediate(ImmediateType.IndirectFunction, [funcType]);
+  static createIndirectFunction(funcType: FuncTypeBuilder, tableIndex: number = 0): Immediate {
+    return new Immediate(ImmediateType.IndirectFunction, [funcType, tableIndex]);
   }
 
   static createLocal(local: LocalBuilder | FunctionParameterBuilder): Immediate {
     return new Immediate(ImmediateType.Local, [local]);
   }
 
-  static createMemoryImmediate(alignment: number, offset: number): Immediate {
+  static createMemoryImmediate(alignment: number, offset: number | bigint): Immediate {
     return new Immediate(ImmediateType.MemoryImmediate, [alignment, offset]);
   }
 
@@ -145,7 +145,7 @@ export default class Immediate {
         break;
 
       case ImmediateType.IndirectFunction:
-        ImmediateEncoder.encodeIndirectFunction(writer, this.values[0]);
+        ImmediateEncoder.encodeIndirectFunction(writer, this.values[0], this.values[1]);
         break;
 
       case ImmediateType.Local:

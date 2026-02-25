@@ -46,9 +46,9 @@ function getOperandInfo(operand: string | null): OperandInfo | null {
     case 'VarUInt1':
       return { param: 'varUInt1: number', call: 'varUInt1' };
     case 'MemoryImmediate':
-      return { param: 'alignment: number, offset: number', call: 'alignment, offset' };
+      return { param: 'alignment: number, offset: number | bigint', call: 'alignment, offset' };
     case 'IndirectFunction':
-      return { param: 'funcTypeBuilder: any', call: 'funcTypeBuilder' };
+      return { param: 'funcTypeBuilder: any, tableIndex?: number', call: 'funcTypeBuilder, tableIndex' };
     case 'BlockSignature':
       return { param: 'blockType: any, label?: any', call: 'blockType, label' };
     case 'Function':
@@ -70,7 +70,7 @@ function getOperandInfo(operand: string | null): OperandInfo | null {
     case 'VarInt64':
       return { param: 'varInt64: number | bigint', call: 'varInt64' };
     case 'VarUInt32':
-      return { param: 'varUInt32: number', call: 'varUInt32' };
+      return { param: 'varUInt32: number | { index: number }', call: 'varUInt32' };
     case 'V128Const':
       return { param: 'bytes: Uint8Array', call: 'bytes' };
     case 'LaneIndex':
@@ -78,9 +78,9 @@ function getOperandInfo(operand: string | null): OperandInfo | null {
     case 'ShuffleMask':
       return { param: 'mask: Uint8Array', call: 'mask' };
     case 'TypeIndexField':
-      return { param: 'typeIndex: number, fieldIndex: number', call: 'typeIndex, fieldIndex' };
+      return { param: 'typeIndex: number | { index: number }, fieldIndex: number', call: 'typeIndex, fieldIndex' };
     case 'TypeIndexIndex':
-      return { param: 'typeIndex: number, index: number', call: 'typeIndex, index' };
+      return { param: 'typeIndex: number | { index: number }, index: number', call: 'typeIndex, index' };
     case 'HeapType':
       return { param: 'heapType: any', call: 'heapType' };
     case 'BrOnCast':

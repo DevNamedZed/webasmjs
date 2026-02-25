@@ -1,5 +1,5 @@
 import BinaryWriter from './BinaryWriter';
-import { ValueTypeDescriptor } from './types';
+import { ValueTypeDescriptor, writeValueType } from './types';
 
 export default class LocalBuilder {
   index: number;
@@ -16,7 +16,7 @@ export default class LocalBuilder {
 
   write(writer: BinaryWriter): void {
     writer.writeVarUInt32(this.count);
-    writer.writeVarInt7(this.valueType.value);
+    writeValueType(writer, this.valueType);
   }
 
   toBytes(): Uint8Array {

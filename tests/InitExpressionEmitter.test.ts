@@ -37,7 +37,7 @@ describe('InitExpressionEmitter', () => {
 
   test('get_global with non-GlobalBuilder throws', () => {
     const emitter = new InitExpressionEmitter(InitExpressionType.Global, ValueType.Int32);
-    expect(() => emitter.emit(OpCodes.get_global, 'not a global')).toThrow('A global builder was expected');
+    expect(() => emitter.emit(OpCodes.get_global, 'not a global')).toThrow('A GlobalBuilder or global ImportBuilder was expected.');
   });
 
   test('get_global with mutable global throws', () => {

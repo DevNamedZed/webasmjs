@@ -15,6 +15,7 @@ import {
   refType,
   refNullType,
   OpCodes,
+  mut,
 } from '../src/index';
 
 import { EXAMPLES } from '../playground/examples';
@@ -36,6 +37,7 @@ const webasmjs = {
   refType,
   refNullType,
   OpCodes,
+  mut,
 };
 
 const ALL_SYMBOLS = Object.keys(webasmjs);

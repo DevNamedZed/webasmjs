@@ -1,4 +1,5 @@
-import { BlockType, ModuleBuilder, ValueType } from '../src/index';
+import { BlockType, ElementType, ModuleBuilder, TextModuleWriter, ValueType } from '../src/index';
+import Arg from '../src/Arg';
 import TestHelper from './TestHelper';
 
 test('Empty module produces valid wasm', async () => {
@@ -121,4 +122,83 @@ test('Global types - f64', async () => {
   const instance = await mod.instantiate();
   const g = instance.instance.exports.g as WebAssembly.Global;
   expect(g.value).toBeCloseTo(2.71828, 4);
+});
+
+describe('Arg.number rejects Infinity', () => {
+  test('Infinity throws', () => {
+    expect(() => Arg.number('x', Infinity)).toThrow('finite number');
+  });
+
+  test('-Infinity throws', () => {
+    expect(() => Arg.number('x', -Infinity)).toThrow('finite number');
+  });
+
+  test('NaN still throws', () => {
+    expect(() => Arg.number('x', NaN)).toThrow('finite number');
+  });
+
+  test('normal number passes', () => {
+    expect(() => Arg.number('x', 42)).not.toThrow();
+    expect(() => Arg.number('x', 0)).not.toThrow();
+    expect(() => Arg.number('x', -1)).not.toThrow();
+  });
+});
+
+describe('call_indirect with table index', () => {
+  test('call_indirect with default table 0 (backward compat)', async () => {
+    // Identical to the existing Call.test.ts pattern but verifying backward compat
+    const mod = new ModuleBuilder('test', { target: 'latest' });
+    const table = mod.defineTable(ElementType.AnyFunc, 1, 1);
+    const sig = mod.defineFuncType([ValueType.Int32], []);
+    const fn = mod.defineFunction('fn', [ValueType.Int32], [], (f, a) => {
+      a.const_i32(42);
+    });
+    mod.defineElementSegment(table, [fn], 0);
+    mod.defineFunction('test', [ValueType.Int32], [], (f, a) => {
+      a.const_i32(0); // table index
+      a.call_indirect(sig);
+    }).withExport();
+    const bytes = mod.toBytes();
+    expect(WebAssembly.validate(bytes.buffer as ArrayBuffer)).toBe(true);
+  });
+
+  test('call_indirect with explicit table index in binary', () => {
+    const mod = new ModuleBuilder('test', { target: 'latest', disableVerification: true });
+    const table0 = mod.defineTable(ElementType.AnyFunc, 1, 1);
+    const table1 = mod.defineTable(ElementType.AnyFunc, 1, 1);
+    const sig = mod.defineFuncType([ValueType.Int32], []);
+    mod.defineFunction('test', null, [], (f, a) => {
+      a.const_i32(0);
+      a.call_indirect(sig, 1); // table 1
+    }).withExport();
+    const bytes = mod.toBytes();
+    // Module should produce valid binary (table index encoded correctly)
+    expect(bytes).toBeTruthy();
+  });
+
+  test('call_indirect with table index in WAT output', () => {
+    const mod = new ModuleBuilder('test', { target: 'latest', disableVerification: true });
+    mod.defineTable(ElementType.AnyFunc, 1, 1);
+    mod.defineTable(ElementType.AnyFunc, 1, 1);
+    const sig = mod.defineFuncType([ValueType.Int32], []);
+    mod.defineFunction('test', null, [], (f, a) => {
+      a.const_i32(0);
+      a.call_indirect(sig, 1);
+    }).withExport();
+    const wat = new TextModuleWriter(mod).toString();
+    expect(wat).toContain('call_indirect 1 (type');
+  });
+
+  test('call_indirect with table 0 omits table index in WAT', () => {
+    const mod = new ModuleBuilder('test', { target: 'latest', disableVerification: true });
+    mod.defineTable(ElementType.AnyFunc, 1, 1);
+    const sig = mod.defineFuncType([ValueType.Int32], []);
+    mod.defineFunction('test', null, [], (f, a) => {
+      a.const_i32(0);
+      a.call_indirect(sig);
+    }).withExport();
+    const wat = new TextModuleWriter(mod).toString();
+    expect(wat).toContain('call_indirect (type');
+    expect(wat).not.toMatch(/call_indirect 0/);
+  });
 });

@@ -46,8 +46,8 @@ export default class Arg {
 
   static number(name: string, value: unknown): void {
     Arg.notNull(name, value);
-    if (typeof value !== 'number' || isNaN(value)) {
-      throw new Error(`The parameter ${name} must be a number.`);
+    if (typeof value !== 'number' || !isFinite(value as number)) {
+      throw new Error(`The parameter ${name} must be a finite number.`);
     }
   }
 

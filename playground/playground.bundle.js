@@ -42,8 +42,8 @@ var webasmPlayground = (() => {
     }
     static number(name, value) {
       _Arg.notNull(name, value);
-      if (typeof value !== "number" || isNaN(value)) {
-        throw new Error(`The parameter ${name} must be a number.`);
+      if (typeof value !== "number" || !isFinite(value)) {
+        throw new Error(`The parameter ${name} must be a finite number.`);
       }
     }
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -120,7 +120,7 @@ var webasmPlayground = (() => {
     Int64: LanguageType.Int64,
     Float32: LanguageType.Float32,
     Float64: LanguageType.Float64,
-    V128: { name: "v128", value: 123, short: "v" },
+    V128: { name: "v128", value: 123, short: "V" },
     FuncRef: RefType.FuncRef,
     ExternRef: RefType.ExternRef,
     AnyRef: RefType.AnyRef,
@@ -207,6 +207,9 @@ var webasmPlayground = (() => {
   var i31ref = ValueType.I31Ref;
   var structref = ValueType.StructRef;
   var arrayref = ValueType.ArrayRef;
+  function mut(type) {
+    return { type, mutable: true, _brand: "MutableField" };
+  }
 
   // src/BinaryWriter.ts
   var GrowthRate = 1024;
@@ -286,6 +289,21 @@ var webasmPlayground = (() => {
         }
         this.writeByte(chunk);
       }
+    }
+    writeVarUInt64(value) {
+      if (typeof value === "number" && value >= 0 && value <= 4294967295) {
+        this.writeVarUInt32(value);
+        return;
+      }
+      let bigIntValue = BigInt(value);
+      do {
+        let chunk = Number(bigIntValue & 0x7fn);
+        bigIntValue = bigIntValue >> 7n;
+        if (bigIntValue !== 0n) {
+          chunk |= 128;
+        }
+        this.writeByte(chunk);
+      } while (bigIntValue !== 0n);
     }
     writeString(value) {
       const encoder = new TextEncoder();
@@ -575,7 +593,7 @@ var webasmPlayground = (() => {
     }
     write(writer) {
       writer.writeVarUInt32(this.count);
-      writer.writeVarInt7(this.valueType.value);
+      writeValueType(writer, this.valueType);
     }
     toBytes() {
       const buffer = new BinaryWriter();
@@ -597,7 +615,7 @@ var webasmPlayground = (() => {
       return this._mutable;
     }
     write(writer) {
-      writer.writeVarInt7(this._valueType.value);
+      writeValueType(writer, this._valueType);
       writer.writeVarUInt1(this._mutable ? 1 : 0);
     }
     toBytes() {
@@ -667,6 +685,7 @@ var webasmPlayground = (() => {
       } else {
         throw new Error("Unsupported global value.");
       }
+      return this;
     }
     withExport(name) {
       this._moduleBuilder.exportGlobal(this, name);
@@ -711,10 +730,8 @@ var webasmPlayground = (() => {
       return this.externalKind === ExternalKind.Table;
     }
     write(writer) {
-      writer.writeVarUInt32(this.moduleName.length);
-      writer.writeString(this.moduleName);
-      writer.writeVarUInt32(this.fieldName.length);
-      writer.writeString(this.fieldName);
+      writer.writeLenPrefixedString(this.moduleName);
+      writer.writeLenPrefixedString(this.fieldName);
       writer.writeUInt8(this.externalKind.value);
       switch (this.externalKind) {
         case ExternalKind.Function:
@@ -743,7 +760,11 @@ var webasmPlayground = (() => {
   // src/ImmediateEncoder.ts
   var ImmediateEncoder = class _ImmediateEncoder {
     static encodeBlockSignature(writer, blockType) {
-      writer.writeVarInt7(blockType.value);
+      if (typeof blockType === "number") {
+        writer.writeVarInt32(blockType);
+      } else {
+        writer.writeVarInt7(blockType.value);
+      }
     }
     static encodeRelativeDepth(writer, label, depth) {
       const relativeDepth = depth - label.block.depth;
@@ -771,9 +792,9 @@ var webasmPlayground = (() => {
       }
       writer.writeVarUInt32(functionIndex);
     }
-    static encodeIndirectFunction(writer, funcType) {
+    static encodeIndirectFunction(writer, funcType, tableIndex = 0) {
       writer.writeVarUInt32(funcType.index);
-      writer.writeVarUInt1(0);
+      writer.writeVarUInt32(tableIndex);
     }
     static encodeLocal(writer, local) {
       Arg.notNull("local", local);
@@ -830,7 +851,11 @@ var webasmPlayground = (() => {
     }
     static encodeMemoryImmediate(writer, alignment, offset) {
       writer.writeVarUInt32(alignment);
-      writer.writeVarUInt32(offset);
+      if (typeof offset === "bigint") {
+        writer.writeVarUInt64(offset);
+      } else {
+        writer.writeVarUInt32(offset);
+      }
     }
     static encodeV128Const(writer, bytes) {
       for (let i = 0; i < 16; i++) {
@@ -904,8 +929,8 @@ var webasmPlayground = (() => {
     static createGlobal(global) {
       return new _Immediate("Global" /* Global */, [global]);
     }
-    static createIndirectFunction(funcType) {
-      return new _Immediate("IndirectFunction" /* IndirectFunction */, [funcType]);
+    static createIndirectFunction(funcType, tableIndex = 0) {
+      return new _Immediate("IndirectFunction" /* IndirectFunction */, [funcType, tableIndex]);
     }
     static createLocal(local) {
       return new _Immediate("Local" /* Local */, [local]);
@@ -976,7 +1001,7 @@ var webasmPlayground = (() => {
           ImmediateEncoder.encodeGlobal(writer, this.values[0]);
           break;
         case "IndirectFunction" /* IndirectFunction */:
-          ImmediateEncoder.encodeIndirectFunction(writer, this.values[0]);
+          ImmediateEncoder.encodeIndirectFunction(writer, this.values[0], this.values[1]);
           break;
         case "Local" /* Local */:
           ImmediateEncoder.encodeLocal(writer, this.values[0]);
@@ -5917,29 +5942,29 @@ var webasmPlayground = (() => {
     end() {
       return this.emit(OpCodes_default.end);
     }
-    br(label) {
-      return this.emit(OpCodes_default.br, label);
+    br(labelBuilder) {
+      return this.emit(OpCodes_default.br, labelBuilder);
     }
-    br_if(label) {
-      return this.emit(OpCodes_default.br_if, label);
+    br_if(labelBuilder) {
+      return this.emit(OpCodes_default.br_if, labelBuilder);
     }
-    br_table(defaultLabel, ...labels) {
-      return this.emit(OpCodes_default.br_table, defaultLabel, labels);
+    br_table(defaultLabelBuilder, ...labelBuilders) {
+      return this.emit(OpCodes_default.br_table, defaultLabelBuilder, labelBuilders);
     }
     return() {
       return this.emit(OpCodes_default.return);
     }
-    call(func) {
-      return this.emit(OpCodes_default.call, func);
+    call(functionBuilder) {
+      return this.emit(OpCodes_default.call, functionBuilder);
     }
-    call_indirect(funcType) {
-      return this.emit(OpCodes_default.call_indirect, funcType);
+    call_indirect(funcTypeBuilder, tableIndex) {
+      return this.emit(OpCodes_default.call_indirect, funcTypeBuilder, tableIndex);
     }
-    return_call(func) {
-      return this.emit(OpCodes_default.return_call, func);
+    return_call(functionBuilder) {
+      return this.emit(OpCodes_default.return_call, functionBuilder);
     }
-    return_call_indirect(funcType) {
-      return this.emit(OpCodes_default.return_call_indirect, funcType);
+    return_call_indirect(funcTypeBuilder, tableIndex) {
+      return this.emit(OpCodes_default.return_call_indirect, funcTypeBuilder, tableIndex);
     }
     delegate(varUInt32) {
       return this.emit(OpCodes_default.delegate, varUInt32);
@@ -6499,8 +6524,8 @@ var webasmPlayground = (() => {
     ref_is_null() {
       return this.emit(OpCodes_default.ref_is_null);
     }
-    ref_func(func) {
-      return this.emit(OpCodes_default.ref_func, func);
+    ref_func(functionBuilder) {
+      return this.emit(OpCodes_default.ref_func, functionBuilder);
     }
     table_get(varUInt32) {
       return this.emit(OpCodes_default.table_get, varUInt32);
@@ -7549,11 +7574,11 @@ var webasmPlayground = (() => {
     ref_cast_null(heapType) {
       return this.emit(OpCodes_default.ref_cast_null, heapType);
     }
-    br_on_cast(flags, label, heapType1, heapType2) {
-      return this.emit(OpCodes_default.br_on_cast, flags, label, heapType1, heapType2);
+    br_on_cast(flags, labelBuilder, heapType1, heapType2) {
+      return this.emit(OpCodes_default.br_on_cast, flags, labelBuilder, heapType1, heapType2);
     }
-    br_on_cast_fail(flags, label, heapType1, heapType2) {
-      return this.emit(OpCodes_default.br_on_cast_fail, flags, label, heapType1, heapType2);
+    br_on_cast_fail(flags, labelBuilder, heapType1, heapType2) {
+      return this.emit(OpCodes_default.br_on_cast_fail, flags, labelBuilder, heapType1, heapType2);
     }
     any_convert_extern() {
       return this.emit(OpCodes_default.any_convert_extern);
@@ -7847,6 +7872,20 @@ var webasmPlayground = (() => {
     ValueType.NullFuncRef,
     ValueType.NullExternRef
   ]);
+  var valueTypeByName = {
+    Int32: ValueType.Int32,
+    Int64: ValueType.Int64,
+    Float32: ValueType.Float32,
+    Float64: ValueType.Float64,
+    V128: ValueType.V128,
+    FuncRef: ValueType.FuncRef,
+    ExternRef: ValueType.ExternRef,
+    AnyRef: ValueType.AnyRef,
+    EqRef: ValueType.EqRef,
+    I31Ref: ValueType.I31Ref,
+    StructRef: ValueType.StructRef,
+    ArrayRef: ValueType.ArrayRef
+  };
   function _isRefType(vt) {
     return _refTypes.has(vt);
   }
@@ -7867,9 +7906,9 @@ var webasmPlayground = (() => {
         if (opCode.controlFlow === "Pop" /* Pop */) {
           this._unreachable = false;
           this._operandStack = controlBlock.stack;
-          if (controlBlock.blockType !== BlockType.Void) {
-            const resultType = controlBlock.blockType;
-            this._operandStack = this._operandStack.push(resultType);
+          const resultTypes = this._resolveBlockResultTypes(controlBlock);
+          for (const rt of resultTypes) {
+            this._operandStack = this._operandStack.push(rt);
           }
         }
         this._instructionCount++;
@@ -7900,20 +7939,23 @@ var webasmPlayground = (() => {
         this._operandStack = controlBlock.stack;
         return;
       }
-      if (controlBlock.blockType !== BlockType.Void) {
-        if (this._operandStack.isEmpty) {
-          throw new VerificationError(
-            `else: expected ${controlBlock.blockType.name} on the stack from the if-branch but the stack is empty.`
-          );
+      const resultTypes = this._resolveBlockResultTypes(controlBlock);
+      if (resultTypes.length > 0) {
+        let current = this._operandStack;
+        for (let i = resultTypes.length - 1; i >= 0; i--) {
+          if (current.isEmpty) {
+            throw new VerificationError(
+              `else: expected ${resultTypes[i].name} on the stack from the if-branch but the stack is empty.`
+            );
+          }
+          if (!this._isAssignableTo(current.valueType, resultTypes[i])) {
+            throw new VerificationError(
+              `else: expected ${resultTypes[i].name} on the stack but found ${current.valueType.name}.`
+            );
+          }
+          current = current.pop();
         }
-        const expectedType = controlBlock.blockType;
-        if (!this._isAssignableTo(this._operandStack.valueType, expectedType)) {
-          throw new VerificationError(
-            `else: expected ${expectedType.name} on the stack but found ${this._operandStack.valueType.name}.`
-          );
-        }
-        const stackAfterPop = this._operandStack.pop();
-        if (stackAfterPop !== controlBlock.stack) {
+        if (current !== controlBlock.stack) {
           throw new VerificationError(
             "else: stack (minus result value) does not match the if-block entry stack."
           );
@@ -7938,19 +7980,21 @@ var webasmPlayground = (() => {
         }
         return;
       }
-      if (targetBlock.blockType !== BlockType.Void) {
-        if (stack.isEmpty) {
-          throw new VerificationError(
-            `Branch expects ${targetBlock.blockType.name} on the stack but the stack is empty.`
-          );
+      const resultTypes = this._resolveBlockResultTypes(targetBlock);
+      if (resultTypes.length > 0) {
+        for (let i = resultTypes.length - 1; i >= 0; i--) {
+          if (stack.isEmpty) {
+            throw new VerificationError(
+              `Branch expects ${resultTypes[i].name} on the stack but the stack is empty.`
+            );
+          }
+          if (!this._isAssignableTo(stack.valueType, resultTypes[i])) {
+            throw new VerificationError(
+              `Branch expects ${resultTypes[i].name} but found ${stack.valueType.name} on the stack.`
+            );
+          }
+          stack = stack.pop();
         }
-        const expectedType = targetBlock.blockType;
-        if (!this._isAssignableTo(stack.valueType, expectedType)) {
-          throw new VerificationError(
-            `Branch expects ${expectedType.name} but found ${stack.valueType.name} on the stack.`
-          );
-        }
-        stack = stack.pop();
       }
       if (targetEntryStack !== stack) {
         throw new VerificationError(
@@ -7990,13 +8034,49 @@ var webasmPlayground = (() => {
       }
       return stack;
     }
+    _resolveBlockResultTypes(block) {
+      if (block.blockType === BlockType.Void) return [];
+      if (typeof block.blockType === "number") {
+        if (this._typeResolver?.getFuncType) {
+          const ft = this._typeResolver.getFuncType(block.blockType);
+          if (ft) return ft.returnTypes;
+        }
+        return [];
+      }
+      return [block.blockType];
+    }
+    _resolveBlockParamTypes(block) {
+      if (typeof block.blockType === "number") {
+        if (this._typeResolver?.getFuncType) {
+          const ft = this._typeResolver.getFuncType(block.blockType);
+          if (ft) return ft.parameterTypes;
+        }
+      }
+      return [];
+    }
     _verifyControlFlowPop(controlBlock, stack) {
       if (controlBlock.depth === 0) {
         this._verifyReturnValues(stack);
       } else {
-        const expectedStack = controlBlock.blockType !== BlockType.Void ? stack.pop() : stack;
-        if (controlBlock.stack !== expectedStack) {
-          throw new VerificationError();
+        const resultTypes = this._resolveBlockResultTypes(controlBlock);
+        let expected = stack;
+        for (let i = resultTypes.length - 1; i >= 0; i--) {
+          if (expected.isEmpty) {
+            throw new VerificationError(
+              `Stack mismatch at end of block (depth ${controlBlock.depth}): expected ${resultTypes[i].name} but stack is empty.`
+            );
+          }
+          if (!this._isAssignableTo(expected.valueType, resultTypes[i])) {
+            throw new VerificationError(
+              `Stack mismatch at end of block (depth ${controlBlock.depth}): expected ${resultTypes[i].name} but found ${expected.valueType.name}.`
+            );
+          }
+          expected = expected.pop();
+        }
+        if (controlBlock.stack !== expected) {
+          throw new VerificationError(
+            `Stack mismatch at end of block (depth ${controlBlock.depth}): expected block's entry stack but got a different stack state.`
+          );
         }
       }
     }
@@ -8022,15 +8102,16 @@ var webasmPlayground = (() => {
             modifiedStack = modifiedStack.pop();
           }
         }
-        modifiedStack = modifiedStack.push(ValueType.AnyRef);
+        modifiedStack = modifiedStack.push(refType(typeIndex));
         return modifiedStack;
       }
       if (opCode === OpCodes_default.array_new_fixed && immediate) {
+        const typeIndex = immediate.values[0];
         const fixedLength = immediate.values[1];
         for (let i = 0; i < fixedLength; i++) {
           modifiedStack = modifiedStack.pop();
         }
-        modifiedStack = modifiedStack.push(ValueType.AnyRef);
+        modifiedStack = modifiedStack.push(refType(typeIndex));
         return modifiedStack;
       }
       if (opCode.stackBehavior === "Pop" /* Pop */ || opCode.stackBehavior === "PopPush" /* PopPush */) {
@@ -8055,7 +8136,7 @@ var webasmPlayground = (() => {
           stack = stack.pop();
           continue;
         }
-        const valueType = ValueType[x];
+        const valueType = valueTypeByName[x];
         if (!this._isAssignableTo(stack.valueType, valueType)) {
           throw new VerificationError(
             `Unexpected type found on stack at offset ${this._instructionCount + 1}. A ${valueType.name} was expected but a ${stack.valueType.name} was found.`
@@ -8067,7 +8148,7 @@ var webasmPlayground = (() => {
         const params = funcType.parameterTypes;
         for (let idx = params.length - 1; idx >= 0; idx--) {
           const x = params[idx];
-          if (x !== stack.valueType) {
+          if (!this._isAssignableTo(stack.valueType, x)) {
             throw new VerificationError(
               `Unexpected type found on stack at offset ${this._instructionCount + 1}. A ${x.name} was expected but a ${stack.valueType.name} was found.`
             );
@@ -8087,7 +8168,7 @@ var webasmPlayground = (() => {
       stack = (opCode.pushOperands || []).reduce((i, x) => {
         let valueType;
         if (x !== "Any" /* Any */) {
-          valueType = ValueType[x];
+          valueType = valueTypeByName[x];
         } else {
           const popCount = this._operandStack.length - stackStart.length;
           valueType = this._getStackObjectValueType(opCode, immediate, popCount);
@@ -8139,10 +8220,11 @@ var webasmPlayground = (() => {
           return structType.fields[fieldIndex].type;
         }
       }
-      if (opCode === OpCodes_default.struct_new_default) {
-        return ValueType.AnyRef;
+      if (opCode === OpCodes_default.struct_new_default && immediate) {
+        return refType(immediate.values[0]);
       }
       if (opCode === OpCodes_default.array_new || opCode === OpCodes_default.array_new_default || opCode === OpCodes_default.array_new_data || opCode === OpCodes_default.array_new_elem) {
+        if (immediate) return refType(immediate.values[0]);
         return ValueType.AnyRef;
       }
       if (opCode === OpCodes_default.array_get && this._typeResolver && immediate) {
@@ -8152,7 +8234,12 @@ var webasmPlayground = (() => {
           return arrayType.elementType;
         }
       }
-      if (opCode === OpCodes_default.ref_cast || opCode === OpCodes_default.ref_cast_null) {
+      if ((opCode === OpCodes_default.ref_cast || opCode === OpCodes_default.ref_cast_null) && immediate) {
+        const heapType = immediate.values[0];
+        if (typeof heapType === "number") {
+          if (heapTypeToValueType[heapType]) return heapTypeToValueType[heapType];
+          return refType(heapType);
+        }
         return ValueType.AnyRef;
       }
       if (opCode === OpCodes_default.ref_i31) {
@@ -8184,25 +8271,71 @@ var webasmPlayground = (() => {
      */
     _isAssignableTo(actual, expected) {
       if (actual === expected) return true;
+      if (isConcreteRefType(actual) && isConcreteRefType(expected)) {
+        if (actual.refPrefix === 100 && expected.refPrefix === 99) {
+        } else if (actual.refPrefix === 99 && expected.refPrefix === 100) {
+          return false;
+        }
+        if (actual.typeIndex === expected.typeIndex) return true;
+        return this._isSubtype(actual.typeIndex, expected.typeIndex);
+      }
+      if (isConcreteRefType(actual) && !isConcreteRefType(expected)) {
+        if (this._typeResolver) {
+          const kind = this._typeResolver.getTypeKind?.(actual.typeIndex);
+          if (kind === "struct") {
+            return expected === ValueType.StructRef || expected === ValueType.EqRef || expected === ValueType.AnyRef || expected === ValueType.Int32;
+          }
+          if (kind === "array") {
+            return expected === ValueType.ArrayRef || expected === ValueType.EqRef || expected === ValueType.AnyRef || expected === ValueType.Int32;
+          }
+          if (kind === "func") {
+            return expected === ValueType.FuncRef || expected === ValueType.Int32;
+          }
+        }
+        if (expected === ValueType.AnyRef || expected === ValueType.EqRef || expected === ValueType.StructRef || expected === ValueType.ArrayRef || expected === ValueType.FuncRef || expected === ValueType.Int32) {
+          return true;
+        }
+      }
       if (expected === ValueType.AnyRef) {
-        return actual === ValueType.EqRef || actual === ValueType.I31Ref || actual === ValueType.StructRef || actual === ValueType.ArrayRef || actual === ValueType.NullRef;
+        return actual === ValueType.EqRef || actual === ValueType.I31Ref || actual === ValueType.StructRef || actual === ValueType.ArrayRef || actual === ValueType.NullRef || isConcreteRefType(actual);
       }
       if (expected === ValueType.EqRef) {
-        return actual === ValueType.I31Ref || actual === ValueType.StructRef || actual === ValueType.ArrayRef || actual === ValueType.NullRef;
+        return actual === ValueType.I31Ref || actual === ValueType.StructRef || actual === ValueType.ArrayRef || actual === ValueType.NullRef || isConcreteRefType(actual);
+      }
+      if (expected === ValueType.StructRef) {
+        return actual === ValueType.NullRef || isConcreteRefType(actual) && this._typeResolver?.getTypeKind?.(actual.typeIndex) === "struct";
+      }
+      if (expected === ValueType.ArrayRef) {
+        return actual === ValueType.NullRef || isConcreteRefType(actual) && this._typeResolver?.getTypeKind?.(actual.typeIndex) === "array";
       }
       if (expected === ValueType.FuncRef) {
-        return actual === ValueType.NullFuncRef;
+        return actual === ValueType.NullFuncRef || isConcreteRefType(actual) && this._typeResolver?.getTypeKind?.(actual.typeIndex) === "func";
       }
       if (expected === ValueType.ExternRef) {
         return actual === ValueType.NullExternRef;
       }
-      if (expected === ValueType.Int32 && _isRefType(actual)) {
+      if (expected === ValueType.Int32 && (_isRefType(actual) || isConcreteRefType(actual))) {
         return true;
       }
       if (expected === ValueType.Int32 && actual === ValueType.Int64 && this._memory64) {
         return true;
       }
       return false;
+    }
+    _isSubtype(actualIndex, expectedIndex) {
+      if (!this._typeResolver?.getSuperTypes) return false;
+      const visited = /* @__PURE__ */ new Set();
+      let current = actualIndex;
+      while (true) {
+        if (visited.has(current)) return false;
+        visited.add(current);
+        const supers = this._typeResolver.getSuperTypes(current);
+        if (supers.length === 0) return false;
+        for (const s of supers) {
+          if (s === expectedIndex) return true;
+        }
+        current = supers[0];
+      }
     }
     _getStackValueTypes(stack, count) {
       const results = [];
@@ -8236,6 +8369,12 @@ var webasmPlayground = (() => {
       throw new Error(`Unexpected number of values for ${immediateType}.`);
     }
   };
+  function resolveIndex(value) {
+    if (typeof value === "object" && value !== null && typeof value.index === "number") {
+      return value.index;
+    }
+    return value;
+  }
   var AssemblyEmitter = class extends OpCodeEmitter {
     constructor(funcSignature, options = { disableVerification: false }, typeResolver, memory64) {
       super();
@@ -8258,6 +8397,9 @@ var webasmPlayground = (() => {
     }
     get entryLabel() {
       return this._entryLabel;
+    }
+    get controlFlowStack() {
+      return this._controlFlowVerifier._stack;
     }
     get disableVerification() {
       return this._options.disableVerification;
@@ -8356,6 +8498,17 @@ var webasmPlayground = (() => {
             }
           }
         }
+        if (opCode === OpCodes_default.rethrow && immediate) {
+          const targetLabel = immediate.values[0];
+          if (targetLabel && targetLabel.block) {
+            const targetBlock = targetLabel.block;
+            if (!targetBlock.isTry && !targetBlock.inCatchHandler) {
+              throw new VerificationError(
+                "rethrow: target block is not a try/catch block."
+              );
+            }
+          }
+        }
       }
       if (opCode === OpCodes_default.delegate) {
         this._controlFlowVerifier.pop();
@@ -8436,8 +8589,10 @@ var webasmPlayground = (() => {
           validateParameters(immediateType, values, 1);
           return Immediate.createGlobal(values[0]);
         case "IndirectFunction" /* IndirectFunction */:
-          validateParameters(immediateType, values, 1);
-          return Immediate.createIndirectFunction(values[0]);
+          if (values.length < 1) {
+            throw new Error(`${immediateType} requires at least 1 parameter.`);
+          }
+          return Immediate.createIndirectFunction(values[0], values[1] ?? 0);
         case "Local" /* Local */:
           validateParameters(immediateType, values, 1);
           let local = values[0];
@@ -8463,7 +8618,7 @@ var webasmPlayground = (() => {
           return Immediate.createVarUInt1(values[0]);
         case "VarUInt32" /* VarUInt32 */:
           validateParameters(immediateType, values, 1);
-          return Immediate.createVarUInt32(values[0]);
+          return Immediate.createVarUInt32(resolveIndex(values[0]));
         case "V128Const" /* V128Const */:
           validateParameters(immediateType, values, 1);
           return Immediate.createV128Const(values[0]);
@@ -8475,10 +8630,10 @@ var webasmPlayground = (() => {
           return Immediate.createShuffleMask(values[0]);
         case "TypeIndexField" /* TypeIndexField */:
           validateParameters(immediateType, values, 2);
-          return Immediate.createTypeIndexField(values[0], values[1]);
+          return Immediate.createTypeIndexField(resolveIndex(values[0]), values[1]);
         case "TypeIndexIndex" /* TypeIndexIndex */:
           validateParameters(immediateType, values, 2);
-          return Immediate.createTypeIndexIndex(values[0], values[1]);
+          return Immediate.createTypeIndexIndex(resolveIndex(values[0]), values[1]);
         case "HeapType" /* HeapType */:
           validateParameters(immediateType, values, 1);
           return Immediate.createHeapType(values[0]);
@@ -8541,13 +8696,18 @@ var webasmPlayground = (() => {
               "The only valid instruction for an element initializer expression is a constant i32, global not supported."
             );
           }
-          if (!(globalBuilder instanceof GlobalBuilder)) {
-            throw new Error("A global builder was expected.");
-          }
-          if (globalBuilder.globalType.mutable && !hasExtendedConst) {
-            throw new Error(
-              "An initializer expression cannot reference a mutable global."
-            );
+          if (globalBuilder instanceof GlobalBuilder) {
+            if (globalBuilder.globalType.mutable && !hasExtendedConst) {
+              throw new Error(
+                "An initializer expression cannot reference a mutable global."
+              );
+            }
+          } else if (globalBuilder instanceof ImportBuilder) {
+            if (globalBuilder.externalKind !== ExternalKind.Global) {
+              throw new Error("Import must be a global import to use in global.get.");
+            }
+          } else {
+            throw new Error("A GlobalBuilder or global ImportBuilder was expected.");
           }
           break;
         }
@@ -8608,6 +8768,9 @@ var webasmPlayground = (() => {
       this._disableVerification = disableVerification || false;
     }
     passive() {
+      if (this._features && !this._features.has("bulk-memory")) {
+        throw new Error("The 'bulk-memory' feature is required but not enabled. Use target 'latest' or add 'bulk-memory' to features.");
+      }
       this._passive = true;
       return this;
     }
@@ -8653,6 +8816,7 @@ var webasmPlayground = (() => {
       } else {
         throw new Error("Unsupported offset");
       }
+      return this;
     }
     write(writer) {
       if (this._passive) {
@@ -8696,13 +8860,38 @@ var webasmPlayground = (() => {
         const t = types[typeIndex];
         if (t && "elementType" in t) return t;
         return null;
+      },
+      getFuncType(typeIndex) {
+        const t = types[typeIndex];
+        if (t && "parameterTypes" in t && "returnTypes" in t) {
+          const ft = t;
+          return { parameterTypes: ft.parameterTypes, returnTypes: ft.returnTypes };
+        }
+        return null;
+      },
+      getTypeKind(typeIndex) {
+        const t = types[typeIndex];
+        if (!t) return null;
+        if ("fields" in t) return "struct";
+        if ("elementType" in t) return "array";
+        if ("parameterTypes" in t) return "func";
+        return null;
+      },
+      getSuperTypes(typeIndex) {
+        const t = types[typeIndex];
+        if (!t) return [];
+        if ("superTypes" in t) {
+          const st = t.superTypes;
+          return st.map((s) => s.index);
+        }
+        return [];
       }
     };
   }
   var FunctionEmitter = class extends AssemblyEmitter {
     constructor(functionBuilder, options) {
       const moduleBuilder = functionBuilder._moduleBuilder;
-      const memory64 = moduleBuilder?._memories?.some((m) => m.isMemory64) || false;
+      const memory64 = moduleBuilder?._memories?.some((m) => m.isMemory64) || moduleBuilder?._imports?.some((imp) => imp.isMemoryImport() && imp.data.memory64) || false;
       super(
         functionBuilder.funcTypeBuilder.toSignature(),
         options,
@@ -8720,8 +8909,21 @@ var webasmPlayground = (() => {
     }
     _getTagParameterTypes(tagIndex) {
       const moduleBuilder = this._functionBuilder._moduleBuilder;
-      if (moduleBuilder && moduleBuilder._tags && tagIndex < moduleBuilder._tags.length) {
-        return moduleBuilder._tags[tagIndex]._funcType.parameterTypes;
+      if (!moduleBuilder) return null;
+      const importedTagCount = moduleBuilder._importsIndexSpace.tag;
+      if (tagIndex < importedTagCount) {
+        const tagImports = moduleBuilder._imports.filter(
+          (imp) => imp.externalKind === ExternalKind.Tag
+        );
+        if (tagIndex < tagImports.length) {
+          const funcType = tagImports[tagIndex].data;
+          return funcType.parameterTypes;
+        }
+        return null;
+      }
+      const localIndex = tagIndex - importedTagCount;
+      if (moduleBuilder._tags && localIndex < moduleBuilder._tags.length) {
+        return moduleBuilder._tags[localIndex]._funcType.parameterTypes;
       }
       return null;
     }
@@ -8803,6 +9005,9 @@ var webasmPlayground = (() => {
       this._disableVerification = disableVerification || false;
     }
     passive() {
+      if (this._features && !this._features.has("bulk-memory")) {
+        throw new Error("The 'bulk-memory' feature is required but not enabled. Use target 'latest' or add 'bulk-memory' to features.");
+      }
       this._passive = true;
       return this;
     }
@@ -8836,6 +9041,7 @@ var webasmPlayground = (() => {
       } else {
         throw new Error("Unsupported offset");
       }
+      return this;
     }
     _writeFuncIndex(writer, func) {
       if (func instanceof FunctionBuilder) {
@@ -8885,8 +9091,7 @@ var webasmPlayground = (() => {
       this.data = data;
     }
     write(writer) {
-      writer.writeVarUInt32(this.name.length);
-      writer.writeString(this.name);
+      writer.writeLenPrefixedString(this.name);
       writer.writeUInt8(this.externalKind.value);
       switch (this.externalKind) {
         case ExternalKind.Function:
@@ -8953,9 +9158,16 @@ var webasmPlayground = (() => {
         if (this.shared) flags |= 2;
         if (this.memory64) flags |= 4;
         writer.writeVarUInt7(flags);
-        writer.writeVarUInt32(this.resizableLimits.initial);
-        if (this.resizableLimits.maximum !== null) {
-          writer.writeVarUInt32(this.resizableLimits.maximum);
+        if (this.memory64) {
+          writer.writeVarUInt64(this.resizableLimits.initial);
+          if (this.resizableLimits.maximum !== null) {
+            writer.writeVarUInt64(this.resizableLimits.maximum);
+          }
+        } else {
+          writer.writeVarUInt32(this.resizableLimits.initial);
+          if (this.resizableLimits.maximum !== null) {
+            writer.writeVarUInt32(this.resizableLimits.maximum);
+          }
         }
       } else {
         this.resizableLimits.write(writer);
@@ -9280,7 +9492,9 @@ ${inner}
             const memType = imp.data;
             const limits = memType.resizableLimits;
             const max = limits.maximum !== null ? ` ${limits.maximum}` : "";
-            desc = `(memory (;${imp.index};) ${limits.initial}${max})`;
+            const shared = memType.shared ? " shared" : "";
+            const m64 = memType.memory64 ? " i64" : "";
+            desc = `(memory (;${imp.index};)${m64} ${limits.initial}${max}${shared})`;
             break;
           }
           case ExternalKind.Global: {
@@ -9358,6 +9572,9 @@ ${inner}
       switch (type) {
         case "BlockSignature" /* BlockSignature */: {
           const blockType = values[0];
+          if (typeof blockType === "number") {
+            return `(type ${blockType})`;
+          }
           if (blockType && blockType.name !== "void") {
             return `(result ${blockType.name})`;
           }
@@ -9395,7 +9612,11 @@ ${inner}
         }
         case "IndirectFunction" /* IndirectFunction */: {
           const funcType = values[0];
-          return `(type ${funcType.index})`;
+          const tableIndex = values[1] || 0;
+          let text = "";
+          if (tableIndex > 0) text += `${tableIndex} `;
+          text += `(type ${funcType.index})`;
+          return text;
         }
         case "RelativeDepth" /* RelativeDepth */: {
           const label = values[0];
@@ -9472,15 +9693,7 @@ ${inner}
         const typeStr = g.globalType.mutable ? `(mut ${valType})` : valType;
         let initExpr = "";
         if (g._initExpressionEmitter) {
-          const instrs = g._initExpressionEmitter._instructions;
-          for (const instr of instrs) {
-            if (instr.opCode.mnemonic === "end") continue;
-            initExpr = instr.opCode.mnemonic;
-            if (instr.immediate) {
-              const immText = this.immediateToText(instr.immediate.type, instr.immediate.values);
-              if (immText) initExpr += ` ${immText}`;
-            }
-          }
+          initExpr = this.formatInitExpr(g._initExpressionEmitter._instructions);
         }
         lines.push(`  (global (;${g._index};) ${typeStr} (${initExpr}))`);
       });
@@ -9535,15 +9748,7 @@ ${inner}
         }
         let offsetExpr = "";
         if (elem._initExpressionEmitter) {
-          const instrs = elem._initExpressionEmitter._instructions;
-          for (const instr of instrs) {
-            if (instr.opCode.mnemonic === "end") continue;
-            offsetExpr = instr.opCode.mnemonic;
-            if (instr.immediate) {
-              const immText = this.immediateToText(instr.immediate.type, instr.immediate.values);
-              if (immText) offsetExpr += ` ${immText}`;
-            }
-          }
+          offsetExpr = this.formatInitExpr(elem._initExpressionEmitter._instructions);
         }
         const tableIndex = elem._table ? elem._table._index : 0;
         if (tableIndex !== 0) {
@@ -9562,15 +9767,7 @@ ${inner}
         }
         let offsetExpr = "";
         if (seg._initExpressionEmitter) {
-          const instrs = seg._initExpressionEmitter._instructions;
-          for (const instr of instrs) {
-            if (instr.opCode.mnemonic === "end") continue;
-            offsetExpr = instr.opCode.mnemonic;
-            if (instr.immediate) {
-              const immText = this.immediateToText(instr.immediate.type, instr.immediate.values);
-              if (immText) offsetExpr += ` ${immText}`;
-            }
-          }
+          offsetExpr = this.formatInitExpr(seg._initExpressionEmitter._instructions);
         }
         if (seg._memoryIndex !== 0) {
           lines.push(`  (data (;${i};) (memory ${seg._memoryIndex}) (${offsetExpr}) "${dataStr}")`);
@@ -9578,6 +9775,19 @@ ${inner}
           lines.push(`  (data (;${i};) (${offsetExpr}) "${dataStr}")`);
         }
       });
+    }
+    formatInitExpr(instructions) {
+      const parts = [];
+      for (const instr of instructions) {
+        if (instr.opCode.mnemonic === "end") continue;
+        let part = instr.opCode.mnemonic;
+        if (instr.immediate) {
+          const immText = this.immediateToText(instr.immediate.type, instr.immediate.values);
+          if (immText) part += ` ${immText}`;
+        }
+        parts.push(part);
+      }
+      return parts.join(" ");
     }
     bytesToWatString(data) {
       let result = "";
@@ -9599,9 +9809,18 @@ ${inner}
       this._moduleBuilder = moduleBuilder;
       this._funcType = funcType;
       this._index = index;
+      this.name = "";
     }
     get funcType() {
       return this._funcType;
+    }
+    withName(name) {
+      this.name = name;
+      return this;
+    }
+    withExport(name) {
+      this._moduleBuilder.exportTag(this, name);
+      return this;
     }
     write(writer) {
       writer.writeVarUInt32(0);
@@ -9737,6 +9956,10 @@ ${inner}
       )) {
         throw new Error(`An import already exists for ${moduleName}.${name}`);
       }
+      const totalTables = this._tables.length + this._importsIndexSpace.table;
+      if (totalTables >= 1 && !this._resolvedFeatures.has("multi-table")) {
+        throw new Error("Only one table can be created per module. Enable the multi-table feature to allow multiple tables.");
+      }
       const tableType = new TableType(
         elementType,
         new ResizableLimits(initialSize, maximumSize)
@@ -9754,7 +9977,7 @@ ${inner}
       });
       return importBuilder;
     }
-    importMemory(moduleName, name, initialSize, maximumSize = null, shared = false) {
+    importMemory(moduleName, name, initialSize, maximumSize = null, shared = false, memory64 = false) {
       Arg.string("moduleName", moduleName);
       Arg.string("name", name);
       Arg.number("initialSize", initialSize);
@@ -9766,7 +9989,13 @@ ${inner}
       if ((this._memories.length !== 0 || this._importsIndexSpace.memory !== 0) && !this._resolvedFeatures.has("multi-memory")) {
         throw new VerificationError("Only one memory is allowed per module. Enable the multi-memory feature to allow multiple memories.");
       }
-      const memoryType = new MemoryType(new ResizableLimits(initialSize, maximumSize), shared);
+      if (shared) {
+        this._requireFeature("threads");
+      }
+      if (memory64) {
+        this._requireFeature("memory64");
+      }
+      const memoryType = new MemoryType(new ResizableLimits(initialSize, maximumSize), shared, memory64);
       const importBuilder = new ImportBuilder(
         moduleName,
         name,
@@ -9798,6 +10027,7 @@ ${inner}
       return importBuilder;
     }
     importTag(moduleName, name, parameters) {
+      this._requireFeature("exception-handling");
       if (this._imports.some(
         (x) => x.externalKind === ExternalKind.Tag && x.moduleName === moduleName && x.fieldName === name
       )) {
@@ -9838,7 +10068,8 @@ ${inner}
       return functionBuilder;
     }
     defineTable(elementType, initialSize, maximumSize = null) {
-      if (this._tables.length >= 1 && !this._resolvedFeatures.has("multi-table")) {
+      const totalTables = this._tables.length + this._importsIndexSpace.table;
+      if (totalTables >= 1 && !this._resolvedFeatures.has("multi-table")) {
         throw new Error("Only one table can be created per module. Enable the multi-table feature to allow multiple tables.");
       }
       const table = new TableBuilder(
@@ -9853,6 +10084,12 @@ ${inner}
     defineMemory(initialSize, maximumSize = null, shared = false, memory64 = false) {
       if ((this._memories.length !== 0 || this._importsIndexSpace.memory !== 0) && !this._resolvedFeatures.has("multi-memory")) {
         throw new VerificationError("Only one memory is allowed per module. Enable the multi-memory feature to allow multiple memories.");
+      }
+      if (shared) {
+        this._requireFeature("threads");
+      }
+      if (memory64) {
+        this._requireFeature("memory64");
       }
       const memory = new MemoryBuilder(
         this,
@@ -9878,6 +10115,7 @@ ${inner}
       return globalBuilder;
     }
     defineTag(parameters) {
+      this._requireFeature("exception-handling");
       const funcType = this.defineFunctionType(null, parameters);
       const tagBuilder = new TagBuilder(
         this,
@@ -9948,6 +10186,7 @@ ${inner}
       return exportBuilder;
     }
     exportTag(tagBuilder, name) {
+      this._requireFeature("exception-handling");
       Arg.notEmptyString("name", name);
       if (this._exports.find(
         (x) => x.externalKind === ExternalKind.Tag && x.name === name
@@ -9971,6 +10210,7 @@ ${inner}
       return this.defineElementSegment(table, elements, offset);
     }
     definePassiveElementSegment(elements) {
+      this._requireFeature("bulk-memory");
       const segment = new ElementSegmentBuilder(null, elements, this._resolvedFeatures, this.disableVerification);
       segment.passive();
       this._elements.push(segment);
@@ -9978,7 +10218,7 @@ ${inner}
     }
     defineData(data, offset) {
       Arg.instanceOf("data", data, Uint8Array);
-      const hasMemory64 = this._memories.some((m) => m.isMemory64);
+      const hasMemory64 = this._memories.some((m) => m.isMemory64) || this._imports.some((imp) => imp.isMemoryImport() && imp.data.memory64);
       const dataSegmentBuilder = new DataSegmentBuilder(data, this._resolvedFeatures, hasMemory64, this.disableVerification);
       if (offset !== void 0) {
         dataSegmentBuilder.offset(offset);
@@ -10206,14 +10446,239 @@ ${inner}
     }
   };
 
+  // src/InstructionDecoder.ts
+  var singleByteOpcodes = /* @__PURE__ */ new Map();
+  var prefixedOpcodes = /* @__PURE__ */ new Map();
+  for (const [, opCode] of Object.entries(OpCodes_default)) {
+    const op = opCode;
+    if (op.prefix !== void 0) {
+      if (!prefixedOpcodes.has(op.prefix)) {
+        prefixedOpcodes.set(op.prefix, /* @__PURE__ */ new Map());
+      }
+      prefixedOpcodes.get(op.prefix).set(op.value, op);
+    } else {
+      singleByteOpcodes.set(op.value, op);
+    }
+  }
+  var InstructionDecoder = class _InstructionDecoder {
+    constructor(buffer) {
+      this.buffer = buffer;
+      this.offset = 0;
+    }
+    decode() {
+      const instructions = [];
+      this.offset = 0;
+      while (this.offset < this.buffer.length) {
+        const startOffset = this.offset;
+        const byte = this.buffer[this.offset++];
+        let opCode;
+        if (prefixedOpcodes.has(byte)) {
+          const subMap = prefixedOpcodes.get(byte);
+          const subOpcode = this.readVarUInt32();
+          opCode = subMap.get(subOpcode);
+          if (!opCode) {
+            break;
+          }
+        } else {
+          opCode = singleByteOpcodes.get(byte);
+          if (!opCode) {
+            break;
+          }
+        }
+        const immediates = this.decodeImmediates(opCode);
+        instructions.push({
+          opCode,
+          immediates,
+          offset: startOffset,
+          length: this.offset - startOffset
+        });
+        if (opCode === OpCodes_default.end) {
+          break;
+        }
+      }
+      return instructions;
+    }
+    static decodeInitExpr(bytes) {
+      const decoder = new _InstructionDecoder(bytes);
+      return decoder.decode();
+    }
+    decodeImmediates(opCode) {
+      if (!opCode.immediate) {
+        return { type: "None", values: [] };
+      }
+      const type = opCode.immediate;
+      const values = [];
+      switch (type) {
+        case "BlockSignature": {
+          const bt = this.readVarInt7();
+          values.push(bt);
+          break;
+        }
+        case "VarInt32":
+          values.push(this.readVarInt32());
+          break;
+        case "VarInt64":
+          values.push(this.readVarInt64());
+          break;
+        case "Float32":
+          values.push(this.readFloat32());
+          break;
+        case "Float64":
+          values.push(this.readFloat64());
+          break;
+        case "VarUInt1":
+          values.push(this.buffer[this.offset++] & 1);
+          break;
+        case "VarUInt32":
+          values.push(this.readVarUInt32());
+          break;
+        case "RelativeDepth":
+          values.push(this.readVarUInt32());
+          break;
+        case "BranchTable": {
+          const count = this.readVarUInt32();
+          const targets = [];
+          for (let i = 0; i < count; i++) {
+            targets.push(this.readVarUInt32());
+          }
+          const defaultTarget = this.readVarUInt32();
+          values.push(targets, defaultTarget);
+          break;
+        }
+        case "Function":
+          values.push(this.readVarUInt32());
+          break;
+        case "IndirectFunction": {
+          const typeIndex = this.readVarUInt32();
+          const tableIndex = this.readVarUInt32();
+          values.push(typeIndex, tableIndex);
+          break;
+        }
+        case "Local":
+          values.push(this.readVarUInt32());
+          break;
+        case "Global":
+          values.push(this.readVarUInt32());
+          break;
+        case "MemoryImmediate": {
+          const alignment = this.readVarUInt32();
+          const offset = this.readVarUInt32();
+          values.push(alignment, offset);
+          break;
+        }
+        case "V128Const": {
+          const bytes = new Uint8Array(16);
+          for (let i = 0; i < 16; i++) {
+            bytes[i] = this.buffer[this.offset++];
+          }
+          values.push(bytes);
+          break;
+        }
+        case "ShuffleMask": {
+          const mask = new Uint8Array(16);
+          for (let i = 0; i < 16; i++) {
+            mask[i] = this.buffer[this.offset++];
+          }
+          values.push(mask);
+          break;
+        }
+        case "LaneIndex":
+          values.push(this.buffer[this.offset++]);
+          break;
+        case "TypeIndexField": {
+          const typeIndex = this.readVarUInt32();
+          const fieldIndex = this.readVarUInt32();
+          values.push(typeIndex, fieldIndex);
+          break;
+        }
+        case "TypeIndexIndex": {
+          const typeIndex = this.readVarUInt32();
+          const index = this.readVarUInt32();
+          values.push(typeIndex, index);
+          break;
+        }
+        case "HeapType":
+          values.push(this.readVarInt32());
+          break;
+        case "BrOnCast": {
+          const flags = this.buffer[this.offset++];
+          const depth = this.readVarUInt32();
+          const ht1 = this.readVarInt32();
+          const ht2 = this.readVarInt32();
+          values.push(flags, depth, ht1, ht2);
+          break;
+        }
+        default:
+          break;
+      }
+      return { type, values };
+    }
+    // --- LEB128 readers ---
+    readVarUInt32() {
+      let result = 0;
+      let shift = 0;
+      let byte;
+      do {
+        byte = this.buffer[this.offset++];
+        result |= (byte & 127) << shift;
+        shift += 7;
+      } while (byte & 128);
+      return result >>> 0;
+    }
+    readVarInt7() {
+      const byte = this.buffer[this.offset++];
+      return byte & 64 ? byte | 4294967168 : byte & 127;
+    }
+    readVarInt32() {
+      let result = 0;
+      let shift = 0;
+      let byte;
+      do {
+        byte = this.buffer[this.offset++];
+        result |= (byte & 127) << shift;
+        shift += 7;
+      } while (byte & 128);
+      if (shift < 32 && byte & 64) {
+        result |= -(1 << shift);
+      }
+      return result;
+    }
+    readVarInt64() {
+      let result = 0n;
+      let shift = 0n;
+      let byte;
+      do {
+        byte = this.buffer[this.offset++];
+        result |= BigInt(byte & 127) << shift;
+        shift += 7n;
+      } while (byte & 128);
+      if (shift < 64n && byte & 64) {
+        result |= -(1n << shift);
+      }
+      return result;
+    }
+    readFloat32() {
+      const view = new DataView(this.buffer.buffer, this.buffer.byteOffset + this.offset, 4);
+      this.offset += 4;
+      return view.getFloat32(0, true);
+    }
+    readFloat64() {
+      const view = new DataView(this.buffer.buffer, this.buffer.byteOffset + this.offset, 8);
+      this.offset += 8;
+      return view.getFloat64(0, true);
+    }
+  };
+
   // src/BinaryReader.ts
   var MagicHeader2 = 1836278016;
   var BinaryReader = class {
     constructor(buffer) {
       this.buffer = buffer;
       this.offset = 0;
+      this._options = {};
     }
-    read() {
+    read(options) {
+      this._options = options || {};
       const magic = this.readUInt32();
       if (magic !== MagicHeader2) {
         throw new Error(`Invalid WASM magic header: 0x${magic.toString(16)}`);
@@ -10291,6 +10756,26 @@ ${inner}
             break;
         }
         this.offset = sectionEnd;
+      }
+      if (this._options.decodeInstructions) {
+        for (const func of module.functions) {
+          func.instructions = InstructionDecoder.decodeInitExpr(func.body);
+        }
+        for (const global of module.globals) {
+          if (global.initExpr.length > 0) {
+            global.initInstructions = InstructionDecoder.decodeInitExpr(global.initExpr);
+          }
+        }
+        for (const elem of module.elements) {
+          if (elem.offsetExpr.length > 0 && !elem.passive) {
+            elem.offsetInstructions = InstructionDecoder.decodeInitExpr(elem.offsetExpr);
+          }
+        }
+        for (const data of module.data) {
+          if (data.offsetExpr.length > 0 && !data.passive) {
+            data.offsetInstructions = InstructionDecoder.decodeInitExpr(data.offsetExpr);
+          }
+        }
       }
       return module;
     }
@@ -10429,14 +10914,14 @@ ${inner}
       const fieldCount = this.readVarUInt32();
       const fields = [];
       for (let j = 0; j < fieldCount; j++) {
-        const type = this.readVarInt7();
+        const type = this.readValueType();
         const mutable = this.readVarUInt1() === 1;
         fields.push({ type, mutable });
       }
       return { kind: "struct", fields };
     }
     readArrayType() {
-      const elementType = this.readVarInt7();
+      const elementType = this.readValueType();
       const mutable = this.readVarUInt1() === 1;
       return { kind: "array", elementType, mutable };
     }
@@ -10460,8 +10945,8 @@ ${inner}
             break;
           }
           case 2: {
-            const { initial, maximum } = this.readResizableLimits();
-            imp.memoryType = { initial, maximum };
+            const { initial, maximum, shared, memory64 } = this.readResizableLimits();
+            imp.memoryType = { initial, maximum, shared, memory64 };
             break;
           }
           case 3: {
@@ -10497,8 +10982,8 @@ ${inner}
     readMemorySection(module) {
       const count = this.readVarUInt32();
       for (let i = 0; i < count; i++) {
-        const { initial, maximum } = this.readResizableLimits();
-        module.memories.push({ initial, maximum });
+        const { initial, maximum, shared, memory64 } = this.readResizableLimits();
+        module.memories.push({ initial, maximum, shared, memory64 });
       }
     }
     readGlobalSection(module) {
@@ -10523,14 +11008,36 @@ ${inner}
     readElementSection(module) {
       const count = this.readVarUInt32();
       for (let i = 0; i < count; i++) {
-        const tableIndex = this.readVarUInt32();
-        const offsetExpr = this.readInitExpr();
-        const numElems = this.readVarUInt32();
-        const functionIndices = [];
-        for (let j = 0; j < numElems; j++) {
-          functionIndices.push(this.readVarUInt32());
+        const kind = this.readVarUInt32();
+        if (kind === 0) {
+          const offsetExpr = this.readInitExpr();
+          const numElems = this.readVarUInt32();
+          const functionIndices = [];
+          for (let j = 0; j < numElems; j++) {
+            functionIndices.push(this.readVarUInt32());
+          }
+          module.elements.push({ tableIndex: 0, offsetExpr, functionIndices, passive: false });
+        } else if (kind === 1) {
+          const _elemKind = this.readUInt8();
+          const numElems = this.readVarUInt32();
+          const functionIndices = [];
+          for (let j = 0; j < numElems; j++) {
+            functionIndices.push(this.readVarUInt32());
+          }
+          module.elements.push({ tableIndex: 0, offsetExpr: new Uint8Array(), functionIndices, passive: true });
+        } else if (kind === 2) {
+          const tableIndex = this.readVarUInt32();
+          const offsetExpr = this.readInitExpr();
+          const _elemKind = this.readUInt8();
+          const numElems = this.readVarUInt32();
+          const functionIndices = [];
+          for (let j = 0; j < numElems; j++) {
+            functionIndices.push(this.readVarUInt32());
+          }
+          module.elements.push({ tableIndex, offsetExpr, functionIndices, passive: false });
+        } else {
+          throw new Error(`Unsupported element segment kind: ${kind}`);
         }
-        module.elements.push({ tableIndex, offsetExpr, functionIndices });
       }
     }
     readTagSection(module) {
@@ -10608,15 +11115,50 @@ ${inner}
           case OpCodes_default.get_global.value:
             this.readVarUInt32();
             break;
+          case 208:
+            this.readVarInt32();
+            break;
+          case 210:
+            this.readVarUInt32();
+            break;
+          case 251: {
+            const subOpcode = this.readVarUInt32();
+            switch (subOpcode) {
+              case 0:
+              // struct.new — type index
+              case 1:
+                this.readVarUInt32();
+                break;
+              case 8:
+                this.readVarUInt32();
+                this.readVarUInt32();
+                break;
+              case 7:
+              // array.new_default — type index
+              case 6:
+                this.readVarUInt32();
+                break;
+              case 28:
+                break;
+              case 26:
+              // any.convert_extern
+              case 27:
+                break;
+            }
+            break;
+          }
         }
       }
       return this.buffer.slice(start, this.offset);
     }
     readResizableLimits() {
-      const flags = this.readVarUInt1();
-      const initial = this.readVarUInt32();
-      const maximum = flags === 1 ? this.readVarUInt32() : null;
-      return { initial, maximum };
+      const flags = this.readVarUInt7();
+      const hasMax = (flags & 1) !== 0;
+      const shared = (flags & 2) !== 0;
+      const memory64 = (flags & 4) !== 0;
+      const initial = memory64 ? Number(this.readVarUInt64()) : this.readVarUInt32();
+      const maximum = hasMax ? memory64 ? Number(this.readVarUInt64()) : this.readVarUInt32() : null;
+      return { initial, maximum, shared, memory64 };
     }
     readValueType() {
       const value = this.readVarInt7();
@@ -10635,22 +11177,28 @@ ${inner}
           return ValueType.FuncRef;
         case -17:
           return ValueType.ExternRef;
-        case -14:
+        case -18:
           return ValueType.AnyRef;
-        case -13:
+        case -19:
           return ValueType.EqRef;
-        case -12:
+        case -20:
           return ValueType.I31Ref;
-        case -11:
+        case -21:
           return ValueType.StructRef;
-        case -10:
+        case -22:
           return ValueType.ArrayRef;
         case -15:
           return ValueType.NullRef;
-        case -9:
+        case -13:
           return ValueType.NullFuncRef;
-        case -8:
+        case -14:
           return ValueType.NullExternRef;
+        case -28:
+          return refType(this.readVarInt32());
+        // 0x64 = (ref $idx)
+        case -29:
+          return refNullType(this.readVarInt32());
+        // 0x63 = (ref null $idx)
         default:
           throw new Error(`Unknown value type: 0x${(value & 255).toString(16)}`);
       }
@@ -10728,6 +11276,18 @@ ${inner}
       }
       return result;
     }
+    readVarUInt64() {
+      let result = 0n;
+      let shift = 0n;
+      let byte;
+      do {
+        this.ensureBytes(1);
+        byte = this.buffer[this.offset++];
+        result |= BigInt(byte & 127) << shift;
+        shift += 7n;
+      } while (byte & 128);
+      return result;
+    }
     readString(length) {
       this.ensureBytes(length);
       const bytes = this.buffer.slice(this.offset, this.offset + length);
@@ -10740,6 +11300,30 @@ ${inner}
       this.offset += length;
       return bytes;
     }
+  };
+
+  // src/Disassembler.ts
+  var valueTypeNames = {
+    127: "i32",
+    126: "i64",
+    125: "f32",
+    124: "f64",
+    123: "v128",
+    112: "funcref",
+    111: "externref",
+    110: "anyref",
+    109: "eqref",
+    108: "i31ref",
+    107: "structref",
+    106: "arrayref",
+    113: "nullref",
+    115: "nullfuncref",
+    114: "nullexternref"
+  };
+  var blockTypeNames = {
+    ...valueTypeNames,
+    64: ""
+    // void
   };
 
   // src/WatParser.ts
@@ -10870,14 +11454,24 @@ ${inner}
     "eqref": ValueType.EqRef,
     "i31ref": ValueType.I31Ref,
     "structref": ValueType.StructRef,
-    "arrayref": ValueType.ArrayRef
+    "arrayref": ValueType.ArrayRef,
+    "nullref": ValueType.NullRef,
+    "nullfuncref": ValueType.NullFuncRef,
+    "nullexternref": ValueType.NullExternRef
   };
   var blockTypeMap = {
     "i32": BlockType.Int32,
     "i64": BlockType.Int64,
     "f32": BlockType.Float32,
     "f64": BlockType.Float64,
-    "v128": BlockType.V128
+    "v128": BlockType.V128,
+    "funcref": BlockType.FuncRef,
+    "externref": BlockType.ExternRef,
+    "anyref": BlockType.AnyRef,
+    "eqref": BlockType.EqRef,
+    "i31ref": BlockType.I31Ref,
+    "structref": BlockType.StructRef,
+    "arrayref": BlockType.ArrayRef
   };
   var mnemonicToOpCode = /* @__PURE__ */ new Map();
   for (const [, opCode] of Object.entries(OpCodes_default)) {
@@ -10890,6 +11484,7 @@ ${inner}
       this.globalNames = /* @__PURE__ */ new Map();
       this.typeNames = /* @__PURE__ */ new Map();
       this.tagNames = /* @__PURE__ */ new Map();
+      this.localNames = /* @__PURE__ */ new Map();
       this.funcList = [];
       this.labelStack = [];
       this.tokens = tokens;
@@ -10983,6 +11578,9 @@ ${inner}
           case "tag":
             this.parseTag();
             break;
+          case "rec":
+            this.parseRecGroup();
+            break;
           default:
             this.skipSExpr();
             break;
@@ -11013,14 +11611,39 @@ ${inner}
       }
     }
     // --- Type section ---
-    parseType() {
+    parseType(recGroup) {
       let typeName = null;
       if (this.peek().type === "Id" /* Id */) {
         typeName = this.advance().value;
       }
       this.skipInlineComment();
       this.expect("LeftParen" /* LeftParen */);
-      const kw = this.peek().value;
+      let isFinal = true;
+      const superTypeIndices = [];
+      let kw = this.peek().value;
+      let hasSubWrapper = false;
+      if (kw === "sub" || kw === "sub_final") {
+        this.advance();
+        hasSubWrapper = true;
+        isFinal = kw === "sub_final";
+        if (kw === "sub" && this.isKeyword("final")) {
+          this.advance();
+          isFinal = true;
+        }
+        while (this.peek().type === "Id" /* Id */ || this.peek().type === "Number" /* Number */) {
+          if (this.peek().type === "Id" /* Id */) {
+            const id = this.advance().value;
+            const resolved = this.typeNames.get(id);
+            if (resolved === void 0) throw this.error(`Unknown type: ${id}`);
+            superTypeIndices.push({ index: resolved });
+          } else {
+            superTypeIndices.push({ index: this.parseNumber() });
+          }
+        }
+        this.expect("LeftParen" /* LeftParen */);
+        kw = this.peek().value;
+      }
+      const subOptions = hasSubWrapper ? { superTypes: superTypeIndices, final: isFinal } : void 0;
       if (kw === "func") {
         this.advance();
         const params = [];
@@ -11041,10 +11664,16 @@ ${inner}
           this.expect("RightParen" /* RightParen */);
         }
         this.expect("RightParen" /* RightParen */);
+        if (hasSubWrapper) this.expect("RightParen" /* RightParen */);
         this.expect("RightParen" /* RightParen */);
-        const funcType = this.moduleBuilder.defineFunctionType(results.length > 0 ? results : null, params);
+        let typeIndex;
+        if (recGroup) {
+          typeIndex = recGroup.addFuncType(results, params).index;
+        } else {
+          typeIndex = this.moduleBuilder.defineFunctionType(results.length > 0 ? results : null, params).index;
+        }
         if (typeName) {
-          this.typeNames.set(typeName, funcType.index);
+          this.typeNames.set(typeName, typeIndex);
         }
       } else if (kw === "struct") {
         this.advance();
@@ -11058,7 +11687,7 @@ ${inner}
           }
           let mutable = false;
           let fieldType;
-          if (this.isLeftParen()) {
+          if (this.isLeftParen() && this.tokens[this.pos + 1]?.value === "mut") {
             this.expect("LeftParen" /* LeftParen */);
             this.expectKeyword("mut");
             fieldType = this.parseValueType();
@@ -11071,16 +11700,22 @@ ${inner}
           this.expect("RightParen" /* RightParen */);
         }
         this.expect("RightParen" /* RightParen */);
+        if (hasSubWrapper) this.expect("RightParen" /* RightParen */);
         this.expect("RightParen" /* RightParen */);
-        const structType = this.moduleBuilder.defineStructType(fields);
+        let typeIndex;
+        if (recGroup) {
+          typeIndex = recGroup.addStructType(fields, subOptions).index;
+        } else {
+          typeIndex = this.moduleBuilder.defineStructType(fields, subOptions).index;
+        }
         if (typeName) {
-          this.typeNames.set(typeName, structType.index);
+          this.typeNames.set(typeName, typeIndex);
         }
       } else if (kw === "array") {
         this.advance();
         let mutable = false;
         let elementType;
-        if (this.isLeftParen()) {
+        if (this.isLeftParen() && this.tokens[this.pos + 1]?.value === "mut") {
           this.expect("LeftParen" /* LeftParen */);
           this.expectKeyword("mut");
           elementType = this.parseValueType();
@@ -11090,14 +11725,43 @@ ${inner}
           elementType = this.parseValueType();
         }
         this.expect("RightParen" /* RightParen */);
+        if (hasSubWrapper) this.expect("RightParen" /* RightParen */);
         this.expect("RightParen" /* RightParen */);
-        const arrayType = this.moduleBuilder.defineArrayType(elementType, mutable);
+        let typeIndex;
+        if (recGroup) {
+          typeIndex = recGroup.addArrayType(elementType, mutable, subOptions).index;
+        } else {
+          typeIndex = this.moduleBuilder.defineArrayType(elementType, mutable, subOptions).index;
+        }
         if (typeName) {
-          this.typeNames.set(typeName, arrayType.index);
+          this.typeNames.set(typeName, typeIndex);
         }
       } else {
         throw this.error(`Expected 'func', 'struct', or 'array' in type definition, got '${kw}'`);
       }
+    }
+    parseRecGroup() {
+      const savedPos = this.pos;
+      const baseIndex = this.moduleBuilder._types.length;
+      let groupIndex = 0;
+      while (this.isLeftParen()) {
+        this.advance();
+        this.advance();
+        if (this.peek().type === "Id" /* Id */) {
+          this.typeNames.set(this.advance().value, baseIndex + groupIndex);
+        }
+        this.skipSExpr();
+        groupIndex++;
+      }
+      this.pos = savedPos;
+      this.moduleBuilder.defineRecGroup((recGroup) => {
+        while (this.isLeftParen()) {
+          this.expect("LeftParen" /* LeftParen */);
+          this.expectKeyword("type");
+          this.parseType(recGroup);
+        }
+      });
+      this.expect("RightParen" /* RightParen */);
     }
     // --- Import section ---
     parseImport() {
@@ -11191,14 +11855,24 @@ ${inner}
       this.moduleBuilder.importTable(moduleName, fieldName, ElementType.AnyFunc, initial, maximum);
     }
     parseImportMemory(moduleName, fieldName) {
+      let memory64 = false;
+      if (this.isKeyword("i64")) {
+        this.advance();
+        memory64 = true;
+      }
       const initial = this.parseNumber();
       let maximum = null;
       if (this.peek().type === "Number" /* Number */) {
         maximum = this.parseNumber();
       }
+      let shared = false;
+      if (this.isKeyword("shared")) {
+        this.advance();
+        shared = true;
+      }
       this.expect("RightParen" /* RightParen */);
       this.expect("RightParen" /* RightParen */);
-      this.moduleBuilder.importMemory(moduleName, fieldName, initial, maximum);
+      this.moduleBuilder.importMemory(moduleName, fieldName, initial, maximum, shared, memory64);
     }
     parseImportGlobal(moduleName, fieldName) {
       let mutable = false;
@@ -11223,12 +11897,21 @@ ${inner}
         name = this.advance().value.substring(1);
       }
       this.skipInlineComment();
+      const inlineExports = this.parseInlineExports();
+      const inlineImport = this.parseInlineImport();
       let hasExplicitType = false;
       let typeIndex = -1;
       if (this.isLeftParen() && this.tokens[this.pos + 1]?.value === "type") {
         this.expect("LeftParen" /* LeftParen */);
         this.expectKeyword("type");
-        typeIndex = this.parseNumber();
+        if (this.peek().type === "Id" /* Id */) {
+          const id = this.advance().value;
+          const resolved = this.typeNames.get(id);
+          if (resolved === void 0) throw this.error(`Unknown type: ${id}`);
+          typeIndex = resolved;
+        } else {
+          typeIndex = this.parseNumber();
+        }
         this.expect("RightParen" /* RightParen */);
         hasExplicitType = true;
       }
@@ -11280,15 +11963,34 @@ ${inner}
         funcReturnTypes = results.length > 0 ? results : null;
         funcParamTypes = params;
       }
+      if (inlineImport) {
+        const imp = this.moduleBuilder.importFunction(
+          inlineImport.moduleName,
+          inlineImport.fieldName,
+          funcReturnTypes,
+          funcParamTypes
+        );
+        if (name) {
+          this.funcNames.set("$" + name, imp.index);
+        }
+        this.funcList.push(imp);
+        for (const exportName of inlineExports) {
+          this.moduleBuilder.exportFunction(imp, exportName);
+        }
+        this.expect("RightParen" /* RightParen */);
+        return;
+      }
       const funcBuilder = this.moduleBuilder.defineFunction(
         name || `func_${this.moduleBuilder._functions.length - 1 + this.moduleBuilder._importsIndexSpace.function}`,
         funcReturnTypes,
         funcParamTypes
       );
+      this.localNames = /* @__PURE__ */ new Map();
       if (!hasExplicitType) {
         paramNames.forEach((pName, i) => {
           if (pName !== null && i < funcBuilder.parameters.length) {
             funcBuilder.parameters[i].withName(pName);
+            this.localNames.set("$" + pName, i);
           }
         });
       }
@@ -11296,6 +11998,9 @@ ${inner}
         this.funcNames.set("$" + name, funcBuilder._index);
       }
       this.funcList.push(funcBuilder);
+      for (const exportName of inlineExports) {
+        this.moduleBuilder.exportFunction(funcBuilder, exportName);
+      }
       if (this.isRightParen()) {
         this.expect("RightParen" /* RightParen */);
         return;
@@ -11307,6 +12012,8 @@ ${inner}
       this.expect("RightParen" /* RightParen */);
     }
     parseFuncBody(asm, func) {
+      const paramCount = func.parameters.length;
+      let localIndex = paramCount;
       while (this.isLeftParen()) {
         const savedPos = this.pos;
         this.expect("LeftParen" /* LeftParen */);
@@ -11317,9 +12024,12 @@ ${inner}
               const localName = this.advance().value.substring(1);
               const vt = this.parseValueType();
               asm.declareLocal(vt, localName);
+              this.localNames.set("$" + localName, localIndex);
+              localIndex++;
             } else {
               const vt = this.parseValueType();
               asm.declareLocal(vt);
+              localIndex++;
             }
           }
           this.expect("RightParen" /* RightParen */);
@@ -11333,6 +12043,10 @@ ${inner}
       }
     }
     parseInstruction(asm, func) {
+      if (this.isLeftParen()) {
+        this.parseFoldedInstruction(asm, func);
+        return;
+      }
       const tok = this.advance();
       const mnemonic = tok.value;
       if (mnemonic === "block" || mnemonic === "loop" || mnemonic === "if" || mnemonic === "try") {
@@ -11340,14 +12054,7 @@ ${inner}
         if (this.peek().type === "Id" /* Id */) {
           labelName = this.advance().value;
         }
-        let blockType = BlockType.Void;
-        if (this.isLeftParen() && this.tokens[this.pos + 1]?.value === "result") {
-          this.expect("LeftParen" /* LeftParen */);
-          this.expectKeyword("result");
-          const vt = this.parseValueType();
-          blockType = blockTypeMap[vt.name] || BlockType.Void;
-          this.expect("RightParen" /* RightParen */);
-        }
+        const blockType = this.parseBlockType();
         const label = asm.emit(mnemonicToOpCode.get(mnemonic), blockType);
         if (labelName && label) {
           this.labelStack.push({ name: labelName, label });
@@ -11357,7 +12064,7 @@ ${inner}
       if (mnemonic === "end") {
         asm.emit(mnemonicToOpCode.get(mnemonic));
         if (this.labelStack.length > 0) {
-          const cfStack = asm._controlFlowVerifier._stack;
+          const cfStack = asm.controlFlowStack;
           const top = this.labelStack[this.labelStack.length - 1];
           if (top.label.block && !cfStack.includes(top.label)) {
             this.labelStack.pop();
@@ -11369,7 +12076,7 @@ ${inner}
         const depth = this.parseNumber();
         asm.emit(mnemonicToOpCode.get(mnemonic), depth);
         if (this.labelStack.length > 0) {
-          const cfStack = asm._controlFlowVerifier._stack;
+          const cfStack = asm.controlFlowStack;
           const top = this.labelStack[this.labelStack.length - 1];
           if (top.label.block && !cfStack.includes(top.label)) {
             this.labelStack.pop();
@@ -11409,7 +12116,7 @@ ${inner}
           asm.emit(opCode, this.parseNumber());
           break;
         case "Local":
-          asm.emit(opCode, this.parseNumber());
+          asm.emit(opCode, this.resolveLocal());
           break;
         case "Global":
           asm.emit(opCode, this.resolveGlobal());
@@ -11418,6 +12125,10 @@ ${inner}
           asm.emit(opCode, this.resolveFunction());
           break;
         case "IndirectFunction": {
+          let tableIndex;
+          if (this.peek().type === "Number" /* Number */) {
+            tableIndex = this.parseNumber();
+          }
           this.expect("LeftParen" /* LeftParen */);
           this.expectKeyword("type");
           let typeIdx;
@@ -11429,7 +12140,7 @@ ${inner}
             typeIdx = this.parseNumber();
           }
           this.expect("RightParen" /* RightParen */);
-          asm.emit(opCode, this.moduleBuilder._types[typeIdx]);
+          asm.emit(opCode, this.moduleBuilder._types[typeIdx], tableIndex);
           break;
         }
         case "RelativeDepth":
@@ -11521,6 +12232,315 @@ ${inner}
           break;
       }
     }
+    parseFoldedInstruction(asm, func) {
+      this.expect("LeftParen" /* LeftParen */);
+      const tok = this.advance();
+      const mnemonic = tok.value;
+      if (mnemonic === "block" || mnemonic === "loop") {
+        let labelName = null;
+        if (this.peek().type === "Id" /* Id */) {
+          labelName = this.advance().value;
+        }
+        const blockType = this.parseBlockType();
+        const label = asm.emit(mnemonicToOpCode.get(mnemonic), blockType);
+        if (labelName && label) {
+          this.labelStack.push({ name: labelName, label });
+        }
+        while (!this.isRightParen()) {
+          this.parseInstruction(asm, func);
+        }
+        asm.emit(mnemonicToOpCode.get("end"));
+        if (this.labelStack.length > 0) {
+          const cfStack = asm.controlFlowStack;
+          const top = this.labelStack[this.labelStack.length - 1];
+          if (top.label.block && !cfStack.includes(top.label)) {
+            this.labelStack.pop();
+          }
+        }
+        this.expect("RightParen" /* RightParen */);
+        return;
+      }
+      if (mnemonic === "if") {
+        let labelName = null;
+        if (this.peek().type === "Id" /* Id */) {
+          labelName = this.advance().value;
+        }
+        const blockType = this.parseBlockType();
+        while (this.isLeftParen() && this.tokens[this.pos + 1]?.value !== "then") {
+          this.parseFoldedInstruction(asm, func);
+        }
+        const label = asm.emit(mnemonicToOpCode.get("if"), blockType);
+        if (labelName && label) {
+          this.labelStack.push({ name: labelName, label });
+        }
+        if (this.isLeftParen() && this.tokens[this.pos + 1]?.value === "then") {
+          this.expect("LeftParen" /* LeftParen */);
+          this.advance();
+          while (!this.isRightParen()) {
+            this.parseInstruction(asm, func);
+          }
+          this.expect("RightParen" /* RightParen */);
+        }
+        if (this.isLeftParen() && this.tokens[this.pos + 1]?.value === "else") {
+          asm.emit(mnemonicToOpCode.get("else"));
+          this.expect("LeftParen" /* LeftParen */);
+          this.advance();
+          while (!this.isRightParen()) {
+            this.parseInstruction(asm, func);
+          }
+          this.expect("RightParen" /* RightParen */);
+        }
+        asm.emit(mnemonicToOpCode.get("end"));
+        if (this.labelStack.length > 0) {
+          const cfStack = asm.controlFlowStack;
+          const top = this.labelStack[this.labelStack.length - 1];
+          if (top.label.block && !cfStack.includes(top.label)) {
+            this.labelStack.pop();
+          }
+        }
+        this.expect("RightParen" /* RightParen */);
+        return;
+      }
+      if (mnemonic === "try") {
+        let labelName = null;
+        if (this.peek().type === "Id" /* Id */) {
+          labelName = this.advance().value;
+        }
+        const blockType = this.parseBlockType();
+        const label = asm.emit(mnemonicToOpCode.get("try"), blockType);
+        if (labelName && label) {
+          this.labelStack.push({ name: labelName, label });
+        }
+        if (this.isLeftParen() && this.tokens[this.pos + 1]?.value === "do") {
+          this.expect("LeftParen" /* LeftParen */);
+          this.advance();
+          while (!this.isRightParen()) {
+            this.parseInstruction(asm, func);
+          }
+          this.expect("RightParen" /* RightParen */);
+        }
+        while (this.isLeftParen() && this.tokens[this.pos + 1]?.value === "catch") {
+          this.expect("LeftParen" /* LeftParen */);
+          this.advance();
+          const tagIdx = this.resolveTag();
+          asm.emit(mnemonicToOpCode.get("catch"), tagIdx);
+          while (!this.isRightParen()) {
+            this.parseInstruction(asm, func);
+          }
+          this.expect("RightParen" /* RightParen */);
+        }
+        if (this.isLeftParen() && this.tokens[this.pos + 1]?.value === "catch_all") {
+          this.expect("LeftParen" /* LeftParen */);
+          this.advance();
+          asm.emit(mnemonicToOpCode.get("catch_all"));
+          while (!this.isRightParen()) {
+            this.parseInstruction(asm, func);
+          }
+          this.expect("RightParen" /* RightParen */);
+        }
+        asm.emit(mnemonicToOpCode.get("end"));
+        if (this.labelStack.length > 0) {
+          const cfStack = asm.controlFlowStack;
+          const top = this.labelStack[this.labelStack.length - 1];
+          if (top.label.block && !cfStack.includes(top.label)) {
+            this.labelStack.pop();
+          }
+        }
+        this.expect("RightParen" /* RightParen */);
+        return;
+      }
+      const opCode = mnemonicToOpCode.get(mnemonic);
+      if (!opCode) {
+        throw this.error(`Unknown instruction: ${mnemonic}`, tok);
+      }
+      const emitArgs = [];
+      this.parseFoldedImmediates(opCode, mnemonic, asm, emitArgs);
+      while (this.isLeftParen()) {
+        this.parseFoldedInstruction(asm, func);
+      }
+      asm.emit(opCode, ...emitArgs);
+      this.expect("RightParen" /* RightParen */);
+    }
+    parseBlockType() {
+      let blockType = BlockType.Void;
+      if (this.isLeftParen() && this.tokens[this.pos + 1]?.value === "type") {
+        this.expect("LeftParen" /* LeftParen */);
+        this.expectKeyword("type");
+        if (this.peek().type === "Id" /* Id */) {
+          const id = this.advance().value;
+          const resolved = this.typeNames.get(id);
+          if (resolved === void 0) throw this.error(`Unknown type: ${id}`);
+          blockType = resolved;
+        } else {
+          blockType = this.parseNumber();
+        }
+        this.expect("RightParen" /* RightParen */);
+        return blockType;
+      }
+      const blockParams = [];
+      const blockResults = [];
+      while (this.isLeftParen() && (this.tokens[this.pos + 1]?.value === "param" || this.tokens[this.pos + 1]?.value === "result")) {
+        const savedPos = this.pos;
+        this.expect("LeftParen" /* LeftParen */);
+        const kw = this.peek().value;
+        if (kw === "param") {
+          this.advance();
+          while (!this.isRightParen()) {
+            if (this.peek().type === "Id" /* Id */) this.advance();
+            else blockParams.push(this.parseValueType());
+          }
+          this.expect("RightParen" /* RightParen */);
+        } else if (kw === "result") {
+          this.advance();
+          while (!this.isRightParen()) {
+            blockResults.push(this.parseValueType());
+          }
+          this.expect("RightParen" /* RightParen */);
+        } else {
+          this.pos = savedPos;
+          break;
+        }
+      }
+      if (blockParams.length === 0 && blockResults.length === 0) {
+        return BlockType.Void;
+      }
+      if (blockParams.length === 0 && blockResults.length === 1) {
+        return blockTypeMap[blockResults[0].name] || BlockType.Void;
+      }
+      const funcType = this.moduleBuilder.defineFunctionType(
+        blockResults.length > 0 ? blockResults : null,
+        blockParams
+      );
+      return funcType.index;
+    }
+    parseFoldedImmediates(opCode, mnemonic, asm, emitArgs) {
+      if (mnemonic === "throw" || mnemonic === "catch") {
+        emitArgs.push(this.resolveTag());
+        return;
+      }
+      if (!opCode.immediate) return;
+      switch (opCode.immediate) {
+        case "VarInt32":
+          emitArgs.push(this.parseNumber());
+          break;
+        case "VarInt64":
+          emitArgs.push(this.parseI64Value());
+          break;
+        case "Float32":
+        case "Float64":
+          emitArgs.push(this.parseFloat());
+          break;
+        case "VarUInt1":
+        case "VarUInt32":
+          emitArgs.push(this.parseNumber());
+          break;
+        case "Local":
+          emitArgs.push(this.resolveLocal());
+          break;
+        case "Global":
+          emitArgs.push(this.resolveGlobal());
+          break;
+        case "Function":
+          emitArgs.push(this.resolveFunction());
+          break;
+        case "RelativeDepth":
+          emitArgs.push(this.resolveBranchTarget(asm));
+          break;
+        case "MemoryImmediate": {
+          let alignment = 0;
+          let offset = 0;
+          while (this.peek().type === "Keyword" /* Keyword */ && (this.peek().value.startsWith("offset=") || this.peek().value.startsWith("align="))) {
+            const kv = this.advance().value;
+            const [key, val] = kv.split("=");
+            if (key === "offset") offset = parseInt(val, 10);
+            else if (key === "align") alignment = Math.log2(parseInt(val, 10));
+          }
+          emitArgs.push(alignment, offset);
+          break;
+        }
+        case "TypeIndexField":
+          emitArgs.push(this.parseNumber(), this.parseNumber());
+          break;
+        case "TypeIndexIndex":
+          emitArgs.push(this.parseNumber(), this.parseNumber());
+          break;
+        case "LaneIndex":
+          emitArgs.push(this.parseNumber());
+          break;
+        case "HeapType":
+          emitArgs.push(this.parseHeapType());
+          break;
+        case "BrOnCast": {
+          const label = this.resolveBranchTarget(asm);
+          const ht1 = this.parseHeapType();
+          const ht2 = this.parseHeapType();
+          emitArgs.push(label, ht1, ht2);
+          break;
+        }
+        case "IndirectFunction": {
+          let tableIndex;
+          if (this.peek().type === "Number" /* Number */) {
+            tableIndex = this.parseNumber();
+          }
+          this.expect("LeftParen" /* LeftParen */);
+          this.expectKeyword("type");
+          let typeIdx;
+          if (this.peek().type === "Id" /* Id */) {
+            const id = this.advance().value;
+            typeIdx = this.typeNames.get(id);
+            if (typeIdx === void 0) throw this.error(`Unknown type: ${id}`);
+          } else {
+            typeIdx = this.parseNumber();
+          }
+          this.expect("RightParen" /* RightParen */);
+          emitArgs.push(this.moduleBuilder._types[typeIdx], tableIndex);
+          break;
+        }
+        case "BranchTable": {
+          const targets = [];
+          while (this.peek().type === "Number" /* Number */) {
+            targets.push(this.parseNumber());
+          }
+          if (targets.length < 1) throw this.error("br_table requires at least a default target");
+          const defaultTarget = targets.pop();
+          const defaultLabel = this.getLabelAtDepth(asm, defaultTarget);
+          const labels = targets.map((t) => this.getLabelAtDepth(asm, t));
+          emitArgs.push(defaultLabel, labels);
+          break;
+        }
+        case "ShuffleMask": {
+          const mask = new Uint8Array(16);
+          for (let i = 0; i < 16; i++) {
+            mask[i] = this.parseNumber();
+          }
+          emitArgs.push(mask);
+          break;
+        }
+        case "V128Const": {
+          const bytes = new Uint8Array(16);
+          if (this.peek().type === "Keyword" /* Keyword */) this.advance();
+          for (let i = 0; i < 16; i++) {
+            bytes[i] = this.parseNumber() & 255;
+          }
+          emitArgs.push(bytes);
+          break;
+        }
+        case "BlockSignature": {
+          let bt = BlockType.Void;
+          if (this.isLeftParen() && this.tokens[this.pos + 1]?.value === "result") {
+            this.expect("LeftParen" /* LeftParen */);
+            this.expectKeyword("result");
+            const vt = this.parseValueType();
+            bt = blockTypeMap[vt.name] || BlockType.Void;
+            this.expect("RightParen" /* RightParen */);
+          }
+          emitArgs.push(bt);
+          break;
+        }
+        default:
+          break;
+      }
+    }
     parseHeapType() {
       const heapTypeKeywords = {
         func: HeapType.Func,
@@ -11543,7 +12563,7 @@ ${inner}
       throw this.error(`Expected heap type but found '${this.peek().value}'`);
     }
     getLabelAtDepth(asm, relativeDepth) {
-      const stack = asm._controlFlowVerifier._stack;
+      const stack = asm.controlFlowStack;
       const targetIndex = stack.length - 1 - relativeDepth;
       if (targetIndex < 0 || targetIndex >= stack.length) {
         throw this.error(`Invalid branch depth: ${relativeDepth}`);
@@ -11591,8 +12611,24 @@ ${inner}
       }
       return this.moduleBuilder._globals[index - importedGlobals.length];
     }
+    resolveGlobalIndex() {
+      if (this.peek().type === "Id" /* Id */) {
+        const id = this.advance().value;
+        const resolved = this.globalNames.get(id);
+        if (resolved === void 0) throw this.error(`Unknown global: ${id}`);
+        return resolved;
+      }
+      return this.parseNumber();
+    }
     // --- Table section ---
     parseTable() {
+      let tableName = null;
+      if (this.peek().type === "Id" /* Id */) {
+        tableName = this.advance().value;
+      }
+      this.skipInlineComment();
+      const inlineExports = this.parseInlineExports();
+      const inlineImport = this.parseInlineImport();
       const initial = this.parseNumber();
       let maximum = null;
       if (this.peek().type === "Number" /* Number */) {
@@ -11602,17 +12638,54 @@ ${inner}
         this.advance();
       }
       this.expect("RightParen" /* RightParen */);
-      this.moduleBuilder.defineTable(ElementType.AnyFunc, initial, maximum);
+      if (inlineImport) {
+        this.moduleBuilder.importTable(inlineImport.moduleName, inlineImport.fieldName, ElementType.AnyFunc, initial, maximum);
+      } else {
+        this.moduleBuilder.defineTable(ElementType.AnyFunc, initial, maximum);
+      }
+      const tableBuilder = this.moduleBuilder._tables[this.moduleBuilder._tables.length - 1];
+      for (const exportName of inlineExports) {
+        if (tableBuilder) {
+          this.moduleBuilder.exportTable(tableBuilder, exportName);
+        }
+      }
     }
     // --- Memory section ---
     parseMemory() {
+      let memName = null;
+      if (this.peek().type === "Id" /* Id */) {
+        memName = this.advance().value;
+      }
+      this.skipInlineComment();
+      const inlineExports = this.parseInlineExports();
+      const inlineImport = this.parseInlineImport();
+      let memory64 = false;
+      if (this.isKeyword("i64")) {
+        this.advance();
+        memory64 = true;
+      }
       const initial = this.parseNumber();
       let maximum = null;
       if (this.peek().type === "Number" /* Number */) {
         maximum = this.parseNumber();
       }
+      let shared = false;
+      if (this.isKeyword("shared")) {
+        this.advance();
+        shared = true;
+      }
       this.expect("RightParen" /* RightParen */);
-      this.moduleBuilder.defineMemory(initial, maximum);
+      if (inlineImport) {
+        this.moduleBuilder.importMemory(inlineImport.moduleName, inlineImport.fieldName, initial, maximum, shared, memory64);
+      } else {
+        this.moduleBuilder.defineMemory(initial, maximum, shared, memory64);
+      }
+      const memBuilder = this.moduleBuilder._memories[this.moduleBuilder._memories.length - 1];
+      for (const exportName of inlineExports) {
+        if (memBuilder) {
+          this.moduleBuilder.exportMemory(memBuilder, exportName);
+        }
+      }
     }
     // --- Global section ---
     parseGlobal() {
@@ -11621,9 +12694,11 @@ ${inner}
         globalName = this.advance().value;
       }
       this.skipInlineComment();
+      const inlineExports = this.parseInlineExports();
+      const inlineImport = this.parseInlineImport();
       let mutable = false;
       let valueType;
-      if (this.isLeftParen()) {
+      if (this.isLeftParen() && this.tokens[this.pos + 1]?.value === "mut") {
         this.expect("LeftParen" /* LeftParen */);
         this.expectKeyword("mut");
         valueType = this.parseValueType();
@@ -11631,6 +12706,14 @@ ${inner}
         this.expect("RightParen" /* RightParen */);
       } else {
         valueType = this.parseValueType();
+      }
+      if (inlineImport) {
+        const imp = this.moduleBuilder.importGlobal(inlineImport.moduleName, inlineImport.fieldName, valueType, mutable);
+        for (const exportName of inlineExports) {
+          this.moduleBuilder.exportGlobal(imp, exportName);
+        }
+        this.expect("RightParen" /* RightParen */);
+        return;
       }
       this.expect("LeftParen" /* LeftParen */);
       const initInstr = this.advance().value;
@@ -11643,6 +12726,11 @@ ${inner}
         initValue = this.parseFloat();
       } else if (initInstr === "f64.const") {
         initValue = this.parseFloat();
+      } else if (initInstr === "ref.null") {
+        this.parseHeapType();
+        initValue = 0;
+      } else if (initInstr === "global.get") {
+        initValue = this.resolveGlobalIndex();
       }
       this.expect("RightParen" /* RightParen */);
       this.expect("RightParen" /* RightParen */);
@@ -11650,6 +12738,9 @@ ${inner}
       if (globalName) {
         globalBuilder.withName(globalName.substring(1));
         this.globalNames.set(globalName, globalBuilder._index);
+      }
+      for (const exportName of inlineExports) {
+        this.moduleBuilder.exportGlobal(globalBuilder, exportName);
       }
     }
     // --- Export section ---
@@ -11744,39 +12835,76 @@ ${inner}
     }
     // --- Element section ---
     parseElem() {
-      this.expect("LeftParen" /* LeftParen */);
-      const offsetInstr = this.advance().value;
-      let offset = 0;
-      if (offsetInstr === "i32.const") {
-        offset = this.parseNumber();
-      }
-      this.expect("RightParen" /* RightParen */);
-      if (this.isKeyword("func")) {
-        this.advance();
-      }
-      const elements = [];
-      while (this.peek().type === "Number" /* Number */ || this.peek().type === "Id" /* Id */) {
-        if (this.peek().type === "Id" /* Id */) {
-          const id = this.advance().value;
-          const idx = this.funcNames.get(id);
-          if (idx === void 0) throw this.error(`Unknown function: ${id}`);
-          elements.push(this.funcList[idx]);
-        } else {
-          const idx = this.parseNumber();
-          elements.push(this.funcList[idx]);
+      const isPassive = this.isKeyword("func") || this.isKeyword("funcref");
+      if (!isPassive) {
+        this.expect("LeftParen" /* LeftParen */);
+        const offsetInstr = this.advance().value;
+        let offset = 0;
+        if (offsetInstr === "i32.const") {
+          offset = this.parseNumber();
+        } else if (offsetInstr === "i64.const") {
+          offset = this.parseNumber();
+        } else if (offsetInstr === "global.get") {
+          offset = this.resolveGlobalIndex();
         }
+        this.expect("RightParen" /* RightParen */);
+        if (this.isKeyword("func")) {
+          this.advance();
+        }
+        const elements = [];
+        while (this.peek().type === "Number" /* Number */ || this.peek().type === "Id" /* Id */) {
+          if (this.peek().type === "Id" /* Id */) {
+            const id = this.advance().value;
+            const idx = this.funcNames.get(id);
+            if (idx === void 0) throw this.error(`Unknown function: ${id}`);
+            elements.push(this.funcList[idx]);
+          } else {
+            const idx = this.parseNumber();
+            elements.push(this.funcList[idx]);
+          }
+        }
+        this.expect("RightParen" /* RightParen */);
+        const table = this.moduleBuilder._tables[0];
+        this.moduleBuilder.defineElementSegment(table, elements, offset);
+      } else {
+        this.advance();
+        const elements = [];
+        while (this.peek().type === "Number" /* Number */ || this.peek().type === "Id" /* Id */) {
+          if (this.peek().type === "Id" /* Id */) {
+            const id = this.advance().value;
+            const idx = this.funcNames.get(id);
+            if (idx === void 0) throw this.error(`Unknown function: ${id}`);
+            elements.push(this.funcList[idx]);
+          } else {
+            const idx = this.parseNumber();
+            elements.push(this.funcList[idx]);
+          }
+        }
+        this.expect("RightParen" /* RightParen */);
+        this.moduleBuilder.definePassiveElementSegment(elements);
       }
-      this.expect("RightParen" /* RightParen */);
-      const table = this.moduleBuilder._tables[0];
-      this.moduleBuilder.defineTableSegment(table, elements, offset);
     }
     // --- Data section ---
     parseData() {
+      if (this.peek().type === "String" /* String */) {
+        const dataStr2 = this.expect("String" /* String */).value;
+        const bytes2 = new Uint8Array(dataStr2.length);
+        for (let i = 0; i < dataStr2.length; i++) {
+          bytes2[i] = dataStr2.charCodeAt(i);
+        }
+        this.expect("RightParen" /* RightParen */);
+        this.moduleBuilder.defineData(bytes2).passive();
+        return;
+      }
       this.expect("LeftParen" /* LeftParen */);
       const offsetInstr = this.advance().value;
       let offset = 0;
       if (offsetInstr === "i32.const") {
         offset = this.parseNumber();
+      } else if (offsetInstr === "i64.const") {
+        offset = this.parseNumber();
+      } else if (offsetInstr === "global.get") {
+        offset = this.resolveGlobalIndex();
       }
       this.expect("RightParen" /* RightParen */);
       const dataStr = this.expect("String" /* String */).value;
@@ -11785,7 +12913,7 @@ ${inner}
         bytes[i] = dataStr.charCodeAt(i);
       }
       this.expect("RightParen" /* RightParen */);
-      this.moduleBuilder.defineData(bytes, offset);
+      this.moduleBuilder.defineData(bytes, Number(offset));
     }
     parseTag() {
       let tagName = null;
@@ -11823,8 +12951,58 @@ ${inner}
       }
       return this.parseNumber();
     }
+    parseInlineExports() {
+      const exports = [];
+      while (this.isLeftParen() && this.tokens[this.pos + 1]?.value === "export") {
+        this.expect("LeftParen" /* LeftParen */);
+        this.expectKeyword("export");
+        exports.push(this.expect("String" /* String */).value);
+        this.expect("RightParen" /* RightParen */);
+      }
+      return exports;
+    }
+    parseInlineImport() {
+      if (this.isLeftParen() && this.tokens[this.pos + 1]?.value === "import") {
+        this.expect("LeftParen" /* LeftParen */);
+        this.expectKeyword("import");
+        const moduleName = this.expect("String" /* String */).value;
+        const fieldName = this.expect("String" /* String */).value;
+        this.expect("RightParen" /* RightParen */);
+        return { moduleName, fieldName };
+      }
+      return null;
+    }
+    resolveLocal() {
+      if (this.peek().type === "Id" /* Id */) {
+        const id = this.advance().value;
+        const idx = this.localNames.get(id);
+        if (idx === void 0) throw this.error(`Unknown local: ${id}`);
+        return idx;
+      }
+      return this.parseNumber();
+    }
     // --- Helpers ---
     parseValueType() {
+      if (this.isLeftParen() && this.tokens[this.pos + 1]?.value === "ref") {
+        this.expect("LeftParen" /* LeftParen */);
+        this.advance();
+        let nullable = false;
+        if (this.isKeyword("null")) {
+          this.advance();
+          nullable = true;
+        }
+        let typeIndex;
+        if (this.peek().type === "Id" /* Id */) {
+          const id = this.advance().value;
+          const resolved = this.typeNames.get(id);
+          if (resolved === void 0) throw this.error(`Unknown type: ${id}`);
+          typeIndex = resolved;
+        } else {
+          typeIndex = this.parseNumber();
+        }
+        this.expect("RightParen" /* RightParen */);
+        return nullable ? refNullType(typeIndex) : refType(typeIndex);
+      }
       const tok = this.advance();
       const vt = valueTypeMap[tok.value];
       if (!vt) throw this.error(`Unknown value type: ${tok.value}`, tok);
@@ -17757,6 +18935,240 @@ log('Instance 2: add(100, 200) = ' + add2(100, 200));
 log('');
 log('Same module, different instances: ' + (inst1 !== inst2));
 log('Same compiled module: ' + (wasmModule === wasmModule));`
+    },
+    // ─── Imports ───
+    "import-memory": {
+      label: "Import Memory",
+      group: "Imports",
+      description: "Import a host-provided linear memory so WASM and JS share the same buffer.",
+      target: "mvp",
+      features: [],
+      imports: ["ModuleBuilder", "ValueType"],
+      code: `// Import Memory \u2014 share a WebAssembly.Memory between JS and WASM
+const mod = new ModuleBuilder('importMem');
+
+// Declare a memory import (1 page min, 2 pages max)
+mod.importMemory('env', 'memory', 1, 2);
+
+// A function that writes a value to memory offset 0
+mod.defineFunction('store', null, [ValueType.Int32], (f, a) => {
+  a.const_i32(0);         // address
+  a.get_local(f.getParameter(0));  // value
+  a.store_i32(2, 0);      // store i32 at offset 0
+}).withExport();
+
+// A function that reads the value back
+mod.defineFunction('load', [ValueType.Int32], [], (f, a) => {
+  a.const_i32(0);         // address
+  a.load_i32(2, 0);       // load i32 from offset 0
+}).withExport();
+
+// Create shared memory in JS
+const memory = new WebAssembly.Memory({ initial: 1, maximum: 2 });
+const instance = await mod.instantiate({ env: { memory } });
+
+const { store, load } = instance.instance.exports;
+
+// Write from WASM, read from JS
+store(42);
+const view = new Int32Array(memory.buffer);
+log('JS reads from shared memory: ' + view[0]);
+
+// Write from JS, read from WASM
+view[0] = 99;
+log('WASM reads from shared memory: ' + load());`
+    },
+    "import-global": {
+      label: "Import Global",
+      group: "Imports",
+      description: "Import a host-provided global variable that WASM can read and write.",
+      target: "2.0",
+      features: ["mutable-globals"],
+      imports: ["ModuleBuilder", "ValueType"],
+      code: `// Import Global \u2014 share a mutable global between JS and WASM
+const mod = new ModuleBuilder('importGlobal');
+
+// Import a mutable i32 global
+const counter = mod.importGlobal('env', 'counter', ValueType.Int32, true);
+
+// Function that reads the global
+mod.defineFunction('get', [ValueType.Int32], [], (f, a) => {
+  a.get_global(counter);
+}).withExport();
+
+// Function that increments the global
+mod.defineFunction('increment', null, [], (f, a) => {
+  a.get_global(counter);
+  a.const_i32(1);
+  a.add_i32();
+  a.set_global(counter);
+}).withExport();
+
+// Create a mutable global in JS
+const counterGlobal = new WebAssembly.Global({ value: 'i32', mutable: true }, 10);
+const instance = await mod.instantiate({ env: { counter: counterGlobal } });
+
+const { get, increment } = instance.instance.exports;
+
+log('Initial: ' + get());
+increment();
+increment();
+increment();
+log('After 3 increments: ' + get());
+
+// Modify from JS side
+counterGlobal.value = 100;
+log('After JS sets to 100: ' + get());`
+    },
+    "import-table": {
+      label: "Import Table",
+      group: "Imports",
+      description: "Import a host-provided table and use call_indirect to dispatch.",
+      target: "mvp",
+      features: [],
+      imports: ["ModuleBuilder", "ValueType", "ElementType"],
+      code: `// Import Table \u2014 call_indirect through a host-provided table
+const mod = new ModuleBuilder('importTable');
+
+// Import a table of function references
+mod.importTable('env', 'table', ElementType.AnyFunc, 2);
+
+// Define the function signature for table entries: (i32, i32) -> i32
+const binopType = mod.defineFunctionType([ValueType.Int32],
+  [ValueType.Int32, ValueType.Int32]);
+
+// Dispatch: calls the function at table index with two args
+mod.defineFunction('dispatch', [ValueType.Int32],
+  [ValueType.Int32, ValueType.Int32, ValueType.Int32], (f, a) => {
+  a.get_local(f.getParameter(0)); // arg1
+  a.get_local(f.getParameter(1)); // arg2
+  a.get_local(f.getParameter(2)); // table index
+  a.call_indirect(binopType);
+}).withExport();
+
+// Create table in JS and populate with functions
+const table = new WebAssembly.Table({ element: 'anyfunc', initial: 2 });
+
+// We need helper WASM functions to put in the table
+const helperMod = new ModuleBuilder('helpers');
+helperMod.defineFunction('add', [ValueType.Int32],
+  [ValueType.Int32, ValueType.Int32], (f, a) => {
+  a.get_local(f.getParameter(0));
+  a.get_local(f.getParameter(1));
+  a.add_i32();
+}).withExport();
+helperMod.defineFunction('mul', [ValueType.Int32],
+  [ValueType.Int32, ValueType.Int32], (f, a) => {
+  a.get_local(f.getParameter(0));
+  a.get_local(f.getParameter(1));
+  a.mul_i32();
+}).withExport();
+
+const helpers = await helperMod.instantiate();
+table.set(0, helpers.instance.exports.add);
+table.set(1, helpers.instance.exports.mul);
+
+const instance = await mod.instantiate({ env: { table } });
+const { dispatch } = instance.instance.exports;
+
+log('dispatch(3, 4, 0) [add]: ' + dispatch(3, 4, 0));
+log('dispatch(3, 4, 1) [mul]: ' + dispatch(3, 4, 1));`
+    },
+    "import-tag": {
+      label: "Import Tag",
+      group: "Imports",
+      description: "Import an exception tag so JS and WASM share the same exception identity.",
+      target: "3.0",
+      features: ["exception-handling"],
+      imports: ["ModuleBuilder", "ValueType", "BlockType"],
+      code: `// Import Tag \u2014 share an exception tag between JS and WASM
+const mod = new ModuleBuilder('importTag');
+
+// Import a tag that carries an i32 payload
+const errTag = mod.importTag('env', 'error', [ValueType.Int32]);
+const tagIndex = errTag.index; // imported tag index
+
+// Function that throws the imported tag
+mod.defineFunction('fail', null, [ValueType.Int32], (f, a) => {
+  a.get_local(f.getParameter(0));
+  a.throw(tagIndex);
+}).withExport();
+
+// Function that catches the imported tag
+mod.defineFunction('tryCatch', [ValueType.Int32], [ValueType.Int32], (f, a) => {
+  a.try(BlockType.Int32);
+    a.get_local(f.getParameter(0));
+    a.throw(tagIndex);
+    a.const_i32(-1); // unreachable
+  a.catch(tagIndex);
+    // tag payload (i32) is now on the stack
+  a.end();
+}).withExport();
+
+// Create a tag in JS
+const tag = new WebAssembly.Tag({ parameters: ['i32'] });
+const instance = await mod.instantiate({ env: { error: tag } });
+
+const { fail, tryCatch } = instance.instance.exports;
+
+// Catch in WASM
+log('tryCatch(42): ' + tryCatch(42));
+
+// Catch in JS using the same tag identity
+try {
+  fail(99);
+} catch (e) {
+  if (e instanceof WebAssembly.Exception) {
+    log('JS caught WASM exception, payload: ' + e.getArg(tag, 0));
+  }
+}`
+    },
+    "gc-struct-dsl": {
+      label: "Struct DSL (mut)",
+      group: "GC",
+      description: "Define struct types with the object DSL and mut() helper for mutable fields.",
+      target: "latest",
+      features: ["gc"],
+      imports: ["ModuleBuilder", "ValueType", "mut"],
+      code: `// Struct DSL \u2014 object syntax with mut() for mutable fields
+const mod = new ModuleBuilder('structDSL', { target: 'latest' });
+
+// Object syntax: keys become field names, values are types
+// Use mut() to mark fields as mutable
+const Point = mod.defineStructType({
+  x: mut(ValueType.Int32),
+  y: mut(ValueType.Int32),
+});
+
+// TypedStructBuilder provides field index map
+log('Point field indices:');
+log('  x = ' + Point.field.x);
+log('  y = ' + Point.field.y);
+
+// Immutable fields: just pass the type directly
+const Color = mod.defineStructType({
+  r: ValueType.Float32,
+  g: ValueType.Float32,
+  b: ValueType.Float32,
+});
+
+log('');
+log('Color field indices:');
+log('  r = ' + Color.field.r);
+log('  g = ' + Color.field.g);
+log('  b = ' + Color.field.b);
+
+// Use field indices in struct.get / struct.set
+mod.defineFunction('makePoint', null, [], (f, a) => {
+  a.const_i32(10);  // x
+  a.const_i32(20);  // y
+  a.struct_new(Point);
+  a.drop();
+});
+
+log('');
+log('WAT output:');
+log(mod.toString());`
     }
   };
 
@@ -17774,7 +19186,8 @@ log('Same compiled module: ' + (wasmModule === wasmModule));`
     "Post-MVP": "\u{1F680}",
     WAT: "\u{1F4DD}",
     Debug: "\u{1F50D}",
-    GC: "\u267B"
+    GC: "\u267B",
+    Imports: "\u{1F4E5}"
   };
   var TARGET_ORDER = {
     mvp: 0,
@@ -18069,7 +19482,8 @@ log('Same compiled module: ' + (wasmModule === wasmModule));`
     "RecGroupBuilder",
     "refType",
     "refNullType",
-    "OpCodes"
+    "OpCodes",
+    "mut"
   ];
   window.webasmjs = {
     ModuleBuilder,
@@ -18087,7 +19501,8 @@ log('Same compiled module: ' + (wasmModule === wasmModule));`
     RecGroupBuilder,
     refType,
     refNullType,
-    OpCodes: OpCodes_default
+    OpCodes: OpCodes_default,
+    mut
   };
   async function run() {
     const outputBody = document.getElementById("outputBody");

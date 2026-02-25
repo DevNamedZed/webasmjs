@@ -5987,4 +5987,244 @@ log('');
 log('Same module, different instances: ' + (inst1 !== inst2));
 log('Same compiled module: ' + (wasmModule === wasmModule));`,
   },
+
+  // ─── Imports ───
+
+  'import-memory': {
+    label: 'Import Memory',
+    group: 'Imports',
+    description: 'Import a host-provided linear memory so WASM and JS share the same buffer.',
+    target: 'mvp',
+    features: [],
+    imports: ['ModuleBuilder', 'ValueType'],
+    code: `// Import Memory — share a WebAssembly.Memory between JS and WASM
+const mod = new ModuleBuilder('importMem');
+
+// Declare a memory import (1 page min, 2 pages max)
+mod.importMemory('env', 'memory', 1, 2);
+
+// A function that writes a value to memory offset 0
+mod.defineFunction('store', null, [ValueType.Int32], (f, a) => {
+  a.const_i32(0);         // address
+  a.get_local(f.getParameter(0));  // value
+  a.store_i32(2, 0);      // store i32 at offset 0
+}).withExport();
+
+// A function that reads the value back
+mod.defineFunction('load', [ValueType.Int32], [], (f, a) => {
+  a.const_i32(0);         // address
+  a.load_i32(2, 0);       // load i32 from offset 0
+}).withExport();
+
+// Create shared memory in JS
+const memory = new WebAssembly.Memory({ initial: 1, maximum: 2 });
+const instance = await mod.instantiate({ env: { memory } });
+
+const { store, load } = instance.instance.exports;
+
+// Write from WASM, read from JS
+store(42);
+const view = new Int32Array(memory.buffer);
+log('JS reads from shared memory: ' + view[0]);
+
+// Write from JS, read from WASM
+view[0] = 99;
+log('WASM reads from shared memory: ' + load());`,
+  },
+
+  'import-global': {
+    label: 'Import Global',
+    group: 'Imports',
+    description: 'Import a host-provided global variable that WASM can read and write.',
+    target: '2.0',
+    features: ['mutable-globals'],
+    imports: ['ModuleBuilder', 'ValueType'],
+    code: `// Import Global — share a mutable global between JS and WASM
+const mod = new ModuleBuilder('importGlobal');
+
+// Import a mutable i32 global
+const counter = mod.importGlobal('env', 'counter', ValueType.Int32, true);
+
+// Function that reads the global
+mod.defineFunction('get', [ValueType.Int32], [], (f, a) => {
+  a.get_global(counter);
+}).withExport();
+
+// Function that increments the global
+mod.defineFunction('increment', null, [], (f, a) => {
+  a.get_global(counter);
+  a.const_i32(1);
+  a.add_i32();
+  a.set_global(counter);
+}).withExport();
+
+// Create a mutable global in JS
+const counterGlobal = new WebAssembly.Global({ value: 'i32', mutable: true }, 10);
+const instance = await mod.instantiate({ env: { counter: counterGlobal } });
+
+const { get, increment } = instance.instance.exports;
+
+log('Initial: ' + get());
+increment();
+increment();
+increment();
+log('After 3 increments: ' + get());
+
+// Modify from JS side
+counterGlobal.value = 100;
+log('After JS sets to 100: ' + get());`,
+  },
+
+  'import-table': {
+    label: 'Import Table',
+    group: 'Imports',
+    description: 'Import a host-provided table and use call_indirect to dispatch.',
+    target: 'mvp',
+    features: [],
+    imports: ['ModuleBuilder', 'ValueType', 'ElementType'],
+    code: `// Import Table — call_indirect through a host-provided table
+const mod = new ModuleBuilder('importTable');
+
+// Import a table of function references
+mod.importTable('env', 'table', ElementType.AnyFunc, 2);
+
+// Define the function signature for table entries: (i32, i32) -> i32
+const binopType = mod.defineFunctionType([ValueType.Int32],
+  [ValueType.Int32, ValueType.Int32]);
+
+// Dispatch: calls the function at table index with two args
+mod.defineFunction('dispatch', [ValueType.Int32],
+  [ValueType.Int32, ValueType.Int32, ValueType.Int32], (f, a) => {
+  a.get_local(f.getParameter(0)); // arg1
+  a.get_local(f.getParameter(1)); // arg2
+  a.get_local(f.getParameter(2)); // table index
+  a.call_indirect(binopType);
+}).withExport();
+
+// Create table in JS and populate with functions
+const table = new WebAssembly.Table({ element: 'anyfunc', initial: 2 });
+
+// We need helper WASM functions to put in the table
+const helperMod = new ModuleBuilder('helpers');
+helperMod.defineFunction('add', [ValueType.Int32],
+  [ValueType.Int32, ValueType.Int32], (f, a) => {
+  a.get_local(f.getParameter(0));
+  a.get_local(f.getParameter(1));
+  a.add_i32();
+}).withExport();
+helperMod.defineFunction('mul', [ValueType.Int32],
+  [ValueType.Int32, ValueType.Int32], (f, a) => {
+  a.get_local(f.getParameter(0));
+  a.get_local(f.getParameter(1));
+  a.mul_i32();
+}).withExport();
+
+const helpers = await helperMod.instantiate();
+table.set(0, helpers.instance.exports.add);
+table.set(1, helpers.instance.exports.mul);
+
+const instance = await mod.instantiate({ env: { table } });
+const { dispatch } = instance.instance.exports;
+
+log('dispatch(3, 4, 0) [add]: ' + dispatch(3, 4, 0));
+log('dispatch(3, 4, 1) [mul]: ' + dispatch(3, 4, 1));`,
+  },
+
+  'import-tag': {
+    label: 'Import Tag',
+    group: 'Imports',
+    description: 'Import an exception tag so JS and WASM share the same exception identity.',
+    target: '3.0',
+    features: ['exception-handling'],
+    imports: ['ModuleBuilder', 'ValueType', 'BlockType'],
+    code: `// Import Tag — share an exception tag between JS and WASM
+const mod = new ModuleBuilder('importTag');
+
+// Import a tag that carries an i32 payload
+const errTag = mod.importTag('env', 'error', [ValueType.Int32]);
+const tagIndex = errTag.index; // imported tag index
+
+// Function that throws the imported tag
+mod.defineFunction('fail', null, [ValueType.Int32], (f, a) => {
+  a.get_local(f.getParameter(0));
+  a.throw(tagIndex);
+}).withExport();
+
+// Function that catches the imported tag
+mod.defineFunction('tryCatch', [ValueType.Int32], [ValueType.Int32], (f, a) => {
+  a.try(BlockType.Int32);
+    a.get_local(f.getParameter(0));
+    a.throw(tagIndex);
+    a.const_i32(-1); // unreachable
+  a.catch(tagIndex);
+    // tag payload (i32) is now on the stack
+  a.end();
+}).withExport();
+
+// Create a tag in JS
+const tag = new WebAssembly.Tag({ parameters: ['i32'] });
+const instance = await mod.instantiate({ env: { error: tag } });
+
+const { fail, tryCatch } = instance.instance.exports;
+
+// Catch in WASM
+log('tryCatch(42): ' + tryCatch(42));
+
+// Catch in JS using the same tag identity
+try {
+  fail(99);
+} catch (e) {
+  if (e instanceof WebAssembly.Exception) {
+    log('JS caught WASM exception, payload: ' + e.getArg(tag, 0));
+  }
+}`,
+  },
+
+  'gc-struct-dsl': {
+    label: 'Struct DSL (mut)',
+    group: 'GC',
+    description: 'Define struct types with the object DSL and mut() helper for mutable fields.',
+    target: 'latest',
+    features: ['gc'],
+    imports: ['ModuleBuilder', 'ValueType', 'mut'],
+    code: `// Struct DSL — object syntax with mut() for mutable fields
+const mod = new ModuleBuilder('structDSL', { target: 'latest' });
+
+// Object syntax: keys become field names, values are types
+// Use mut() to mark fields as mutable
+const Point = mod.defineStructType({
+  x: mut(ValueType.Int32),
+  y: mut(ValueType.Int32),
+});
+
+// TypedStructBuilder provides field index map
+log('Point field indices:');
+log('  x = ' + Point.field.x);
+log('  y = ' + Point.field.y);
+
+// Immutable fields: just pass the type directly
+const Color = mod.defineStructType({
+  r: ValueType.Float32,
+  g: ValueType.Float32,
+  b: ValueType.Float32,
+});
+
+log('');
+log('Color field indices:');
+log('  r = ' + Color.field.r);
+log('  g = ' + Color.field.g);
+log('  b = ' + Color.field.b);
+
+// Use field indices in struct.get / struct.set
+mod.defineFunction('makePoint', null, [], (f, a) => {
+  a.const_i32(10);  // x
+  a.const_i32(20);  // y
+  a.struct_new(Point);
+  a.drop();
+});
+
+log('');
+log('WAT output:');
+log(mod.toString());`,
+  },
 };

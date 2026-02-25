@@ -21,6 +21,9 @@ export default class DataSegmentBuilder {
   }
 
   passive(): this {
+    if (this._features && !this._features.has('bulk-memory')) {
+      throw new Error("The 'bulk-memory' feature is required but not enabled. Use target 'latest' or add 'bulk-memory' to features.");
+    }
     this._passive = true;
     return this;
   }
@@ -49,7 +52,7 @@ export default class DataSegmentBuilder {
     return this._initExpressionEmitter;
   }
 
-  offset(value: number | bigint | GlobalBuilder | ((asm: InitExpressionEmitter) => void)): void {
+  offset(value: number | bigint | GlobalBuilder | ((asm: InitExpressionEmitter) => void)): this {
     if (typeof value === 'function') {
       this.createInitEmitter(value);
     } else if (value instanceof GlobalBuilder) {
@@ -71,6 +74,7 @@ export default class DataSegmentBuilder {
     } else {
       throw new Error('Unsupported offset');
     }
+    return this;
   }
 
   write(writer: BinaryWriter): void {

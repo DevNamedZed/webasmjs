@@ -13,8 +13,7 @@ export default class ExportBuilder {
   }
 
   write(writer: BinaryWriter): void {
-    writer.writeVarUInt32(this.name.length);
-    writer.writeString(this.name);
+    writer.writeLenPrefixedString(this.name);
     writer.writeUInt8(this.externalKind.value);
     switch (this.externalKind) {
       case ExternalKind.Function:

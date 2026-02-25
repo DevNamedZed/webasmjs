@@ -147,3 +147,40 @@ describe('BinaryWriter encoding', () => {
     expect(bytes.length).toBe(5); // Max 5 bytes for 32-bit varuint
   });
 });
+
+describe('writeVarUInt64', () => {
+  test('small number delegates to writeVarUInt32', () => {
+    assertWrite(x => x.writeVarUInt64(0), [0]);
+    assertWrite(x => x.writeVarUInt64(100), [100]);
+    assertWrite(x => x.writeVarUInt64(128), [0x80, 0x01]);
+  });
+
+  test('max u32 value as number', () => {
+    assertWrite(x => x.writeVarUInt64(0xFFFFFFFF), [0xFF, 0xFF, 0xFF, 0xFF, 0x0F]);
+  });
+
+  test('bigint values', () => {
+    const w = new BinaryWriter();
+    w.writeVarUInt64(0x100000000n);
+    const bytes = w.toArray();
+    // 2^32 = 4294967296 in unsigned LEB128
+    expect(bytes.length).toBe(5);
+    expect(bytes[0]).toBe(0x80);
+    expect(bytes[1]).toBe(0x80);
+    expect(bytes[2]).toBe(0x80);
+    expect(bytes[3]).toBe(0x80);
+    expect(bytes[4]).toBe(0x10);
+  });
+
+  test('large bigint value', () => {
+    const w = new BinaryWriter();
+    w.writeVarUInt64(0xFFFFFFFFFFFFFFFFn);
+    const bytes = w.toArray();
+    // Max u64 is 10 bytes in LEB128
+    expect(bytes.length).toBe(10);
+  });
+
+  test('zero as bigint', () => {
+    assertWrite(x => x.writeVarUInt64(0n), [0]);
+  });
+});

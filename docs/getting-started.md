@@ -80,7 +80,7 @@ The `end` instruction is automatically added when using the callback form.
 
 ## Control Flow
 
-Use block, loop, and if/else with callbacks for structured control flow:
+Use block, loop, and if/else for structured control flow:
 
 ```typescript
 mod.defineFunction('abs', [ValueType.Int32], [ValueType.Int32], (f, a) => {
@@ -148,3 +148,19 @@ console.log(wat);
 - [API Reference](api.md) — complete documentation of all builders and emitters
 - [Examples](examples.md) — annotated examples covering common patterns
 - [Playground](https://devnamedzed.github.io/webasmjs/) — try webasmjs in the browser
+
+You can also build modules by parsing WAT text with `parseWat()`:
+
+```typescript
+import { parseWat } from 'webasmjs';
+
+const mod = parseWat(`
+  (module
+    (func (export "add") (param i32 i32) (result i32)
+      local.get 0
+      local.get 1
+      i32.add))
+`);
+
+const instance = await mod.instantiate();
+```

@@ -13,6 +13,7 @@ import OpCodes from './OpCodes';
 import ControlFlowVerifier from './verification/ControlFlowVerifier';
 import { ControlFlowType } from './verification/types';
 import OperandStackVerifier, { TypeResolver } from './verification/OperandStackVerifier';
+import VerificationError from './verification/VerificationError';
 import FuncTypeSignature from './FuncTypeSignature';
 import { BlockType } from './types';
 
@@ -21,6 +22,16 @@ const validateParameters = (immediateType: string, values: unknown[] | undefined
     throw new Error(`Unexpected number of values for ${immediateType}.`);
   }
 };
+
+// Resolve builder objects (StructTypeBuilder, ArrayTypeBuilder, etc.) to their numeric index.
+// Allows GC opcodes to accept either a raw number or a builder with .index.
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function resolveIndex(value: any): number {
+  if (typeof value === 'object' && value !== null && typeof value.index === 'number') {
+    return value.index;
+  }
+  return value;
+}
 
 export interface AssemblyEmitterOptions {
   disableVerification: boolean;
@@ -65,6 +76,10 @@ export default class AssemblyEmitter extends OpCodeEmitter {
 
   get entryLabel(): LabelBuilder {
     return this._entryLabel;
+  }
+
+  get controlFlowStack(): LabelBuilder[] {
+    return this._controlFlowVerifier._stack;
   }
 
   get disableVerification(): boolean {
@@ -190,6 +205,19 @@ export default class AssemblyEmitter extends OpCodeEmitter {
           }
         }
       }
+
+      // rethrow: verify depth points to a catch handler
+      if (opCode === OpCodes.rethrow && immediate) {
+        const targetLabel = immediate.values[0] as LabelBuilder;
+        if (targetLabel && targetLabel.block) {
+          const targetBlock = targetLabel.block;
+          if (!targetBlock.isTry && !targetBlock.inCatchHandler) {
+            throw new VerificationError(
+              'rethrow: target block is not a try/catch block.'
+            );
+          }
+        }
+      }
     }
 
     // Handle delegate: pops the try block (like end)
@@ -217,7 +245,7 @@ export default class AssemblyEmitter extends OpCodeEmitter {
   ): LabelBuilder | null {
     let result: LabelBuilder | null = null;
     if (opCode.controlFlow === ControlFlowType.Push) {
-      const blockType = immediate!.values[0] as BlockTypeDescriptor;
+      const blockType = immediate!.values[0] as BlockTypeDescriptor | number;
       const isLoop = opCode === OpCodes.loop;
       const isTry = opCode === OpCodes["try"];
       result = this._controlFlowVerifier.push(
@@ -296,8 +324,10 @@ export default class AssemblyEmitter extends OpCodeEmitter {
         return Immediate.createGlobal(values[0]);
 
       case ImmediateType.IndirectFunction:
-        validateParameters(immediateType, values, 1);
-        return Immediate.createIndirectFunction(values[0]);
+        if (values.length < 1) {
+          throw new Error(`${immediateType} requires at least 1 parameter.`);
+        }
+        return Immediate.createIndirectFunction(values[0], values[1] ?? 0);
 
       case ImmediateType.Local:
         validateParameters(immediateType, values, 1);
@@ -330,7 +360,7 @@ export default class AssemblyEmitter extends OpCodeEmitter {
 
       case ImmediateType.VarUInt32:
         validateParameters(immediateType, values, 1);
-        return Immediate.createVarUInt32(values[0]);
+        return Immediate.createVarUInt32(resolveIndex(values[0]));
 
       case ImmediateType.V128Const:
         validateParameters(immediateType, values, 1);
@@ -346,11 +376,11 @@ export default class AssemblyEmitter extends OpCodeEmitter {
 
       case ImmediateType.TypeIndexField:
         validateParameters(immediateType, values, 2);
-        return Immediate.createTypeIndexField(values[0], values[1]);
+        return Immediate.createTypeIndexField(resolveIndex(values[0]), values[1]);
 
       case ImmediateType.TypeIndexIndex:
         validateParameters(immediateType, values, 2);
-        return Immediate.createTypeIndexIndex(values[0], values[1]);
+        return Immediate.createTypeIndexIndex(resolveIndex(values[0]), values[1]);
 
       case ImmediateType.HeapType:
         validateParameters(immediateType, values, 1);

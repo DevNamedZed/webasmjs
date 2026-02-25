@@ -54,7 +54,7 @@ export default class GlobalBuilder {
     return this._initExpressionEmitter;
   }
 
-  value(value: number | bigint | GlobalBuilder | ((asm: InitExpressionEmitter) => void)): void {
+  value(value: number | bigint | GlobalBuilder | ((asm: InitExpressionEmitter) => void)): this {
     if (typeof value === 'function') {
       this.createInitEmitter(value);
     } else if (value instanceof GlobalBuilder) {
@@ -79,6 +79,7 @@ export default class GlobalBuilder {
     } else {
       throw new Error('Unsupported global value.');
     }
+    return this;
   }
 
   withExport(name: string): this {

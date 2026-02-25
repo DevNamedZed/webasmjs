@@ -193,6 +193,11 @@ export default class ModuleBuilder {
       throw new Error(`An import already exists for ${moduleName}.${name}`);
     }
 
+    const totalTables = this._tables.length + this._importsIndexSpace.table;
+    if (totalTables >= 1 && !this._resolvedFeatures.has('multi-table')) {
+      throw new Error('Only one table can be created per module. Enable the multi-table feature to allow multiple tables.');
+    }
+
     const tableType = new TableType(
       elementType,
       new ResizableLimits(initialSize, maximumSize)
@@ -217,7 +222,8 @@ export default class ModuleBuilder {
     name: string,
     initialSize: number,
     maximumSize: number | null = null,
-    shared: boolean = false
+    shared: boolean = false,
+    memory64: boolean = false
   ): ImportBuilder {
     Arg.string('moduleName', moduleName);
     Arg.string('name', name);
@@ -238,7 +244,14 @@ export default class ModuleBuilder {
       throw new VerificationError('Only one memory is allowed per module. Enable the multi-memory feature to allow multiple memories.');
     }
 
-    const memoryType = new MemoryType(new ResizableLimits(initialSize, maximumSize), shared);
+    if (shared) {
+      this._requireFeature('threads');
+    }
+    if (memory64) {
+      this._requireFeature('memory64');
+    }
+
+    const memoryType = new MemoryType(new ResizableLimits(initialSize, maximumSize), shared, memory64);
     const importBuilder = new ImportBuilder(
       moduleName,
       name,
@@ -289,6 +302,7 @@ export default class ModuleBuilder {
     name: string,
     parameters: ValueTypeDescriptor[]
   ): ImportBuilder {
+    this._requireFeature('exception-handling');
     if (
       this._imports.some(
         (x) =>
@@ -352,7 +366,8 @@ export default class ModuleBuilder {
     initialSize: number,
     maximumSize: number | null = null
   ): TableBuilder {
-    if (this._tables.length >= 1 && !this._resolvedFeatures.has('multi-table')) {
+    const totalTables = this._tables.length + this._importsIndexSpace.table;
+    if (totalTables >= 1 && !this._resolvedFeatures.has('multi-table')) {
       throw new Error('Only one table can be created per module. Enable the multi-table feature to allow multiple tables.');
     }
 
@@ -369,6 +384,13 @@ export default class ModuleBuilder {
   defineMemory(initialSize: number, maximumSize: number | null = null, shared: boolean = false, memory64: boolean = false): MemoryBuilder {
     if ((this._memories.length !== 0 || this._importsIndexSpace.memory !== 0) && !this._resolvedFeatures.has('multi-memory')) {
       throw new VerificationError('Only one memory is allowed per module. Enable the multi-memory feature to allow multiple memories.');
+    }
+
+    if (shared) {
+      this._requireFeature('threads');
+    }
+    if (memory64) {
+      this._requireFeature('memory64');
     }
 
     const memory = new MemoryBuilder(
@@ -404,6 +426,7 @@ export default class ModuleBuilder {
   defineTag(
     parameters: ValueTypeDescriptor[]
   ): TagBuilder {
+    this._requireFeature('exception-handling');
     // Tags have no return types — they describe the exception payload
     const funcType = this.defineFunctionType(null, parameters);
     const tagBuilder = new TagBuilder(
@@ -498,6 +521,7 @@ export default class ModuleBuilder {
   }
 
   exportTag(tagBuilder: TagBuilder, name: string): ExportBuilder {
+    this._requireFeature('exception-handling');
     Arg.notEmptyString('name', name);
 
     if (
@@ -539,6 +563,7 @@ export default class ModuleBuilder {
   definePassiveElementSegment(
     elements: (FunctionBuilder | ImportBuilder)[]
   ): ElementSegmentBuilder {
+    this._requireFeature('bulk-memory');
     const segment = new ElementSegmentBuilder(null, elements, this._resolvedFeatures, this.disableVerification);
     segment.passive();
     this._elements.push(segment);
@@ -551,7 +576,8 @@ export default class ModuleBuilder {
   ): DataSegmentBuilder {
     Arg.instanceOf('data', data, Uint8Array);
 
-    const hasMemory64 = this._memories.some((m) => m.isMemory64);
+    const hasMemory64 = this._memories.some((m) => m.isMemory64) ||
+      this._imports.some((imp) => imp.isMemoryImport() && imp.data.memory64);
     const dataSegmentBuilder = new DataSegmentBuilder(data, this._resolvedFeatures, hasMemory64, this.disableVerification);
     if (offset !== undefined) {
       dataSegmentBuilder.offset(offset);

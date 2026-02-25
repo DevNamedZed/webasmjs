@@ -106,7 +106,9 @@ export default class TextModuleWriter {
           const memType = imp.data as MemoryType;
           const limits = memType.resizableLimits;
           const max = limits.maximum !== null ? ` ${limits.maximum}` : '';
-          desc = `(memory (;${imp.index};) ${limits.initial}${max})`;
+          const shared = memType.shared ? ' shared' : '';
+          const m64 = memType.memory64 ? ' i64' : '';
+          desc = `(memory (;${imp.index};)${m64} ${limits.initial}${max}${shared})`;
           break;
         }
         case ExternalKind.Global: {
@@ -209,6 +211,9 @@ export default class TextModuleWriter {
     switch (type) {
       case ImmediateType.BlockSignature: {
         const blockType = values[0];
+        if (typeof blockType === 'number') {
+          return `(type ${blockType})`;
+        }
         if (blockType && blockType.name !== 'void') {
           return `(result ${blockType.name})`;
         }
@@ -247,7 +252,11 @@ export default class TextModuleWriter {
       }
       case ImmediateType.IndirectFunction: {
         const funcType = values[0];
-        return `(type ${funcType.index})`;
+        const tableIndex = values[1] || 0;
+        let text = '';
+        if (tableIndex > 0) text += `${tableIndex} `;
+        text += `(type ${funcType.index})`;
+        return text;
       }
       case ImmediateType.RelativeDepth: {
         const label = values[0];
@@ -330,16 +339,7 @@ export default class TextModuleWriter {
 
       let initExpr = '';
       if (g._initExpressionEmitter) {
-        const instrs = g._initExpressionEmitter._instructions;
-        // Init expression is typically one const instruction + end
-        for (const instr of instrs) {
-          if (instr.opCode.mnemonic === 'end') continue;
-          initExpr = instr.opCode.mnemonic;
-          if (instr.immediate) {
-            const immText = this.immediateToText(instr.immediate.type, instr.immediate.values);
-            if (immText) initExpr += ` ${immText}`;
-          }
-        }
+        initExpr = this.formatInitExpr(g._initExpressionEmitter._instructions);
       }
 
       lines.push(`  (global (;${g._index};) ${typeStr} (${initExpr}))`);
@@ -403,15 +403,7 @@ export default class TextModuleWriter {
 
       let offsetExpr = '';
       if (elem._initExpressionEmitter) {
-        const instrs = elem._initExpressionEmitter._instructions;
-        for (const instr of instrs) {
-          if (instr.opCode.mnemonic === 'end') continue;
-          offsetExpr = instr.opCode.mnemonic;
-          if (instr.immediate) {
-            const immText = this.immediateToText(instr.immediate.type, instr.immediate.values);
-            if (immText) offsetExpr += ` ${immText}`;
-          }
-        }
+        offsetExpr = this.formatInitExpr(elem._initExpressionEmitter._instructions);
       }
 
       const tableIndex = elem._table ? elem._table._index : 0;
@@ -434,15 +426,7 @@ export default class TextModuleWriter {
 
       let offsetExpr = '';
       if (seg._initExpressionEmitter) {
-        const instrs = seg._initExpressionEmitter._instructions;
-        for (const instr of instrs) {
-          if (instr.opCode.mnemonic === 'end') continue;
-          offsetExpr = instr.opCode.mnemonic;
-          if (instr.immediate) {
-            const immText = this.immediateToText(instr.immediate.type, instr.immediate.values);
-            if (immText) offsetExpr += ` ${immText}`;
-          }
-        }
+        offsetExpr = this.formatInitExpr(seg._initExpressionEmitter._instructions);
       }
 
       if (seg._memoryIndex !== 0) {
@@ -451,6 +435,20 @@ export default class TextModuleWriter {
         lines.push(`  (data (;${i};) (${offsetExpr}) "${dataStr}")`);
       }
     });
+  }
+
+  private formatInitExpr(instructions: Instruction[]): string {
+    const parts: string[] = [];
+    for (const instr of instructions) {
+      if (instr.opCode.mnemonic === 'end') continue;
+      let part = instr.opCode.mnemonic;
+      if (instr.immediate) {
+        const immText = this.immediateToText(instr.immediate.type, instr.immediate.values);
+        if (immText) part += ` ${immText}`;
+      }
+      parts.push(part);
+    }
+    return parts.join(' ');
   }
 
   private bytesToWatString(data: Uint8Array): string {

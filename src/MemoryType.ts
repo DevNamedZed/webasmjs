@@ -27,9 +27,16 @@ export default class MemoryType {
       if (this.shared) flags |= 0b010;
       if (this.memory64) flags |= 0b100;
       writer.writeVarUInt7(flags);
-      writer.writeVarUInt32(this.resizableLimits.initial);
-      if (this.resizableLimits.maximum !== null) {
-        writer.writeVarUInt32(this.resizableLimits.maximum);
+      if (this.memory64) {
+        writer.writeVarUInt64(this.resizableLimits.initial);
+        if (this.resizableLimits.maximum !== null) {
+          writer.writeVarUInt64(this.resizableLimits.maximum);
+        }
+      } else {
+        writer.writeVarUInt32(this.resizableLimits.initial);
+        if (this.resizableLimits.maximum !== null) {
+          writer.writeVarUInt32(this.resizableLimits.maximum);
+        }
       }
     } else {
       this.resizableLimits.write(writer);

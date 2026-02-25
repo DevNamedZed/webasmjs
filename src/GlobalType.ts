@@ -1,5 +1,5 @@
 import BinaryWriter from './BinaryWriter';
-import { ValueTypeDescriptor } from './types';
+import { ValueTypeDescriptor, writeValueType } from './types';
 
 export default class GlobalType {
   private _valueType: ValueTypeDescriptor;
@@ -19,7 +19,7 @@ export default class GlobalType {
   }
 
   write(writer: BinaryWriter): void {
-    writer.writeVarInt7(this._valueType.value);
+    writeValueType(writer, this._valueType);
     writer.writeVarUInt1(this._mutable ? 1 : 0);
   }
 

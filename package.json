@@ -16,9 +16,6 @@
     "test:ci": "jest --ci --coverage --reporters=default --reporters=jest-junit",
     "test:coverage": "jest --coverage",
     "build:release": "npm run clean:build && npm run build && npm run test:ci",
-    "examples": "npx tsx examples/showcase/run-examples.ts",
-    "examples:cdk": "npx tsx examples/aws-cdk-comparison/run-examples.ts",
-    "examples:all": "npm run examples && npm run examples:cdk",
     "build:playground": "npm run build && npx tsx playground/build.ts",
     "playground": "npx tsx playground/build.ts --serve",
     "prepare": "husky"

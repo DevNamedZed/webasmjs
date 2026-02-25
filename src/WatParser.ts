@@ -11,12 +11,15 @@ import {
   HeapTypeRef,
   OpCodeDef,
   ModuleBuilderOptions,
+  refType,
+  refNullType,
 } from './types';
 import FunctionBuilder from './FunctionBuilder';
 import FunctionEmitter from './FunctionEmitter';
 import GlobalBuilder from './GlobalBuilder';
 import ImportBuilder from './ImportBuilder';
 import LabelBuilder from './LabelBuilder';
+import RecGroupBuilder from './RecGroupBuilder';
 
 // --- Tokenizer ---
 
@@ -191,6 +194,9 @@ const valueTypeMap: Record<string, ValueTypeDescriptor> = {
   'i31ref': ValueType.I31Ref,
   'structref': ValueType.StructRef,
   'arrayref': ValueType.ArrayRef,
+  'nullref': ValueType.NullRef,
+  'nullfuncref': ValueType.NullFuncRef,
+  'nullexternref': ValueType.NullExternRef,
 };
 
 const blockTypeMap: Record<string, BlockTypeDescriptor> = {
@@ -199,6 +205,13 @@ const blockTypeMap: Record<string, BlockTypeDescriptor> = {
   'f32': BlockType.Float32,
   'f64': BlockType.Float64,
   'v128': BlockType.V128,
+  'funcref': BlockType.FuncRef,
+  'externref': BlockType.ExternRef,
+  'anyref': BlockType.AnyRef,
+  'eqref': BlockType.EqRef,
+  'i31ref': BlockType.I31Ref,
+  'structref': BlockType.StructRef,
+  'arrayref': BlockType.ArrayRef,
 };
 
 // Build mnemonic → opcode lookup
@@ -216,6 +229,7 @@ class WatParserImpl {
   globalNames: Map<string, number> = new Map();
   typeNames: Map<string, number> = new Map();
   tagNames: Map<string, number> = new Map();
+  localNames: Map<string, number> = new Map();
   funcList: (FunctionBuilder | ImportBuilder)[] = [];
   labelStack: { name: string; label: LabelBuilder }[] = [];
 
@@ -330,6 +344,9 @@ class WatParserImpl {
         case 'tag':
           this.parseTag();
           break;
+        case 'rec':
+          this.parseRecGroup();
+          break;
         default:
           // Skip unknown section
           this.skipSExpr();
@@ -365,10 +382,12 @@ class WatParserImpl {
 
   // --- Type section ---
 
-  parseType(): void {
+  parseType(recGroup?: RecGroupBuilder): void {
     // (type $name (func (param i32 i32) (result i32)))
     // (type (;0;) (struct (field $x (mut i32))))
     // (type (;0;) (array (mut i32)))
+    // (type $child (sub $parent (struct (field i32))))
+    // (type $sealed (sub final (struct (field i32))))
     // We already consumed: ( type
     let typeName: string | null = null;
     if (this.peek().type === TokenType.Id) {
@@ -377,7 +396,38 @@ class WatParserImpl {
     this.skipInlineComment();
     this.expect(TokenType.LeftParen);
 
-    const kw = this.peek().value;
+    // Handle sub/sub_final wrapper
+    let isFinal = true;
+    const superTypeIndices: { index: number }[] = [];
+    let kw = this.peek().value;
+    let hasSubWrapper = false;
+
+    if (kw === 'sub' || kw === 'sub_final') {
+      this.advance();
+      hasSubWrapper = true;
+      isFinal = kw === 'sub_final';
+      if (kw === 'sub' && this.isKeyword('final')) {
+        this.advance();
+        isFinal = true;
+      }
+      // Parse super type references (before the inner type definition paren)
+      while (this.peek().type === TokenType.Id || this.peek().type === TokenType.Number) {
+        if (this.peek().type === TokenType.Id) {
+          const id = this.advance().value;
+          const resolved = this.typeNames.get(id);
+          if (resolved === undefined) throw this.error(`Unknown type: ${id}`);
+          superTypeIndices.push({ index: resolved });
+        } else {
+          superTypeIndices.push({ index: this.parseNumber() });
+        }
+      }
+      // Now expect the inner type definition
+      this.expect(TokenType.LeftParen);
+      kw = this.peek().value;
+    }
+
+    const subOptions = hasSubWrapper ? { superTypes: superTypeIndices, final: isFinal } : undefined;
+
     if (kw === 'func') {
       this.advance();
       const params: ValueTypeDescriptor[] = [];
@@ -400,11 +450,17 @@ class WatParserImpl {
       }
 
       this.expect(TokenType.RightParen); // closing func
+      if (hasSubWrapper) this.expect(TokenType.RightParen); // closing sub
       this.expect(TokenType.RightParen); // closing type
 
-      const funcType = this.moduleBuilder.defineFunctionType(results.length > 0 ? results : null, params);
+      let typeIndex: number;
+      if (recGroup) {
+        typeIndex = recGroup.addFuncType(results, params).index;
+      } else {
+        typeIndex = this.moduleBuilder.defineFunctionType(results.length > 0 ? results : null, params).index;
+      }
       if (typeName) {
-        this.typeNames.set(typeName, funcType.index);
+        this.typeNames.set(typeName, typeIndex);
       }
     } else if (kw === 'struct') {
       this.advance();
@@ -419,7 +475,7 @@ class WatParserImpl {
         }
         let mutable = false;
         let fieldType: ValueTypeDescriptor;
-        if (this.isLeftParen()) {
+        if (this.isLeftParen() && this.tokens[this.pos + 1]?.value === 'mut') {
           this.expect(TokenType.LeftParen);
           this.expectKeyword('mut');
           fieldType = this.parseValueType();
@@ -433,17 +489,23 @@ class WatParserImpl {
       }
 
       this.expect(TokenType.RightParen); // closing struct
+      if (hasSubWrapper) this.expect(TokenType.RightParen); // closing sub
       this.expect(TokenType.RightParen); // closing type
 
-      const structType = this.moduleBuilder.defineStructType(fields);
+      let typeIndex: number;
+      if (recGroup) {
+        typeIndex = recGroup.addStructType(fields, subOptions).index;
+      } else {
+        typeIndex = this.moduleBuilder.defineStructType(fields, subOptions).index;
+      }
       if (typeName) {
-        this.typeNames.set(typeName, structType.index);
+        this.typeNames.set(typeName, typeIndex);
       }
     } else if (kw === 'array') {
       this.advance();
       let mutable = false;
       let elementType: ValueTypeDescriptor;
-      if (this.isLeftParen()) {
+      if (this.isLeftParen() && this.tokens[this.pos + 1]?.value === 'mut') {
         this.expect(TokenType.LeftParen);
         this.expectKeyword('mut');
         elementType = this.parseValueType();
@@ -454,15 +516,51 @@ class WatParserImpl {
       }
 
       this.expect(TokenType.RightParen); // closing array
+      if (hasSubWrapper) this.expect(TokenType.RightParen); // closing sub
       this.expect(TokenType.RightParen); // closing type
 
-      const arrayType = this.moduleBuilder.defineArrayType(elementType, mutable);
+      let typeIndex: number;
+      if (recGroup) {
+        typeIndex = recGroup.addArrayType(elementType, mutable, subOptions).index;
+      } else {
+        typeIndex = this.moduleBuilder.defineArrayType(elementType, mutable, subOptions).index;
+      }
       if (typeName) {
-        this.typeNames.set(typeName, arrayType.index);
+        this.typeNames.set(typeName, typeIndex);
       }
     } else {
       throw this.error(`Expected 'func', 'struct', or 'array' in type definition, got '${kw}'`);
     }
+  }
+
+  parseRecGroup(): void {
+    // (rec (type $name ...) (type $name2 ...) ...)
+    // We already consumed: ( rec
+
+    // First pass: pre-register type names so forward/mutual references work
+    const savedPos = this.pos;
+    const baseIndex = this.moduleBuilder._types.length;
+    let groupIndex = 0;
+    while (this.isLeftParen()) {
+      this.advance(); // consume (
+      this.advance(); // consume 'type'
+      if (this.peek().type === TokenType.Id) {
+        this.typeNames.set(this.advance().value, baseIndex + groupIndex);
+      }
+      this.skipSExpr(); // skip the rest of this type definition
+      groupIndex++;
+    }
+    this.pos = savedPos;
+
+    // Second pass: actually parse types into the rec group
+    this.moduleBuilder.defineRecGroup((recGroup) => {
+      while (this.isLeftParen()) {
+        this.expect(TokenType.LeftParen);
+        this.expectKeyword('type');
+        this.parseType(recGroup);
+      }
+    });
+    this.expect(TokenType.RightParen); // closing rec
   }
 
   // --- Import section ---
@@ -573,15 +671,27 @@ class WatParserImpl {
 
   parseImportMemory(moduleName: string, fieldName: string): void {
     // (memory (;0;) 1 2)
+    // (memory (;0;) i64 1 10)         — memory64
+    // (memory (;0;) 1 10 shared)      — shared memory
+    let memory64 = false;
+    if (this.isKeyword('i64')) {
+      this.advance();
+      memory64 = true;
+    }
     const initial = this.parseNumber();
     let maximum: number | null = null;
     if (this.peek().type === TokenType.Number) {
       maximum = this.parseNumber();
     }
+    let shared = false;
+    if (this.isKeyword('shared')) {
+      this.advance();
+      shared = true;
+    }
     this.expect(TokenType.RightParen); // closing memory
     this.expect(TokenType.RightParen); // closing import
 
-    this.moduleBuilder.importMemory(moduleName, fieldName, initial, maximum);
+    this.moduleBuilder.importMemory(moduleName, fieldName, initial, maximum, shared, memory64);
   }
 
   parseImportGlobal(moduleName: string, fieldName: string): void {
@@ -609,7 +719,8 @@ class WatParserImpl {
 
   parseFunc(): void {
     // (func $name (;1;) (type 0) (param i32) (result i32) (local i32) ...)
-    // OR: (func $name (param i32) (param i32) (result i32) ...)
+    // (func (export "name") (param i32) (result i32) ...)
+    // (func (import "mod" "name") (param i32) (result i32))
     let name: string | null = null;
     if (this.peek().type === TokenType.Id) {
       name = this.advance().value.substring(1);
@@ -617,13 +728,26 @@ class WatParserImpl {
 
     this.skipInlineComment();
 
+    // Parse inline exports: (export "name") ...
+    const inlineExports = this.parseInlineExports();
+
+    // Parse inline import: (import "mod" "name")
+    const inlineImport = this.parseInlineImport();
+
     // Check if there's an explicit (type N)
     let hasExplicitType = false;
     let typeIndex = -1;
     if (this.isLeftParen() && this.tokens[this.pos + 1]?.value === 'type') {
       this.expect(TokenType.LeftParen);
       this.expectKeyword('type');
-      typeIndex = this.parseNumber();
+      if (this.peek().type === TokenType.Id) {
+        const id = this.advance().value;
+        const resolved = this.typeNames.get(id);
+        if (resolved === undefined) throw this.error(`Unknown type: ${id}`);
+        typeIndex = resolved;
+      } else {
+        typeIndex = this.parseNumber();
+      }
       this.expect(TokenType.RightParen);
       hasExplicitType = true;
     }
@@ -683,17 +807,37 @@ class WatParserImpl {
       funcParamTypes = params;
     }
 
+    // Handle inline import: produce an import instead of a function definition
+    if (inlineImport) {
+      const imp = this.moduleBuilder.importFunction(
+        inlineImport.moduleName, inlineImport.fieldName,
+        funcReturnTypes, funcParamTypes
+      );
+      if (name) {
+        this.funcNames.set('$' + name, imp.index);
+      }
+      this.funcList.push(imp);
+      // Apply inline exports to the import
+      for (const exportName of inlineExports) {
+        this.moduleBuilder.exportFunction(imp as unknown as FunctionBuilder, exportName);
+      }
+      this.expect(TokenType.RightParen); // closing func
+      return;
+    }
+
     const funcBuilder = this.moduleBuilder.defineFunction(
       name || `func_${this.moduleBuilder._functions.length - 1 + this.moduleBuilder._importsIndexSpace.function}`,
       funcReturnTypes,
       funcParamTypes
     );
 
-    // Apply parameter names
+    // Apply parameter names and populate localNames
+    this.localNames = new Map();
     if (!hasExplicitType) {
       paramNames.forEach((pName, i) => {
         if (pName !== null && i < funcBuilder.parameters.length) {
           funcBuilder.parameters[i].withName(pName);
+          this.localNames.set('$' + pName, i);
         }
       });
     }
@@ -702,6 +846,11 @@ class WatParserImpl {
       this.funcNames.set('$' + name, funcBuilder._index);
     }
     this.funcList.push(funcBuilder);
+
+    // Apply inline exports
+    for (const exportName of inlineExports) {
+      this.moduleBuilder.exportFunction(funcBuilder, exportName);
+    }
 
     // Check if there are locals or instructions
     if (this.isRightParen()) {
@@ -720,6 +869,8 @@ class WatParserImpl {
 
   parseFuncBody(asm: FunctionEmitter, func: FunctionBuilder): void {
     // Parse locals first
+    const paramCount = func.parameters.length;
+    let localIndex = paramCount;
     while (this.isLeftParen()) {
       const savedPos = this.pos;
       this.expect(TokenType.LeftParen);
@@ -730,9 +881,12 @@ class WatParserImpl {
             const localName = this.advance().value.substring(1); // strip $
             const vt = this.parseValueType();
             asm.declareLocal(vt, localName);
+            this.localNames.set('$' + localName, localIndex);
+            localIndex++;
           } else {
             const vt = this.parseValueType();
             asm.declareLocal(vt);
+            localIndex++;
           }
         }
         this.expect(TokenType.RightParen);
@@ -749,6 +903,12 @@ class WatParserImpl {
   }
 
   parseInstruction(asm: FunctionEmitter, func: FunctionBuilder): void {
+    // Folded s-expression form: (instr ...)
+    if (this.isLeftParen()) {
+      this.parseFoldedInstruction(asm, func);
+      return;
+    }
+
     const tok = this.advance();
     const mnemonic = tok.value;
 
@@ -759,14 +919,7 @@ class WatParserImpl {
       if (this.peek().type === TokenType.Id) {
         labelName = this.advance().value;
       }
-      let blockType: BlockTypeDescriptor = BlockType.Void;
-      if (this.isLeftParen() && this.tokens[this.pos + 1]?.value === 'result') {
-        this.expect(TokenType.LeftParen);
-        this.expectKeyword('result');
-        const vt = this.parseValueType();
-        blockType = blockTypeMap[vt.name] || BlockType.Void;
-        this.expect(TokenType.RightParen);
-      }
+      const blockType = this.parseBlockType();
       const label = asm.emit(mnemonicToOpCode.get(mnemonic)!, blockType);
       if (labelName && label) {
         this.labelStack.push({ name: labelName, label });
@@ -779,7 +932,7 @@ class WatParserImpl {
       asm.emit(mnemonicToOpCode.get(mnemonic)!);
       if (this.labelStack.length > 0) {
         // Check if the most recent label matches current depth
-        const cfStack = (asm as any)._controlFlowVerifier._stack;
+        const cfStack = asm.controlFlowStack;
         // After 'end' pops, check if the popped label was named
         const top = this.labelStack[this.labelStack.length - 1];
         // If the label's block depth matches, pop it
@@ -796,7 +949,7 @@ class WatParserImpl {
       asm.emit(mnemonicToOpCode.get(mnemonic)!, depth);
       // Pop named label if present (delegate closes the try block)
       if (this.labelStack.length > 0) {
-        const cfStack = (asm as any)._controlFlowVerifier._stack;
+        const cfStack = asm.controlFlowStack;
         const top = this.labelStack[this.labelStack.length - 1];
         if (top.label.block && !cfStack.includes(top.label)) {
           this.labelStack.pop();
@@ -842,7 +995,7 @@ class WatParserImpl {
         asm.emit(opCode, this.parseNumber());
         break;
       case 'Local':
-        asm.emit(opCode, this.parseNumber());
+        asm.emit(opCode, this.resolveLocal());
         break;
       case 'Global':
         asm.emit(opCode, this.resolveGlobal());
@@ -851,6 +1004,11 @@ class WatParserImpl {
         asm.emit(opCode, this.resolveFunction());
         break;
       case 'IndirectFunction': {
+        // Optional table index: call_indirect N (type M) or call_indirect (type M)
+        let tableIndex: number | undefined;
+        if (this.peek().type === TokenType.Number) {
+          tableIndex = this.parseNumber();
+        }
         // (type N) or (type $name)
         this.expect(TokenType.LeftParen);
         this.expectKeyword('type');
@@ -863,7 +1021,7 @@ class WatParserImpl {
           typeIdx = this.parseNumber();
         }
         this.expect(TokenType.RightParen);
-        asm.emit(opCode, this.moduleBuilder._types[typeIdx]);
+        asm.emit(opCode, this.moduleBuilder._types[typeIdx], tableIndex);
         break;
       }
       case 'RelativeDepth':
@@ -970,6 +1128,359 @@ class WatParserImpl {
     }
   }
 
+  parseFoldedInstruction(asm: FunctionEmitter, func: FunctionBuilder): void {
+    this.expect(TokenType.LeftParen);
+    const tok = this.advance();
+    const mnemonic = tok.value;
+
+    // Folded block: (block $label? (result type)? instr* )
+    if (mnemonic === 'block' || mnemonic === 'loop') {
+      let labelName: string | null = null;
+      if (this.peek().type === TokenType.Id) {
+        labelName = this.advance().value;
+      }
+      const blockType = this.parseBlockType();
+      const label = asm.emit(mnemonicToOpCode.get(mnemonic)!, blockType);
+      if (labelName && label) {
+        this.labelStack.push({ name: labelName, label });
+      }
+      // Parse body instructions until closing )
+      while (!this.isRightParen()) {
+        this.parseInstruction(asm, func);
+      }
+      asm.emit(mnemonicToOpCode.get('end')!);
+      if (this.labelStack.length > 0) {
+        const cfStack = asm.controlFlowStack;
+        const top = this.labelStack[this.labelStack.length - 1];
+        if (top.label.block && !cfStack.includes(top.label)) {
+          this.labelStack.pop();
+        }
+      }
+      this.expect(TokenType.RightParen);
+      return;
+    }
+
+    // Folded if: (if $label? (result type)? <condition> (then instr*) (else instr*)? )
+    if (mnemonic === 'if') {
+      let labelName: string | null = null;
+      if (this.peek().type === TokenType.Id) {
+        labelName = this.advance().value;
+      }
+      const blockType = this.parseBlockType();
+      // Parse condition operands (folded expressions before (then ...))
+      while (this.isLeftParen() && this.tokens[this.pos + 1]?.value !== 'then') {
+        this.parseFoldedInstruction(asm, func);
+      }
+      const label = asm.emit(mnemonicToOpCode.get('if')!, blockType);
+      if (labelName && label) {
+        this.labelStack.push({ name: labelName, label });
+      }
+      // Parse (then ...)
+      if (this.isLeftParen() && this.tokens[this.pos + 1]?.value === 'then') {
+        this.expect(TokenType.LeftParen);
+        this.advance(); // consume 'then'
+        while (!this.isRightParen()) {
+          this.parseInstruction(asm, func);
+        }
+        this.expect(TokenType.RightParen);
+      }
+      // Parse optional (else ...)
+      if (this.isLeftParen() && this.tokens[this.pos + 1]?.value === 'else') {
+        asm.emit(mnemonicToOpCode.get('else')!);
+        this.expect(TokenType.LeftParen);
+        this.advance(); // consume 'else'
+        while (!this.isRightParen()) {
+          this.parseInstruction(asm, func);
+        }
+        this.expect(TokenType.RightParen);
+      }
+      asm.emit(mnemonicToOpCode.get('end')!);
+      if (this.labelStack.length > 0) {
+        const cfStack = asm.controlFlowStack;
+        const top = this.labelStack[this.labelStack.length - 1];
+        if (top.label.block && !cfStack.includes(top.label)) {
+          this.labelStack.pop();
+        }
+      }
+      this.expect(TokenType.RightParen);
+      return;
+    }
+
+    // Folded try: (try $label? (result type)? (do instr*) (catch $tag instr*)* (catch_all instr*)? )
+    if (mnemonic === 'try') {
+      let labelName: string | null = null;
+      if (this.peek().type === TokenType.Id) {
+        labelName = this.advance().value;
+      }
+      const blockType = this.parseBlockType();
+      const label = asm.emit(mnemonicToOpCode.get('try')!, blockType);
+      if (labelName && label) {
+        this.labelStack.push({ name: labelName, label });
+      }
+
+      // Parse (do instr*)
+      if (this.isLeftParen() && this.tokens[this.pos + 1]?.value === 'do') {
+        this.expect(TokenType.LeftParen);
+        this.advance(); // consume 'do'
+        while (!this.isRightParen()) {
+          this.parseInstruction(asm, func);
+        }
+        this.expect(TokenType.RightParen);
+      }
+
+      // Parse (catch $tag instr*)*
+      while (this.isLeftParen() && this.tokens[this.pos + 1]?.value === 'catch') {
+        this.expect(TokenType.LeftParen);
+        this.advance(); // consume 'catch'
+        const tagIdx = this.resolveTag();
+        asm.emit(mnemonicToOpCode.get('catch')!, tagIdx);
+        while (!this.isRightParen()) {
+          this.parseInstruction(asm, func);
+        }
+        this.expect(TokenType.RightParen);
+      }
+
+      // Parse optional (catch_all instr*)
+      if (this.isLeftParen() && this.tokens[this.pos + 1]?.value === 'catch_all') {
+        this.expect(TokenType.LeftParen);
+        this.advance(); // consume 'catch_all'
+        asm.emit(mnemonicToOpCode.get('catch_all')!);
+        while (!this.isRightParen()) {
+          this.parseInstruction(asm, func);
+        }
+        this.expect(TokenType.RightParen);
+      }
+
+      asm.emit(mnemonicToOpCode.get('end')!);
+      if (this.labelStack.length > 0) {
+        const cfStack = asm.controlFlowStack;
+        const top = this.labelStack[this.labelStack.length - 1];
+        if (top.label.block && !cfStack.includes(top.label)) {
+          this.labelStack.pop();
+        }
+      }
+      this.expect(TokenType.RightParen);
+      return;
+    }
+
+    // General folded instruction: (instr immediate* operand* )
+    // Immediates are non-paren tokens after the mnemonic, operands are nested (...)
+    const opCode = mnemonicToOpCode.get(mnemonic);
+    if (!opCode) {
+      throw this.error(`Unknown instruction: ${mnemonic}`, tok);
+    }
+
+    // Collect immediates first (before any nested expressions)
+    const emitArgs: any[] = [];
+    this.parseFoldedImmediates(opCode, mnemonic, asm, emitArgs);
+
+    // Parse nested operand expressions
+    while (this.isLeftParen()) {
+      this.parseFoldedInstruction(asm, func);
+    }
+
+    // Emit the instruction
+    asm.emit(opCode, ...emitArgs);
+    this.expect(TokenType.RightParen);
+  }
+
+  private parseBlockType(): BlockTypeDescriptor | number {
+    let blockType: BlockTypeDescriptor | number = BlockType.Void;
+
+    // Check for (type $idx) first
+    if (this.isLeftParen() && this.tokens[this.pos + 1]?.value === 'type') {
+      this.expect(TokenType.LeftParen);
+      this.expectKeyword('type');
+      if (this.peek().type === TokenType.Id) {
+        const id = this.advance().value;
+        const resolved = this.typeNames.get(id);
+        if (resolved === undefined) throw this.error(`Unknown type: ${id}`);
+        blockType = resolved;
+      } else {
+        blockType = this.parseNumber();
+      }
+      this.expect(TokenType.RightParen);
+      return blockType;
+    }
+
+    // Parse multi-value: (param ...)* (result ...)*
+    const blockParams: ValueTypeDescriptor[] = [];
+    const blockResults: ValueTypeDescriptor[] = [];
+
+    while (this.isLeftParen() && (this.tokens[this.pos + 1]?.value === 'param' || this.tokens[this.pos + 1]?.value === 'result')) {
+      const savedPos = this.pos;
+      this.expect(TokenType.LeftParen);
+      const kw = this.peek().value;
+      if (kw === 'param') {
+        this.advance();
+        while (!this.isRightParen()) {
+          if (this.peek().type === TokenType.Id) this.advance(); // skip $name
+          else blockParams.push(this.parseValueType());
+        }
+        this.expect(TokenType.RightParen);
+      } else if (kw === 'result') {
+        this.advance();
+        while (!this.isRightParen()) {
+          blockResults.push(this.parseValueType());
+        }
+        this.expect(TokenType.RightParen);
+      } else {
+        this.pos = savedPos;
+        break;
+      }
+    }
+
+    if (blockParams.length === 0 && blockResults.length === 0) {
+      return BlockType.Void;
+    }
+    if (blockParams.length === 0 && blockResults.length === 1) {
+      return blockTypeMap[blockResults[0].name] || BlockType.Void;
+    }
+
+    // Multi-value: define a function type and return its index
+    const funcType = this.moduleBuilder.defineFunctionType(
+      blockResults.length > 0 ? blockResults : null,
+      blockParams
+    );
+    return funcType.index;
+  }
+
+  private parseFoldedImmediates(opCode: any, mnemonic: string, asm: FunctionEmitter, emitArgs: any[]): void {
+    if (mnemonic === 'throw' || mnemonic === 'catch') {
+      emitArgs.push(this.resolveTag());
+      return;
+    }
+
+    if (!opCode.immediate) return;
+
+    switch (opCode.immediate) {
+      case 'VarInt32':
+        emitArgs.push(this.parseNumber());
+        break;
+      case 'VarInt64':
+        emitArgs.push(this.parseI64Value());
+        break;
+      case 'Float32':
+      case 'Float64':
+        emitArgs.push(this.parseFloat());
+        break;
+      case 'VarUInt1':
+      case 'VarUInt32':
+        emitArgs.push(this.parseNumber());
+        break;
+      case 'Local':
+        emitArgs.push(this.resolveLocal());
+        break;
+      case 'Global':
+        emitArgs.push(this.resolveGlobal());
+        break;
+      case 'Function':
+        emitArgs.push(this.resolveFunction());
+        break;
+      case 'RelativeDepth':
+        emitArgs.push(this.resolveBranchTarget(asm));
+        break;
+      case 'MemoryImmediate': {
+        let alignment = 0;
+        let offset = 0;
+        while (this.peek().type === TokenType.Keyword && (
+          this.peek().value.startsWith('offset=') || this.peek().value.startsWith('align=')
+        )) {
+          const kv = this.advance().value;
+          const [key, val] = kv.split('=');
+          if (key === 'offset') offset = parseInt(val, 10);
+          else if (key === 'align') alignment = Math.log2(parseInt(val, 10));
+        }
+        emitArgs.push(alignment, offset);
+        break;
+      }
+      case 'TypeIndexField':
+        emitArgs.push(this.parseNumber(), this.parseNumber());
+        break;
+      case 'TypeIndexIndex':
+        emitArgs.push(this.parseNumber(), this.parseNumber());
+        break;
+      case 'LaneIndex':
+        emitArgs.push(this.parseNumber());
+        break;
+      case 'HeapType':
+        emitArgs.push(this.parseHeapType());
+        break;
+      case 'BrOnCast': {
+        const label = this.resolveBranchTarget(asm);
+        const ht1 = this.parseHeapType();
+        const ht2 = this.parseHeapType();
+        emitArgs.push(label, ht1, ht2);
+        break;
+      }
+      case 'IndirectFunction': {
+        let tableIndex: number | undefined;
+        if (this.peek().type === TokenType.Number) {
+          tableIndex = this.parseNumber();
+        }
+        this.expect(TokenType.LeftParen);
+        this.expectKeyword('type');
+        let typeIdx: number;
+        if (this.peek().type === TokenType.Id) {
+          const id = this.advance().value;
+          typeIdx = this.typeNames.get(id)!;
+          if (typeIdx === undefined) throw this.error(`Unknown type: ${id}`);
+        } else {
+          typeIdx = this.parseNumber();
+        }
+        this.expect(TokenType.RightParen);
+        emitArgs.push(this.moduleBuilder._types[typeIdx], tableIndex);
+        break;
+      }
+      case 'BranchTable': {
+        const targets: number[] = [];
+        while (this.peek().type === TokenType.Number) {
+          targets.push(this.parseNumber());
+        }
+        if (targets.length < 1) throw this.error('br_table requires at least a default target');
+        const defaultTarget = targets.pop()!;
+        const defaultLabel = this.getLabelAtDepth(asm, defaultTarget);
+        const labels = targets.map((t) => this.getLabelAtDepth(asm, t));
+        emitArgs.push(defaultLabel, labels);
+        break;
+      }
+      case 'ShuffleMask': {
+        const mask = new Uint8Array(16);
+        for (let i = 0; i < 16; i++) {
+          mask[i] = this.parseNumber();
+        }
+        emitArgs.push(mask);
+        break;
+      }
+      case 'V128Const': {
+        const bytes = new Uint8Array(16);
+        if (this.peek().type === TokenType.Keyword) this.advance();
+        for (let i = 0; i < 16; i++) {
+          bytes[i] = this.parseNumber() & 0xff;
+        }
+        emitArgs.push(bytes);
+        break;
+      }
+      case 'BlockSignature': {
+        // Block type in folded context — should not normally reach here
+        // but handle for completeness
+        let bt: BlockTypeDescriptor = BlockType.Void;
+        if (this.isLeftParen() && this.tokens[this.pos + 1]?.value === 'result') {
+          this.expect(TokenType.LeftParen);
+          this.expectKeyword('result');
+          const vt = this.parseValueType();
+          bt = blockTypeMap[vt.name] || BlockType.Void;
+          this.expect(TokenType.RightParen);
+        }
+        emitArgs.push(bt);
+        break;
+      }
+      default:
+        // No immediates to parse
+        break;
+    }
+  }
+
   parseHeapType(): HeapTypeRef {
     const heapTypeKeywords: Record<string, HeapTypeRef> = {
       func: HeapType.Func,
@@ -998,7 +1509,7 @@ class WatParserImpl {
   }
 
   getLabelAtDepth(asm: FunctionEmitter, relativeDepth: number): LabelBuilder {
-    const stack = (asm as any)._controlFlowVerifier._stack;
+    const stack = asm.controlFlowStack;
     const targetIndex = stack.length - 1 - relativeDepth;
     if (targetIndex < 0 || targetIndex >= stack.length) {
       throw this.error(`Invalid branch depth: ${relativeDepth}`);
@@ -1051,10 +1562,29 @@ class WatParserImpl {
     return this.moduleBuilder._globals[index - importedGlobals.length];
   }
 
+  resolveGlobalIndex(): number {
+    if (this.peek().type === TokenType.Id) {
+      const id = this.advance().value;
+      const resolved = this.globalNames.get(id);
+      if (resolved === undefined) throw this.error(`Unknown global: ${id}`);
+      return resolved;
+    }
+    return this.parseNumber();
+  }
+
   // --- Table section ---
 
   parseTable(): void {
-    // (table (;0;) 1 10 anyfunc)
+    // (table $name? (export "name")* (import "mod" "name")? initial maximum? elemtype)
+    let tableName: string | null = null;
+    if (this.peek().type === TokenType.Id) {
+      tableName = this.advance().value;
+    }
+    this.skipInlineComment();
+
+    const inlineExports = this.parseInlineExports();
+    const inlineImport = this.parseInlineImport();
+
     const initial = this.parseNumber();
     let maximum: number | null = null;
 
@@ -1068,38 +1598,82 @@ class WatParserImpl {
     }
 
     this.expect(TokenType.RightParen);
-    this.moduleBuilder.defineTable(ElementType.AnyFunc, initial, maximum);
+
+    if (inlineImport) {
+      this.moduleBuilder.importTable(inlineImport.moduleName, inlineImport.fieldName, ElementType.AnyFunc, initial, maximum);
+    } else {
+      this.moduleBuilder.defineTable(ElementType.AnyFunc, initial, maximum);
+    }
+
+    const tableBuilder = this.moduleBuilder._tables[this.moduleBuilder._tables.length - 1];
+    for (const exportName of inlineExports) {
+      if (tableBuilder) {
+        this.moduleBuilder.exportTable(tableBuilder, exportName);
+      }
+    }
   }
 
   // --- Memory section ---
 
   parseMemory(): void {
-    // (memory (;0;) 1 2)
+    // (memory $name? (export "name")* (import "mod" "name")? i64? initial maximum? shared?)
+    let memName: string | null = null;
+    if (this.peek().type === TokenType.Id) {
+      memName = this.advance().value;
+    }
+    this.skipInlineComment();
+
+    const inlineExports = this.parseInlineExports();
+    const inlineImport = this.parseInlineImport();
+
+    let memory64 = false;
+    if (this.isKeyword('i64')) {
+      this.advance();
+      memory64 = true;
+    }
     const initial = this.parseNumber();
     let maximum: number | null = null;
     if (this.peek().type === TokenType.Number) {
       maximum = this.parseNumber();
     }
+    let shared = false;
+    if (this.isKeyword('shared')) {
+      this.advance();
+      shared = true;
+    }
     this.expect(TokenType.RightParen);
-    this.moduleBuilder.defineMemory(initial, maximum);
+
+    if (inlineImport) {
+      this.moduleBuilder.importMemory(inlineImport.moduleName, inlineImport.fieldName, initial, maximum, shared, memory64);
+    } else {
+      this.moduleBuilder.defineMemory(initial, maximum, shared, memory64);
+    }
+
+    const memBuilder = this.moduleBuilder._memories[this.moduleBuilder._memories.length - 1];
+    for (const exportName of inlineExports) {
+      if (memBuilder) {
+        this.moduleBuilder.exportMemory(memBuilder, exportName);
+      }
+    }
   }
 
   // --- Global section ---
 
   parseGlobal(): void {
-    // (global $name i32 (i32.const 0))
-    // (global $name (mut i32) (i32.const 0))
-    // (global (;0;) i32 (i32.const 0))
+    // (global $name (export "name")* (import "mod" "name")? type init)
     let globalName: string | null = null;
     if (this.peek().type === TokenType.Id) {
       globalName = this.advance().value;
     }
     this.skipInlineComment();
 
+    const inlineExports = this.parseInlineExports();
+    const inlineImport = this.parseInlineImport();
+
     let mutable = false;
     let valueType: ValueTypeDescriptor;
 
-    if (this.isLeftParen()) {
+    if (this.isLeftParen() && this.tokens[this.pos + 1]?.value === 'mut') {
       this.expect(TokenType.LeftParen);
       this.expectKeyword('mut');
       valueType = this.parseValueType();
@@ -1107,6 +1681,15 @@ class WatParserImpl {
       this.expect(TokenType.RightParen);
     } else {
       valueType = this.parseValueType();
+    }
+
+    if (inlineImport) {
+      const imp = this.moduleBuilder.importGlobal(inlineImport.moduleName, inlineImport.fieldName, valueType, mutable);
+      for (const exportName of inlineExports) {
+        this.moduleBuilder.exportGlobal(imp as unknown as GlobalBuilder, exportName);
+      }
+      this.expect(TokenType.RightParen); // closing global
+      return;
     }
 
     // Parse init expression (instr)
@@ -1122,6 +1705,13 @@ class WatParserImpl {
       initValue = this.parseFloat();
     } else if (initInstr === 'f64.const') {
       initValue = this.parseFloat();
+    } else if (initInstr === 'ref.null') {
+      // ref.null heap_type — init value 0 is fine for null reference
+      this.parseHeapType();
+      initValue = 0;
+    } else if (initInstr === 'global.get') {
+      // global.get $index — for imported global init expressions
+      initValue = this.resolveGlobalIndex();
     }
 
     this.expect(TokenType.RightParen); // closing init expr
@@ -1131,6 +1721,10 @@ class WatParserImpl {
     if (globalName) {
       globalBuilder.withName(globalName.substring(1)); // strip $
       this.globalNames.set(globalName, globalBuilder._index);
+    }
+
+    for (const exportName of inlineExports) {
+      this.moduleBuilder.exportGlobal(globalBuilder, exportName);
     }
   }
 
@@ -1235,50 +1829,96 @@ class WatParserImpl {
   // --- Element section ---
 
   parseElem(): void {
-    // (elem (;0;) (i32.const 0) func 0 1 2)
-    // Parse offset expression
-    this.expect(TokenType.LeftParen);
-    const offsetInstr = this.advance().value;
-    let offset = 0;
-    if (offsetInstr === 'i32.const') {
-      offset = this.parseNumber();
-    }
-    this.expect(TokenType.RightParen);
+    // Active: (elem (i32.const 0) func 0 1 2)
+    // Passive: (elem func 0 1 2)
+    const isPassive = this.isKeyword('func') || this.isKeyword('funcref');
 
-    // "func" keyword
-    if (this.isKeyword('func')) {
-      this.advance();
-    }
-
-    // Parse function indices or $name references
-    const elements: (FunctionBuilder | ImportBuilder)[] = [];
-    while (this.peek().type === TokenType.Number || this.peek().type === TokenType.Id) {
-      if (this.peek().type === TokenType.Id) {
-        const id = this.advance().value;
-        const idx = this.funcNames.get(id);
-        if (idx === undefined) throw this.error(`Unknown function: ${id}`);
-        elements.push(this.funcList[idx]);
-      } else {
-        const idx = this.parseNumber();
-        elements.push(this.funcList[idx]);
+    if (!isPassive) {
+      // Parse offset expression
+      this.expect(TokenType.LeftParen);
+      const offsetInstr = this.advance().value;
+      let offset = 0;
+      if (offsetInstr === 'i32.const') {
+        offset = this.parseNumber();
+      } else if (offsetInstr === 'i64.const') {
+        offset = this.parseNumber();
+      } else if (offsetInstr === 'global.get') {
+        offset = this.resolveGlobalIndex();
       }
+      this.expect(TokenType.RightParen);
+
+      // "func" keyword
+      if (this.isKeyword('func')) {
+        this.advance();
+      }
+
+      // Parse function indices or $name references
+      const elements: (FunctionBuilder | ImportBuilder)[] = [];
+      while (this.peek().type === TokenType.Number || this.peek().type === TokenType.Id) {
+        if (this.peek().type === TokenType.Id) {
+          const id = this.advance().value;
+          const idx = this.funcNames.get(id);
+          if (idx === undefined) throw this.error(`Unknown function: ${id}`);
+          elements.push(this.funcList[idx]);
+        } else {
+          const idx = this.parseNumber();
+          elements.push(this.funcList[idx]);
+        }
+      }
+
+      this.expect(TokenType.RightParen);
+
+      const table = this.moduleBuilder._tables[0];
+      this.moduleBuilder.defineElementSegment(table, elements, offset);
+    } else {
+      // Passive element segment
+      this.advance(); // consume 'func' or 'funcref'
+
+      const elements: (FunctionBuilder | ImportBuilder)[] = [];
+      while (this.peek().type === TokenType.Number || this.peek().type === TokenType.Id) {
+        if (this.peek().type === TokenType.Id) {
+          const id = this.advance().value;
+          const idx = this.funcNames.get(id);
+          if (idx === undefined) throw this.error(`Unknown function: ${id}`);
+          elements.push(this.funcList[idx]);
+        } else {
+          const idx = this.parseNumber();
+          elements.push(this.funcList[idx]);
+        }
+      }
+
+      this.expect(TokenType.RightParen);
+
+      this.moduleBuilder.definePassiveElementSegment(elements);
     }
-
-    this.expect(TokenType.RightParen);
-
-    const table = this.moduleBuilder._tables[0];
-    this.moduleBuilder.defineTableSegment(table, elements, offset);
   }
 
   // --- Data section ---
 
   parseData(): void {
-    // (data (;0;) (i32.const 0) "hello\00world")
+    // Active: (data (i32.const 0) "hello\00world")
+    // Passive: (data "hello\00world")
+    if (this.peek().type === TokenType.String) {
+      // Passive data segment — no offset expression
+      const dataStr = this.expect(TokenType.String).value;
+      const bytes = new Uint8Array(dataStr.length);
+      for (let i = 0; i < dataStr.length; i++) {
+        bytes[i] = dataStr.charCodeAt(i);
+      }
+      this.expect(TokenType.RightParen);
+      this.moduleBuilder.defineData(bytes).passive();
+      return;
+    }
+
     this.expect(TokenType.LeftParen);
     const offsetInstr = this.advance().value;
-    let offset = 0;
+    let offset: number | bigint = 0;
     if (offsetInstr === 'i32.const') {
       offset = this.parseNumber();
+    } else if (offsetInstr === 'i64.const') {
+      offset = this.parseNumber(); // data offset as number
+    } else if (offsetInstr === 'global.get') {
+      offset = this.resolveGlobalIndex();
     }
     this.expect(TokenType.RightParen);
 
@@ -1290,7 +1930,7 @@ class WatParserImpl {
 
     this.expect(TokenType.RightParen);
 
-    this.moduleBuilder.defineData(bytes, offset);
+    this.moduleBuilder.defineData(bytes, Number(offset));
   }
 
   parseTag(): void {
@@ -1341,9 +1981,64 @@ class WatParserImpl {
     return this.parseNumber();
   }
 
+  parseInlineExports(): string[] {
+    const exports: string[] = [];
+    while (this.isLeftParen() && this.tokens[this.pos + 1]?.value === 'export') {
+      this.expect(TokenType.LeftParen);
+      this.expectKeyword('export');
+      exports.push(this.expect(TokenType.String).value);
+      this.expect(TokenType.RightParen);
+    }
+    return exports;
+  }
+
+  parseInlineImport(): { moduleName: string; fieldName: string } | null {
+    if (this.isLeftParen() && this.tokens[this.pos + 1]?.value === 'import') {
+      this.expect(TokenType.LeftParen);
+      this.expectKeyword('import');
+      const moduleName = this.expect(TokenType.String).value;
+      const fieldName = this.expect(TokenType.String).value;
+      this.expect(TokenType.RightParen);
+      return { moduleName, fieldName };
+    }
+    return null;
+  }
+
+  resolveLocal(): number {
+    if (this.peek().type === TokenType.Id) {
+      const id = this.advance().value;
+      const idx = this.localNames.get(id);
+      if (idx === undefined) throw this.error(`Unknown local: ${id}`);
+      return idx;
+    }
+    return this.parseNumber();
+  }
+
   // --- Helpers ---
 
   parseValueType(): ValueTypeDescriptor {
+    // Check for (ref ...) or (ref null ...) concrete reference types
+    if (this.isLeftParen() && this.tokens[this.pos + 1]?.value === 'ref') {
+      this.expect(TokenType.LeftParen);
+      this.advance(); // consume 'ref'
+      let nullable = false;
+      if (this.isKeyword('null')) {
+        this.advance();
+        nullable = true;
+      }
+      let typeIndex: number;
+      if (this.peek().type === TokenType.Id) {
+        const id = this.advance().value;
+        const resolved = this.typeNames.get(id);
+        if (resolved === undefined) throw this.error(`Unknown type: ${id}`);
+        typeIndex = resolved;
+      } else {
+        typeIndex = this.parseNumber();
+      }
+      this.expect(TokenType.RightParen);
+      return nullable ? refNullType(typeIndex) : refType(typeIndex);
+    }
+
     const tok = this.advance();
     const vt = valueTypeMap[tok.value];
     if (!vt) throw this.error(`Unknown value type: ${tok.value}`, tok);

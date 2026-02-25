@@ -1,1 +1,0 @@
-const webasmjs = require('webasmjs')

@@ -1,6 +1,6 @@
 import OperandStack from './OperandStack';
 import OpCodes from '../OpCodes';
-import { ValueType, BlockType, ImmediateType, ValueTypeDescriptor, BlockTypeDescriptor, OpCodeDef } from '../types';
+import { ValueType, BlockType, ImmediateType, ValueTypeDescriptor, BlockTypeDescriptor, OpCodeDef, isConcreteRefType, refType, ConcreteRefTypeDescriptor } from '../types';
 import { OperandStackBehavior, OperandStackType, ControlFlowType } from './types';
 import Immediate from '../Immediate';
 import ControlFlowBlock from './ControlFlowBlock';
@@ -22,6 +22,9 @@ import type ArrayTypeBuilder from '../ArrayTypeBuilder';
 export interface TypeResolver {
   getStructType(typeIndex: number): StructTypeBuilder | null;
   getArrayType(typeIndex: number): ArrayTypeBuilder | null;
+  getFuncType?(typeIndex: number): { parameterTypes: ValueTypeDescriptor[]; returnTypes: ValueTypeDescriptor[] } | null;
+  getTypeKind?(typeIndex: number): 'struct' | 'array' | 'func' | null;
+  getSuperTypes?(typeIndex: number): number[];
 }
 
 // Map heap type encoding values to their corresponding ValueType descriptors
@@ -44,6 +47,22 @@ const _refTypes = new Set<ValueTypeDescriptor>([
   ValueType.ArrayRef, ValueType.NullRef, ValueType.NullFuncRef,
   ValueType.NullExternRef,
 ]);
+
+// Proper lookup map from OperandStackType string to ValueType descriptor
+const valueTypeByName: Record<string, ValueTypeDescriptor> = {
+  Int32: ValueType.Int32,
+  Int64: ValueType.Int64,
+  Float32: ValueType.Float32,
+  Float64: ValueType.Float64,
+  V128: ValueType.V128,
+  FuncRef: ValueType.FuncRef,
+  ExternRef: ValueType.ExternRef,
+  AnyRef: ValueType.AnyRef,
+  EqRef: ValueType.EqRef,
+  I31Ref: ValueType.I31Ref,
+  StructRef: ValueType.StructRef,
+  ArrayRef: ValueType.ArrayRef,
+};
 
 function _isRefType(vt: ValueTypeDescriptor): boolean {
   return _refTypes.has(vt);
@@ -82,10 +101,9 @@ export default class OperandStackVerifier {
         // Reset unreachable on end — restore stack to block entry
         this._unreachable = false;
         this._operandStack = controlBlock.stack;
-        if (controlBlock.blockType !== BlockType.Void) {
-          // Non-void block produces its result type even when body is unreachable
-          const resultType = controlBlock.blockType as ValueTypeDescriptor;
-          this._operandStack = this._operandStack.push(resultType);
+        const resultTypes = this._resolveBlockResultTypes(controlBlock);
+        for (const rt of resultTypes) {
+          this._operandStack = this._operandStack.push(rt);
         }
       }
       this._instructionCount++;
@@ -134,21 +152,24 @@ export default class OperandStackVerifier {
       this._operandStack = controlBlock.stack;
       return;
     }
-    if (controlBlock.blockType !== BlockType.Void) {
-      // Non-void if block: the true branch must have the result on stack
-      if (this._operandStack.isEmpty) {
-        throw new VerificationError(
-          `else: expected ${(controlBlock.blockType as BlockTypeDescriptor).name} on the stack from the if-branch but the stack is empty.`
-        );
+    const resultTypes = this._resolveBlockResultTypes(controlBlock);
+    if (resultTypes.length > 0) {
+      // Non-void if block: the true branch must have the result(s) on stack
+      let current = this._operandStack;
+      for (let i = resultTypes.length - 1; i >= 0; i--) {
+        if (current.isEmpty) {
+          throw new VerificationError(
+            `else: expected ${resultTypes[i].name} on the stack from the if-branch but the stack is empty.`
+          );
+        }
+        if (!this._isAssignableTo(current.valueType, resultTypes[i])) {
+          throw new VerificationError(
+            `else: expected ${resultTypes[i].name} on the stack but found ${current.valueType.name}.`
+          );
+        }
+        current = current.pop();
       }
-      const expectedType = controlBlock.blockType as ValueTypeDescriptor;
-      if (!this._isAssignableTo(this._operandStack.valueType, expectedType)) {
-        throw new VerificationError(
-          `else: expected ${expectedType.name} on the stack but found ${this._operandStack.valueType.name}.`
-        );
-      }
-      const stackAfterPop = this._operandStack.pop();
-      if (stackAfterPop !== controlBlock.stack) {
+      if (current !== controlBlock.stack) {
         throw new VerificationError(
           'else: stack (minus result value) does not match the if-block entry stack.'
         );
@@ -179,20 +200,22 @@ export default class OperandStackVerifier {
       return;
     }
 
-    if (targetBlock.blockType !== BlockType.Void) {
-      // Non-void block: branch must carry the result value
-      if (stack.isEmpty) {
-        throw new VerificationError(
-          `Branch expects ${(targetBlock.blockType as BlockTypeDescriptor).name} on the stack but the stack is empty.`
-        );
+    const resultTypes = this._resolveBlockResultTypes(targetBlock);
+    if (resultTypes.length > 0) {
+      // Non-void block: branch must carry the result value(s)
+      for (let i = resultTypes.length - 1; i >= 0; i--) {
+        if (stack.isEmpty) {
+          throw new VerificationError(
+            `Branch expects ${resultTypes[i].name} on the stack but the stack is empty.`
+          );
+        }
+        if (!this._isAssignableTo(stack.valueType, resultTypes[i])) {
+          throw new VerificationError(
+            `Branch expects ${resultTypes[i].name} but found ${stack.valueType.name} on the stack.`
+          );
+        }
+        stack = stack.pop();
       }
-      const expectedType = targetBlock.blockType as ValueTypeDescriptor;
-      if (!this._isAssignableTo(stack.valueType, expectedType)) {
-        throw new VerificationError(
-          `Branch expects ${expectedType.name} but found ${stack.valueType.name} on the stack.`
-        );
-      }
-      stack = stack.pop();
     }
 
     if (targetEntryStack !== stack) {
@@ -246,14 +269,54 @@ export default class OperandStackVerifier {
     return stack;
   }
 
+  _resolveBlockResultTypes(block: ControlFlowBlock): ValueTypeDescriptor[] {
+    if (block.blockType === BlockType.Void) return [];
+    if (typeof block.blockType === 'number') {
+      // Type index — look up function type
+      if (this._typeResolver?.getFuncType) {
+        const ft = this._typeResolver.getFuncType(block.blockType);
+        if (ft) return ft.returnTypes;
+      }
+      return [];
+    }
+    return [block.blockType as ValueTypeDescriptor];
+  }
+
+  _resolveBlockParamTypes(block: ControlFlowBlock): ValueTypeDescriptor[] {
+    if (typeof block.blockType === 'number') {
+      if (this._typeResolver?.getFuncType) {
+        const ft = this._typeResolver.getFuncType(block.blockType);
+        if (ft) return ft.parameterTypes;
+      }
+    }
+    return [];
+  }
+
   _verifyControlFlowPop(controlBlock: ControlFlowBlock, stack: OperandStack): void {
     if (controlBlock.depth === 0) {
       this._verifyReturnValues(stack);
     } else {
-      const expectedStack =
-        controlBlock.blockType !== BlockType.Void ? stack.pop() : stack;
-      if (controlBlock.stack !== expectedStack) {
-        throw new VerificationError();
+      const resultTypes = this._resolveBlockResultTypes(controlBlock);
+      // Pop result values
+      let expected = stack;
+      for (let i = resultTypes.length - 1; i >= 0; i--) {
+        if (expected.isEmpty) {
+          throw new VerificationError(
+            `Stack mismatch at end of block (depth ${controlBlock.depth}): expected ${resultTypes[i].name} but stack is empty.`
+          );
+        }
+        if (!this._isAssignableTo(expected.valueType, resultTypes[i])) {
+          throw new VerificationError(
+            `Stack mismatch at end of block (depth ${controlBlock.depth}): expected ${resultTypes[i].name} but found ${expected.valueType.name}.`
+          );
+        }
+        expected = expected.pop();
+      }
+      if (controlBlock.stack !== expected) {
+        throw new VerificationError(
+          `Stack mismatch at end of block (depth ${controlBlock.depth}): ` +
+          `expected block's entry stack but got a different stack state.`
+        );
       }
     }
   }
@@ -295,18 +358,19 @@ export default class OperandStackVerifier {
           modifiedStack = modifiedStack.pop();
         }
       }
-      // Then push the struct reference
-      modifiedStack = modifiedStack.push(ValueType.AnyRef);
+      // Push concrete ref type
+      modifiedStack = modifiedStack.push(refType(typeIndex));
       return modifiedStack;
     }
 
     // Handle array_new_fixed: pop N element values (metadata says Push-only)
     if (opCode === OpCodes.array_new_fixed && immediate) {
+      const typeIndex = immediate.values[0];
       const fixedLength = immediate.values[1];
       for (let i = 0; i < fixedLength; i++) {
         modifiedStack = modifiedStack.pop();
       }
-      modifiedStack = modifiedStack.push(ValueType.AnyRef);
+      modifiedStack = modifiedStack.push(refType(typeIndex));
       return modifiedStack;
     }
 
@@ -349,7 +413,7 @@ export default class OperandStackVerifier {
         continue;
       }
 
-      const valueType = (ValueType as any)[x] as ValueTypeDescriptor;
+      const valueType = valueTypeByName[x];
       if (!this._isAssignableTo(stack.valueType, valueType)) {
         throw new VerificationError(
           `Unexpected type found on stack at offset ${this._instructionCount + 1}. ` +
@@ -366,7 +430,7 @@ export default class OperandStackVerifier {
       const params = funcType.parameterTypes;
       for (let idx = params.length - 1; idx >= 0; idx--) {
         const x = params[idx];
-        if (x !== stack.valueType) {
+        if (!this._isAssignableTo(stack.valueType, x)) {
           throw new VerificationError(
             `Unexpected type found on stack at offset ${this._instructionCount + 1}. ` +
               `A ${x.name} was expected but a ${stack.valueType.name} was found.`
@@ -396,7 +460,7 @@ export default class OperandStackVerifier {
     stack = (opCode.pushOperands || []).reduce((i, x) => {
       let valueType: ValueTypeDescriptor;
       if (x !== OperandStackType.Any) {
-        valueType = (ValueType as any)[x] as ValueTypeDescriptor;
+        valueType = valueTypeByName[x];
       } else {
         const popCount = this._operandStack.length - stackStart.length;
         valueType = this._getStackObjectValueType(opCode, immediate, popCount);
@@ -472,18 +536,19 @@ export default class OperandStackVerifier {
       }
     }
 
-    // struct.new_default: push a ref type (no field pops needed)
-    if (opCode === OpCodes.struct_new_default) {
-      return ValueType.AnyRef;
+    // struct.new_default: push a concrete ref type (no field pops needed)
+    if (opCode === OpCodes.struct_new_default && immediate) {
+      return refType(immediate.values[0]);
     }
 
-    // array.new, array.new_default, array.new_data, array.new_elem: push array ref
+    // array.new, array.new_default, array.new_data, array.new_elem: push concrete array ref
     if (
       opCode === OpCodes.array_new ||
       opCode === OpCodes.array_new_default ||
       opCode === OpCodes.array_new_data ||
       opCode === OpCodes.array_new_elem
     ) {
+      if (immediate) return refType(immediate.values[0]);
       return ValueType.AnyRef;
     }
 
@@ -496,8 +561,14 @@ export default class OperandStackVerifier {
       }
     }
 
-    // ref.cast, ref.cast_null: push a ref type
-    if (opCode === OpCodes.ref_cast || opCode === OpCodes.ref_cast_null) {
+    // ref.cast, ref.cast_null: push narrowed ref type based on heap type immediate
+    if ((opCode === OpCodes.ref_cast || opCode === OpCodes.ref_cast_null) && immediate) {
+      const heapType = immediate.values[0];
+      if (typeof heapType === 'number') {
+        if (heapTypeToValueType[heapType]) return heapTypeToValueType[heapType];
+        // Concrete type index
+        return refType(heapType);
+      }
       return ValueType.AnyRef;
     }
 
@@ -541,25 +612,74 @@ export default class OperandStackVerifier {
    */
   _isAssignableTo(actual: ValueTypeDescriptor, expected: ValueTypeDescriptor): boolean {
     if (actual === expected) return true;
+
+    // Concrete ref type matching: (ref $typeA) assignable to (ref $typeB) if A is subtype of B
+    if (isConcreteRefType(actual) && isConcreteRefType(expected)) {
+      // Nullable check: non-nullable is assignable to nullable, but not vice-versa
+      if (actual.refPrefix === 0x64 && expected.refPrefix === 0x63) {
+        // (ref $A) → (ref null $B): allowed if A subtype of B
+      } else if (actual.refPrefix === 0x63 && expected.refPrefix === 0x64) {
+        // (ref null $A) → (ref $B): NOT allowed (nullable to non-nullable)
+        return false;
+      }
+      // Same type index or subtype chain
+      if (actual.typeIndex === expected.typeIndex) return true;
+      return this._isSubtype(actual.typeIndex, expected.typeIndex);
+    }
+
+    // Concrete ref assignable to abstract: struct → structref/eqref/anyref, array → arrayref/eqref/anyref, func → funcref
+    if (isConcreteRefType(actual) && !isConcreteRefType(expected)) {
+      if (this._typeResolver) {
+        const kind = this._typeResolver.getTypeKind?.(actual.typeIndex);
+        if (kind === 'struct') {
+          return expected === ValueType.StructRef || expected === ValueType.EqRef ||
+            expected === ValueType.AnyRef || expected === ValueType.Int32;
+        }
+        if (kind === 'array') {
+          return expected === ValueType.ArrayRef || expected === ValueType.EqRef ||
+            expected === ValueType.AnyRef || expected === ValueType.Int32;
+        }
+        if (kind === 'func') {
+          return expected === ValueType.FuncRef || expected === ValueType.Int32;
+        }
+      }
+      // Without type resolver, allow concrete refs to match common supertypes
+      if (expected === ValueType.AnyRef || expected === ValueType.EqRef ||
+          expected === ValueType.StructRef || expected === ValueType.ArrayRef ||
+          expected === ValueType.FuncRef || expected === ValueType.Int32) {
+        return true;
+      }
+    }
+
     // GC reference type subtyping: anyref ← eqref ← {i31ref, structref, arrayref}
     if (expected === ValueType.AnyRef) {
       return actual === ValueType.EqRef || actual === ValueType.I31Ref ||
         actual === ValueType.StructRef || actual === ValueType.ArrayRef ||
-        actual === ValueType.NullRef;
+        actual === ValueType.NullRef || isConcreteRefType(actual);
     }
     if (expected === ValueType.EqRef) {
       return actual === ValueType.I31Ref || actual === ValueType.StructRef ||
-        actual === ValueType.ArrayRef || actual === ValueType.NullRef;
+        actual === ValueType.ArrayRef || actual === ValueType.NullRef ||
+        isConcreteRefType(actual);
+    }
+    if (expected === ValueType.StructRef) {
+      return actual === ValueType.NullRef || (isConcreteRefType(actual) &&
+        this._typeResolver?.getTypeKind?.(actual.typeIndex) === 'struct');
+    }
+    if (expected === ValueType.ArrayRef) {
+      return actual === ValueType.NullRef || (isConcreteRefType(actual) &&
+        this._typeResolver?.getTypeKind?.(actual.typeIndex) === 'array');
     }
     if (expected === ValueType.FuncRef) {
-      return actual === ValueType.NullFuncRef;
+      return actual === ValueType.NullFuncRef || (isConcreteRefType(actual) &&
+        this._typeResolver?.getTypeKind?.(actual.typeIndex) === 'func');
     }
     if (expected === ValueType.ExternRef) {
       return actual === ValueType.NullExternRef;
     }
     // Legacy compatibility: many opcodes (table.set, etc.) use Int32 in metadata
     // as a placeholder for reference types. Allow ref types where Int32 is expected.
-    if (expected === ValueType.Int32 && _isRefType(actual)) {
+    if (expected === ValueType.Int32 && (_isRefType(actual) || isConcreteRefType(actual))) {
       return true;
     }
     // Memory64: load/store address operands are i64 instead of i32
@@ -567,6 +687,24 @@ export default class OperandStackVerifier {
       return true;
     }
     return false;
+  }
+
+  _isSubtype(actualIndex: number, expectedIndex: number): boolean {
+    if (!this._typeResolver?.getSuperTypes) return false;
+    // Walk the supertype chain with cycle detection
+    const visited = new Set<number>();
+    let current = actualIndex;
+    while (true) {
+      if (visited.has(current)) return false;
+      visited.add(current);
+      const supers = this._typeResolver.getSuperTypes(current);
+      if (supers.length === 0) return false;
+      for (const s of supers) {
+        if (s === expectedIndex) return true;
+      }
+      // Walk up to the first supertype
+      current = supers[0];
+    }
   }
 
   _getStackValueTypes(stack: OperandStack, count: number): ValueTypeDescriptor[] {

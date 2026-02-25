@@ -101,6 +101,23 @@ export default class BinaryWriter {
     }
   }
 
+  writeVarUInt64(value: number | bigint): void {
+    if (typeof value === 'number' && value >= 0 && value <= 0xFFFFFFFF) {
+      this.writeVarUInt32(value);
+      return;
+    }
+
+    let bigIntValue = BigInt(value);
+    do {
+      let chunk = Number(bigIntValue & 0x7fn);
+      bigIntValue = bigIntValue >> 7n;
+      if (bigIntValue !== 0n) {
+        chunk |= 0x80;
+      }
+      this.writeByte(chunk);
+    } while (bigIntValue !== 0n);
+  }
+
   writeString(value: string): void {
     const encoder = new TextEncoder();
     const utfBytes = encoder.encode(value);

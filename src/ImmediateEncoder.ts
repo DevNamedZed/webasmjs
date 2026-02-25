@@ -10,8 +10,13 @@ import type LabelBuilder from './LabelBuilder';
 import { ExternalKind, BlockTypeDescriptor, HeapTypeRef } from './types';
 
 export default class ImmediateEncoder {
-  static encodeBlockSignature(writer: BinaryWriter, blockType: BlockTypeDescriptor): void {
-    writer.writeVarInt7(blockType.value);
+  static encodeBlockSignature(writer: BinaryWriter, blockType: BlockTypeDescriptor | number): void {
+    if (typeof blockType === 'number') {
+      // Type index — encode as s33 (signed LEB128)
+      writer.writeVarInt32(blockType);
+    } else {
+      writer.writeVarInt7(blockType.value);
+    }
   }
 
   static encodeRelativeDepth(writer: BinaryWriter, label: LabelBuilder, depth: number): void {
@@ -48,9 +53,9 @@ export default class ImmediateEncoder {
     writer.writeVarUInt32(functionIndex);
   }
 
-  static encodeIndirectFunction(writer: BinaryWriter, funcType: FuncTypeBuilder): void {
+  static encodeIndirectFunction(writer: BinaryWriter, funcType: FuncTypeBuilder, tableIndex: number = 0): void {
     writer.writeVarUInt32(funcType.index);
-    writer.writeVarUInt1(0);
+    writer.writeVarUInt32(tableIndex);
   }
 
   static encodeLocal(
@@ -127,10 +132,14 @@ export default class ImmediateEncoder {
   static encodeMemoryImmediate(
     writer: BinaryWriter,
     alignment: number,
-    offset: number
+    offset: number | bigint
   ): void {
     writer.writeVarUInt32(alignment);
-    writer.writeVarUInt32(offset);
+    if (typeof offset === 'bigint') {
+      writer.writeVarUInt64(offset);
+    } else {
+      writer.writeVarUInt32(offset);
+    }
   }
 
   static encodeV128Const(writer: BinaryWriter, bytes: Uint8Array): void {

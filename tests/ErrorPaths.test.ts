@@ -1,4 +1,6 @@
 import { BlockType, ModuleBuilder, ValueType, ElementType, VerificationError } from '../src/index';
+import ResizableLimits from '../src/ResizableLimits';
+import BinaryWriter from '../src/BinaryWriter';
 
 test('Duplicate function name throws', () => {
   const mod = new ModuleBuilder('test');
@@ -130,6 +132,82 @@ describe('table error conditions', () => {
     const instance = await mod.instantiate();
     const test = instance.instance.exports.test as CallableFunction;
     expect(() => test()).toThrow(); // signature mismatch trap
+  });
+});
+
+describe('ResizableLimits validation', () => {
+  test('negative initial throws', () => {
+    expect(() => new ResizableLimits(-1)).toThrow('non-negative');
+  });
+
+  test('negative maximum throws', () => {
+    expect(() => new ResizableLimits(0, -1)).toThrow('non-negative');
+  });
+
+  test('initial > maximum throws', () => {
+    expect(() => new ResizableLimits(10, 5)).toThrow('must not exceed');
+  });
+});
+
+describe('FunctionBuilder error paths', () => {
+  test('createEmitter called twice throws', () => {
+    const mod = new ModuleBuilder('test');
+    const fn = mod.defineFunction('f', null, []);
+    fn.createEmitter();
+    expect(() => fn.createEmitter()).toThrow('already been created');
+  });
+
+  test('write with null emitter throws', () => {
+    const mod = new ModuleBuilder('test');
+    const fn = mod.defineFunction('f', null, []);
+    expect(() => fn.write(new BinaryWriter())).toThrow('body has not been defined');
+  });
+});
+
+describe('GlobalBuilder error paths', () => {
+  test('value with unsupported ref type throws', () => {
+    const mod = new ModuleBuilder('test', { target: 'latest' });
+    const g = mod.defineGlobal(ValueType.FuncRef, false);
+    expect(() => g.value(0)).toThrow('Unsupported global value type');
+  });
+});
+
+describe('ElementSegmentBuilder error paths', () => {
+  test('offset with unsupported type throws', () => {
+    const mod = new ModuleBuilder('test');
+    const table = mod.defineTable(ElementType.AnyFunc, 1);
+    const fn = mod.defineFunction('f', null, [], (f, a) => {});
+    const seg = mod.defineElementSegment(table, [fn]);
+    expect(() => (seg as any).offset(true)).toThrow('Unsupported offset');
+  });
+});
+
+describe('Duplicate import/export error paths', () => {
+  test('duplicate importTable throws', () => {
+    const mod = new ModuleBuilder('test', { target: 'latest' });
+    mod.importTable('env', 'tbl', ElementType.AnyFunc, 1);
+    expect(() => mod.importTable('env', 'tbl', ElementType.AnyFunc, 1)).toThrow('already exists');
+  });
+
+  test('duplicate exportMemory throws', () => {
+    const mod = new ModuleBuilder('test');
+    const m = mod.defineMemory(1);
+    mod.exportMemory(m, 'mem');
+    expect(() => mod.exportMemory(m, 'mem')).toThrow('already exists');
+  });
+
+  test('duplicate exportTable throws', () => {
+    const mod = new ModuleBuilder('test');
+    const t = mod.defineTable(ElementType.AnyFunc, 1);
+    mod.exportTable(t, 'tbl');
+    expect(() => mod.exportTable(t, 'tbl')).toThrow('already exists');
+  });
+
+  test('duplicate exportGlobal throws', () => {
+    const mod = new ModuleBuilder('test');
+    const g = mod.defineGlobal(ValueType.Int32, false, 0);
+    mod.exportGlobal(g, 'g');
+    expect(() => mod.exportGlobal(g, 'g')).toThrow('already exists');
   });
 });
 

@@ -3,7 +3,7 @@ import OperandStack from './OperandStack';
 
 export default class ControlFlowBlock {
   stack: OperandStack;
-  blockType: BlockTypeDescriptor;
+  blockType: BlockTypeDescriptor | number;
   parent: ControlFlowBlock | null;
   index: number;
   depth: number;
@@ -14,7 +14,7 @@ export default class ControlFlowBlock {
 
   constructor(
     stack: OperandStack,
-    blockType: BlockTypeDescriptor,
+    blockType: BlockTypeDescriptor | number,
     parent: ControlFlowBlock | null,
     index: number,
     depth: number,

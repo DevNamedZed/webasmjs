@@ -30,7 +30,10 @@ export type { TypeEntry } from './RecGroupBuilder';
 // ─── Reading / writing ───
 export { default as TextModuleWriter } from './TextModuleWriter';
 export { default as BinaryReader } from './BinaryReader';
-export type { ModuleInfo, NameSectionInfo, TypeInfo, FuncTypeInfo, StructTypeInfo, ArrayTypeInfo, RecGroupTypeInfo, TagInfo } from './BinaryReader';
+export type { ModuleInfo, NameSectionInfo, TypeInfo, FuncTypeInfo, StructTypeInfo, ArrayTypeInfo, RecGroupTypeInfo, TagInfo, ReadOptions, FunctionInfo } from './BinaryReader';
+export { default as InstructionDecoder } from './InstructionDecoder';
+export type { DecodedInstruction } from './InstructionDecoder';
+export { default as Disassembler } from './Disassembler';
 export { default as OpCodes } from './OpCodes';
 export { parseWat } from './WatParser';
 

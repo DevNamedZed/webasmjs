@@ -51,7 +51,7 @@ importFunction(
 ): ImportBuilder
 
 // Import memory
-importMemory(module: string, name: string, initial: number, maximum?: number, shared?: boolean): ImportBuilder
+importMemory(module: string, name: string, initial: number, maximum?: number, shared?: boolean, memory64?: boolean): ImportBuilder
 
 // Import a table
 importTable(
@@ -396,30 +396,32 @@ delegate(depth: number): void
 
 ### GC Operations (requires `gc` feature)
 
-```typescript
-// Struct operations
-struct_new(typeIndex: number): void
-struct_new_default(typeIndex: number): void
-struct_get(typeIndex: number, fieldIndex: number): void
-struct_get_s(typeIndex: number, fieldIndex: number): void
-struct_get_u(typeIndex: number, fieldIndex: number): void
-struct_set(typeIndex: number, fieldIndex: number): void
+All `typeIndex` parameters accept either a numeric index or a builder object (`StructTypeBuilder`, `ArrayTypeBuilder`, etc.) — the `.index` is extracted automatically.
 
-// Array operations
-array_new(typeIndex: number): void
-array_new_default(typeIndex: number): void
-array_new_fixed(typeIndex: number, length: number): void
-array_new_data(typeIndex: number, dataIndex: number): void
-array_new_elem(typeIndex: number, elemIndex: number): void
-array_get(typeIndex: number): void
-array_get_s(typeIndex: number): void    // Signed packed field access
-array_get_u(typeIndex: number): void    // Unsigned packed field access
-array_set(typeIndex: number): void
+```typescript
+// Struct operations — typeIndex accepts number or builder
+struct_new(typeIndex: number | { index: number }): void
+struct_new_default(typeIndex: number | { index: number }): void
+struct_get(typeIndex: number | { index: number }, fieldIndex: number): void
+struct_get_s(typeIndex: number | { index: number }, fieldIndex: number): void
+struct_get_u(typeIndex: number | { index: number }, fieldIndex: number): void
+struct_set(typeIndex: number | { index: number }, fieldIndex: number): void
+
+// Array operations — typeIndex accepts number or builder
+array_new(typeIndex: number | { index: number }): void
+array_new_default(typeIndex: number | { index: number }): void
+array_new_fixed(typeIndex: number | { index: number }, length: number): void
+array_new_data(typeIndex: number | { index: number }, dataIndex: number): void
+array_new_elem(typeIndex: number | { index: number }, elemIndex: number): void
+array_get(typeIndex: number | { index: number }): void
+array_get_s(typeIndex: number | { index: number }): void    // Signed packed field access
+array_get_u(typeIndex: number | { index: number }): void    // Unsigned packed field access
+array_set(typeIndex: number | { index: number }): void
 array_len(): void
-array_fill(typeIndex: number): void
-array_copy(dstTypeIndex: number, srcTypeIndex: number): void
-array_init_data(typeIndex: number, dataIndex: number): void
-array_init_elem(typeIndex: number, elemIndex: number): void
+array_fill(typeIndex: number | { index: number }): void
+array_copy(dstTypeIndex: number | { index: number }, srcTypeIndex: number | { index: number }): void
+array_init_data(typeIndex: number | { index: number }, dataIndex: number): void
+array_init_elem(typeIndex: number | { index: number }, elemIndex: number): void
 
 // Reference operations
 ref_null(heapType: number): void       // Push a null reference (HeapType value)
@@ -530,13 +532,19 @@ Returned by `ModuleBuilder.defineTag()`. Describes an exception tag for use with
 ```typescript
 // The function type describing the tag's parameter types
 get funcType(): FuncTypeBuilder
+
+// Export this tag
+withExport(name?: string): TagBuilder
+
+// Set the debug name for this tag
+withName(name: string): TagBuilder
 ```
 
 ---
 
 ## ImportBuilder
 
-Returned by `ModuleBuilder.importFunction()`, `importMemory()`, `importTable()`, `importGlobal()`.
+Returned by `ModuleBuilder.importFunction()`, `importMemory()`, `importTable()`, `importGlobal()`, `importTag()`.
 
 ```typescript
 // Properties
@@ -821,6 +829,64 @@ const info = reader.read();
 
 ---
 
+## Disassembler
+
+Converts a parsed WASM binary (from `BinaryReader`) back into WAT text format.
+
+```typescript
+import { BinaryReader, Disassembler } from 'webasmjs';
+
+const reader = new BinaryReader(wasmBytes);
+const moduleInfo = reader.read();
+
+const disassembler = new Disassembler(moduleInfo);
+const wat = disassembler.disassemble();
+// Returns a full WAT module string:
+// (module $name
+//   (type ...)
+//   (func ...)
+//   ...
+// )
+```
+
+Handles all section types including types (func, struct, array, rec groups), imports, functions with decoded instructions, tables, memories, globals, exports, start, elements, and data segments. Uses the name section when available for readable `$name` identifiers.
+
+---
+
+## InstructionDecoder
+
+Low-level decoder that converts raw WebAssembly instruction bytes into structured objects.
+
+```typescript
+import { InstructionDecoder } from 'webasmjs';
+import type { DecodedInstruction } from 'webasmjs';
+
+// Decode a buffer of instruction bytes
+const decoder = new InstructionDecoder(bodyBytes);
+const instructions: DecodedInstruction[] = decoder.decode();
+
+// Or decode an init expression (e.g. from a global or data segment offset)
+const initInstructions = InstructionDecoder.decodeInitExpr(initExprBytes);
+```
+
+Each `DecodedInstruction` contains:
+
+```typescript
+interface DecodedInstruction {
+  opCode: OpCodeDef;    // The opcode definition (mnemonic, value, prefix, etc.)
+  immediates: {
+    type: string;       // Immediate kind: 'VarUInt32', 'MemoryImmediate', etc.
+    values: any[];      // Decoded immediate values
+  };
+  offset: number;       // Byte offset in the original buffer
+  length: number;       // Total byte length of this instruction
+}
+```
+
+Supports all instruction encodings including single-byte opcodes, prefixed opcodes (0xFC bulk/sat-trunc, 0xFB GC, 0xFD SIMD), LEB128 integers, floats, branch tables, v128 constants, and GC type immediates.
+
+---
+
 ## parseWat
 
 Parses WAT text format into a `ModuleBuilder`.
@@ -841,6 +907,38 @@ const mod = parseWat(`
 
 const instance = await mod.instantiate();
 ```
+
+### Recursive type groups
+
+```typescript
+const mod = parseWat(`
+  (module
+    (rec
+      (type $list (sub (struct (field i32) (field (ref null $list)))))
+    )
+    (func $len (param (ref null $list)) (result i32)
+      (local $count i32)
+      ;; ...
+    )
+  )
+`);
+```
+
+### Subtype declarations
+
+```typescript
+const mod = parseWat(`
+  (module
+    (type $base (sub (struct (field $x (mut i32)))))
+    (type $child (sub $base (struct (field $x (mut i32)) (field $y f64))))
+    (type $sealed (sub_final $base (struct (field $x (mut i32)) (field $z i64))))
+  )
+`);
+```
+
+- `sub` — declares an open (non-final) type that can be further subtyped
+- `sub $parent` — declares an open subtype of `$parent`
+- `sub_final $parent` — declares a sealed (final) subtype of `$parent`
 
 ---
 

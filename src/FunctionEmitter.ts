@@ -2,7 +2,8 @@ import AssemblyEmitter, { AssemblyEmitterOptions } from './AssemblyEmitter';
 import LocalBuilder from './LocalBuilder';
 import FunctionBuilder from './FunctionBuilder';
 import FunctionParameterBuilder from './FunctionParameterBuilder';
-import { ValueTypeDescriptor } from './types';
+import FuncTypeBuilder from './FuncTypeBuilder';
+import { ExternalKind, ValueTypeDescriptor } from './types';
 import type { TypeResolver } from './verification/OperandStackVerifier';
 import type StructTypeBuilder from './StructTypeBuilder';
 import type ArrayTypeBuilder from './ArrayTypeBuilder';
@@ -22,6 +23,31 @@ function createTypeResolver(functionBuilder: FunctionBuilder): TypeResolver | un
       if (t && 'elementType' in t) return t as ArrayTypeBuilder;
       return null;
     },
+    getFuncType(typeIndex: number): { parameterTypes: ValueTypeDescriptor[]; returnTypes: ValueTypeDescriptor[] } | null {
+      const t = types[typeIndex];
+      if (t && 'parameterTypes' in t && 'returnTypes' in t) {
+        const ft = t as FuncTypeBuilder;
+        return { parameterTypes: ft.parameterTypes, returnTypes: ft.returnTypes };
+      }
+      return null;
+    },
+    getTypeKind(typeIndex: number): 'struct' | 'array' | 'func' | null {
+      const t = types[typeIndex];
+      if (!t) return null;
+      if ('fields' in t) return 'struct';
+      if ('elementType' in t) return 'array';
+      if ('parameterTypes' in t) return 'func';
+      return null;
+    },
+    getSuperTypes(typeIndex: number): number[] {
+      const t = types[typeIndex];
+      if (!t) return [];
+      if ('superTypes' in t) {
+        const st = (t as StructTypeBuilder | ArrayTypeBuilder).superTypes;
+        return st.map((s: { index: number }) => s.index);
+      }
+      return [];
+    },
   };
 }
 
@@ -30,7 +56,8 @@ export default class FunctionEmitter extends AssemblyEmitter {
 
   constructor(functionBuilder: FunctionBuilder, options?: AssemblyEmitterOptions) {
     const moduleBuilder = functionBuilder._moduleBuilder;
-    const memory64 = moduleBuilder?._memories?.some((m) => m.isMemory64) || false;
+    const memory64 = moduleBuilder?._memories?.some((m) => m.isMemory64) ||
+      moduleBuilder?._imports?.some((imp) => imp.isMemoryImport() && imp.data.memory64) || false;
     super(
       functionBuilder.funcTypeBuilder.toSignature(),
       options,
@@ -51,8 +78,26 @@ export default class FunctionEmitter extends AssemblyEmitter {
 
   _getTagParameterTypes(tagIndex: number): ValueTypeDescriptor[] | null {
     const moduleBuilder = this._functionBuilder._moduleBuilder;
-    if (moduleBuilder && moduleBuilder._tags && tagIndex < moduleBuilder._tags.length) {
-      return moduleBuilder._tags[tagIndex]._funcType.parameterTypes;
+    if (!moduleBuilder) return null;
+
+    const importedTagCount = moduleBuilder._importsIndexSpace.tag;
+
+    if (tagIndex < importedTagCount) {
+      // Look up imported tag by index
+      const tagImports = moduleBuilder._imports.filter(
+        (imp) => imp.externalKind === ExternalKind.Tag
+      );
+      if (tagIndex < tagImports.length) {
+        const funcType = tagImports[tagIndex].data as FuncTypeBuilder;
+        return funcType.parameterTypes;
+      }
+      return null;
+    }
+
+    // Local tag: adjust index past imports
+    const localIndex = tagIndex - importedTagCount;
+    if (moduleBuilder._tags && localIndex < moduleBuilder._tags.length) {
+      return moduleBuilder._tags[localIndex]._funcType.parameterTypes;
     }
     return null;
   }

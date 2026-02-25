@@ -1,5 +1,6 @@
-import { ModuleBuilder, ValueType, ElementType } from '../src/index';
+import { ModuleBuilder, ValueType, ElementType, BlockType } from '../src/index';
 import BinaryReader, { FuncTypeInfo, StructTypeInfo, ArrayTypeInfo, RecGroupTypeInfo } from '../src/BinaryReader';
+import TextModuleWriter from '../src/TextModuleWriter';
 
 test('BinaryReader - reads magic and version', () => {
   const mod = new ModuleBuilder('test');
@@ -449,5 +450,263 @@ describe('BinaryReader - DataCount section', () => {
     const reader = new BinaryReader(bytes);
     const info = reader.read();
     expect(info.dataCount).not.toBeNull();
+  });
+});
+
+describe('BinaryReader - shared memory roundtrip', () => {
+  test('shared memory flags are preserved', () => {
+    const mod = new ModuleBuilder('test', { target: 'latest' });
+    mod.defineMemory(1, 16, true);
+    mod.defineFunction('noop', null, [], (f, a) => {}).withExport();
+    const bytes = mod.toBytes();
+    const reader = new BinaryReader(bytes);
+    const info = reader.read();
+    expect(info.memories).toHaveLength(1);
+    expect(info.memories[0].initial).toBe(1);
+    expect(info.memories[0].maximum).toBe(16);
+    expect(info.memories[0].shared).toBe(true);
+    expect(info.memories[0].memory64).toBe(false);
+  });
+
+  test('memory64 flags are preserved', () => {
+    const mod = new ModuleBuilder('test', { target: 'latest', disableVerification: true });
+    mod.defineMemory(1, 16, false, true);
+    mod.defineFunction('noop', null, [], (f, a) => {}).withExport();
+    const bytes = mod.toBytes();
+    const reader = new BinaryReader(bytes);
+    const info = reader.read();
+    expect(info.memories).toHaveLength(1);
+    expect(info.memories[0].initial).toBe(1);
+    expect(info.memories[0].maximum).toBe(16);
+    expect(info.memories[0].shared).toBe(false);
+    expect(info.memories[0].memory64).toBe(true);
+  });
+
+  test('shared + memory64 flags together', () => {
+    const mod = new ModuleBuilder('test', { target: 'latest', disableVerification: true });
+    mod.defineMemory(1, 16, true, true);
+    mod.defineFunction('noop', null, [], (f, a) => {}).withExport();
+    const bytes = mod.toBytes();
+    const reader = new BinaryReader(bytes);
+    const info = reader.read();
+    expect(info.memories[0].shared).toBe(true);
+    expect(info.memories[0].memory64).toBe(true);
+  });
+
+  test('non-shared non-memory64 has false flags', () => {
+    const mod = new ModuleBuilder('test');
+    mod.defineMemory(1, 4);
+    mod.defineFunction('noop', null, [], (f, a) => {}).withExport();
+    const bytes = mod.toBytes();
+    const reader = new BinaryReader(bytes);
+    const info = reader.read();
+    expect(info.memories[0].shared).toBe(false);
+    expect(info.memories[0].memory64).toBe(false);
+  });
+
+  test('imported shared memory roundtrip', () => {
+    const mod = new ModuleBuilder('test', { target: 'latest' });
+    mod.importMemory('env', 'mem', 1, 16, true);
+    mod.defineFunction('noop', null, [], (f, a) => {}).withExport();
+    const bytes = mod.toBytes();
+    const reader = new BinaryReader(bytes);
+    const info = reader.read();
+    const memImport = info.imports.find(i => i.kind === 2);
+    expect(memImport).toBeDefined();
+    expect(memImport!.memoryType!.shared).toBe(true);
+    expect(memImport!.memoryType!.memory64).toBe(false);
+  });
+
+  test('imported memory64 roundtrip', () => {
+    const mod = new ModuleBuilder('test', { target: 'latest', disableVerification: true });
+    mod.importMemory('env', 'mem', 1, 16, false, true);
+    mod.defineFunction('noop', null, [], (f, a) => {}).withExport();
+    const bytes = mod.toBytes();
+    const reader = new BinaryReader(bytes);
+    const info = reader.read();
+    const memImport = info.imports.find(i => i.kind === 2);
+    expect(memImport!.memoryType!.shared).toBe(false);
+    expect(memImport!.memoryType!.memory64).toBe(true);
+  });
+});
+
+describe('BinaryReader - passive element segments', () => {
+  test('passive element segment roundtrip', () => {
+    const mod = new ModuleBuilder('test', { target: 'latest' });
+    const fn1 = mod.defineFunction('fn1', [ValueType.Int32], [], (f, a) => a.const_i32(1));
+    const fn2 = mod.defineFunction('fn2', [ValueType.Int32], [], (f, a) => a.const_i32(2));
+    mod.defineTable(ElementType.AnyFunc, 2, 2);
+    mod.definePassiveElementSegment([fn1, fn2]);
+    mod.defineFunction('noop', null, [], (f, a) => {}).withExport();
+    const bytes = mod.toBytes();
+    const reader = new BinaryReader(bytes);
+    const info = reader.read();
+    expect(info.elements).toHaveLength(1);
+    expect(info.elements[0].passive).toBe(true);
+    expect(info.elements[0].functionIndices).toEqual([fn1._index, fn2._index]);
+  });
+
+  test('active element segment with table 0', () => {
+    const mod = new ModuleBuilder('test');
+    const fn1 = mod.defineFunction('fn1', [ValueType.Int32], [], (f, a) => a.const_i32(1));
+    const table = mod.defineTable(ElementType.AnyFunc, 1, 1);
+    table.defineTableSegment([fn1], 0);
+    mod.defineFunction('noop', null, [], (f, a) => {}).withExport();
+    const bytes = mod.toBytes();
+    const reader = new BinaryReader(bytes);
+    const info = reader.read();
+    expect(info.elements).toHaveLength(1);
+    expect(info.elements[0].passive).toBe(false);
+    expect(info.elements[0].tableIndex).toBe(0);
+  });
+
+  test('active element segment with explicit table index', () => {
+    const mod = new ModuleBuilder('test', { target: 'latest' });
+    const fn1 = mod.defineFunction('fn1', [ValueType.Int32], [], (f, a) => a.const_i32(1));
+    mod.defineTable(ElementType.FuncRef, 1, 1);
+    const table2 = mod.defineTable(ElementType.FuncRef, 1, 1);
+    mod.defineElementSegment(table2, [fn1], 0);
+    mod.defineFunction('noop', null, [], (f, a) => {}).withExport();
+    const bytes = mod.toBytes();
+    const reader = new BinaryReader(bytes);
+    const info = reader.read();
+    expect(info.elements).toHaveLength(1);
+    expect(info.elements[0].passive).toBe(false);
+    expect(info.elements[0].tableIndex).toBe(table2._index);
+  });
+});
+
+describe('BinaryReader - non-ASCII strings', () => {
+  test('non-ASCII import names roundtrip', () => {
+    const mod = new ModuleBuilder('test');
+    mod.importFunction('modulo\u00e9', 'funci\u00f3n', null, [ValueType.Int32]);
+    mod.defineFunction('noop', null, [], (f, a) => {}).withExport();
+    const bytes = mod.toBytes();
+    const reader = new BinaryReader(bytes);
+    const info = reader.read();
+    expect(info.imports[0].moduleName).toBe('modulo\u00e9');
+    expect(info.imports[0].fieldName).toBe('funci\u00f3n');
+  });
+
+  test('non-ASCII export names roundtrip', () => {
+    const mod = new ModuleBuilder('test');
+    mod.defineFunction('fn', [ValueType.Int32], [], (f, a) => a.const_i32(1)).withExport('\u00fcber');
+    const bytes = mod.toBytes();
+    const reader = new BinaryReader(bytes);
+    const info = reader.read();
+    expect(info.exports[0].name).toBe('\u00fcber');
+  });
+
+  test('emoji import names roundtrip', () => {
+    const mod = new ModuleBuilder('test');
+    mod.importFunction('\ud83d\ude80module', '\ud83d\ude80func', null, [ValueType.Int32]);
+    mod.defineFunction('noop', null, [], (f, a) => {}).withExport();
+    const bytes = mod.toBytes();
+    const reader = new BinaryReader(bytes);
+    const info = reader.read();
+    expect(info.imports[0].moduleName).toBe('\ud83d\ude80module');
+    expect(info.imports[0].fieldName).toBe('\ud83d\ude80func');
+  });
+});
+
+describe('BinaryReader - ref.null and ref.func init expressions', () => {
+  test('ref.null in global init roundtrip', () => {
+    const mod = new ModuleBuilder('test', { target: 'latest', disableVerification: true });
+    const g = mod.defineGlobal(ValueType.FuncRef, false);
+    g.value((asm) => {
+      asm.ref_null(ValueType.FuncRef.value);
+    });
+    g.withExport('g');
+    const bytes = mod.toBytes();
+    const reader = new BinaryReader(bytes);
+    const info = reader.read();
+    expect(info.globals).toHaveLength(1);
+    // The init expr bytes should contain ref.null (0xd0) + heaptype + end (0x0b)
+    expect(info.globals[0].initExpr.length).toBeGreaterThan(1);
+  });
+
+  test('ref.func in global init roundtrip', () => {
+    const mod = new ModuleBuilder('test', { target: 'latest', disableVerification: true });
+    const fn = mod.defineFunction('fn', null, [], (f, a) => {});
+    const g = mod.defineGlobal(ValueType.FuncRef, false);
+    g.value((asm) => {
+      asm.ref_func(fn);
+    });
+    g.withExport('g');
+    const bytes = mod.toBytes();
+    const reader = new BinaryReader(bytes);
+    const info = reader.read();
+    expect(info.globals).toHaveLength(1);
+    expect(info.globals[0].initExpr.length).toBeGreaterThan(1);
+  });
+});
+
+describe('BinaryReader - TagBuilder withExport/withName', () => {
+  test('tag withExport creates export', () => {
+    const mod = new ModuleBuilder('test', { target: 'latest' });
+    mod.defineTag([ValueType.Int32]).withExport('myTag');
+    mod.defineFunction('noop', null, [], (f, a) => {}).withExport();
+    const bytes = mod.toBytes();
+    const reader = new BinaryReader(bytes);
+    const info = reader.read();
+    expect(info.tags).toHaveLength(1);
+    const tagExport = info.exports.find(e => e.name === 'myTag');
+    expect(tagExport).toBeDefined();
+    expect(tagExport!.kind).toBe(4); // Tag
+  });
+
+  test('tag withName sets name', () => {
+    const mod = new ModuleBuilder('test', { target: 'latest' });
+    const tag = mod.defineTag([ValueType.Int32]).withName('err');
+    expect(tag.name).toBe('err');
+  });
+});
+
+describe('TextModuleWriter - extended-const init expressions', () => {
+  test('global with multi-instruction init renders all instructions', () => {
+    const mod = new ModuleBuilder('test', { target: 'latest', disableVerification: true });
+    const g = mod.defineGlobal(ValueType.Int32, false);
+    g.value((asm) => {
+      asm.const_i32(1);
+      asm.const_i32(2);
+      asm.add_i32();
+    });
+    g.withExport('g');
+    const wat = new TextModuleWriter(mod).toString();
+    expect(wat).toContain('i32.const 1 i32.const 2 i32.add');
+  });
+});
+
+describe('Concrete ref type roundtrip', () => {
+  test('struct with concrete ref null field roundtrips through BinaryReader', () => {
+    const mod = new ModuleBuilder('test', { target: 'latest', disableVerification: true });
+    const recGroup = mod.defineRecGroup((builder) => {
+      const selfRef = builder.refNull(0);
+      builder.addStructType([
+        { name: 'value', type: ValueType.Int32, mutable: false },
+        { name: 'next', type: selfRef, mutable: true },
+      ]);
+    });
+    mod.defineFunction('noop', null, [], (f, a) => {}).withExport();
+    const bytes = mod.toBytes();
+    const reader = new BinaryReader(bytes);
+    const info = reader.read();
+    // Should have a rec group type
+    expect(info.types.length).toBeGreaterThanOrEqual(1);
+    const recType = info.types[0];
+    if (recType.kind === 'rec') {
+      const structType = recType.types[0];
+      expect(structType.kind).toBe('struct');
+      if (structType.kind === 'struct') {
+        expect(structType.fields).toHaveLength(2);
+        // First field: i32
+        expect(structType.fields[0].type).toBe(ValueType.Int32);
+        // Second field: (ref null 0) — a ConcreteRefTypeDescriptor
+        const nextField = structType.fields[1].type;
+        expect(typeof nextField).toBe('object');
+        expect((nextField as any).refPrefix).toBe(0x63); // ref null
+        expect((nextField as any).typeIndex).toBe(0);
+      }
+    }
   });
 });

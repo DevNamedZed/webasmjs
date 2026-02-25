@@ -186,7 +186,7 @@ npm run build
 npm test
 
 # Run tests with coverage
-npm run test:cover
+npm run test:coverage
 
 # Regenerate opcode definitions from spec
 npm run generate

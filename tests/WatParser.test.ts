@@ -1549,7 +1549,7 @@ describe('WAT Parser - exception handling', () => {
     const wat = `
       (module $test
         (tag (param i32))
-        (func $noop)
+        (func $noop nop)
         (export "noop" (func $noop))
       )
     `;
@@ -1561,7 +1561,7 @@ describe('WAT Parser - exception handling', () => {
     const wat = `
       (module $test
         (tag $myTag (param i32 f64))
-        (func $noop)
+        (func $noop nop)
         (export "noop" (func $noop))
       )
     `;
@@ -1683,5 +1683,634 @@ describe('WAT Parser - exception handling', () => {
     expect(watOut).toContain('throw');
     expect(watOut).toContain('catch');
     expect(watOut).toContain('(tag');
+  });
+});
+
+describe('WAT Parser - passive segments', () => {
+  test('passive data segment', () => {
+    const wat = `
+      (module $test
+        (memory 1)
+        (func $noop
+          nop
+        )
+        (export "noop" (func $noop))
+        (data "hello")
+      )
+    `;
+    const mod = parseWat(wat);
+    expect(mod._data.length).toBe(1);
+    expect(mod._data[0]._passive).toBe(true);
+    const bytes = mod.toBytes();
+    expect(bytes).toBeTruthy();
+  });
+
+  test('active data segment still works', () => {
+    const wat = `
+      (module $test
+        (memory 1)
+        (func $noop
+          nop
+        )
+        (export "noop" (func $noop))
+        (data (i32.const 0) "hello")
+      )
+    `;
+    const mod = parseWat(wat);
+    expect(mod._data.length).toBe(1);
+    expect(mod._data[0]._passive).toBe(false);
+    const bytes = mod.toBytes();
+    expect(WebAssembly.validate(bytes.buffer as ArrayBuffer)).toBe(true);
+  });
+
+  test('passive element segment', () => {
+    const wat = `
+      (module $test
+        (table 2 funcref)
+        (func $a (result i32)
+          i32.const 1
+        )
+        (func $b (result i32)
+          i32.const 2
+        )
+        (elem func 0 1)
+        (export "a" (func $a))
+      )
+    `;
+    const mod = parseWat(wat);
+    expect(mod._elements.length).toBe(1);
+    expect(mod._elements[0]._passive).toBe(true);
+  });
+
+  test('active element segment still works', () => {
+    const wat = `
+      (module $test
+        (table 2 funcref)
+        (func $a (result i32)
+          i32.const 1
+        )
+        (func $b (result i32)
+          i32.const 2
+        )
+        (elem (i32.const 0) func 0 1)
+        (export "a" (func $a))
+      )
+    `;
+    const mod = parseWat(wat);
+    expect(mod._elements.length).toBe(1);
+    expect(mod._elements[0]._passive).toBe(false);
+    const bytes = mod.toBytes();
+    expect(WebAssembly.validate(bytes.buffer as ArrayBuffer)).toBe(true);
+  });
+});
+
+describe('WAT Parser - ref types', () => {
+  test('nullref value type', () => {
+    const wat = `
+      (module $test
+        (func $test (param nullref)
+          nop
+        )
+        (export "test" (func $test))
+      )
+    `;
+    const mod = parseWat(wat, { target: 'latest', disableVerification: true });
+    expect(mod._functions.length).toBe(1);
+  });
+
+  test('nullfuncref value type', () => {
+    const wat = `
+      (module $test
+        (func $test (param nullfuncref)
+          nop
+        )
+        (export "test" (func $test))
+      )
+    `;
+    const mod = parseWat(wat, { target: 'latest', disableVerification: true });
+    expect(mod._functions.length).toBe(1);
+  });
+
+  test('nullexternref value type', () => {
+    const wat = `
+      (module $test
+        (func $test (param nullexternref)
+          nop
+        )
+        (export "test" (func $test))
+      )
+    `;
+    const mod = parseWat(wat, { target: 'latest', disableVerification: true });
+    expect(mod._functions.length).toBe(1);
+  });
+
+  test('block with funcref result type', () => {
+    const wat = `
+      (module $test
+        (func $test (result funcref)
+          block (result funcref)
+            ref.null func
+          end
+        )
+        (export "test" (func $test))
+      )
+    `;
+    const mod = parseWat(wat, { target: 'latest', disableVerification: true });
+    const bytes = mod.toBytes();
+    expect(bytes).toBeTruthy();
+  });
+
+  test('block with externref result type', () => {
+    const wat = `
+      (module $test
+        (func $test (result externref)
+          block (result externref)
+            ref.null extern
+          end
+        )
+        (export "test" (func $test))
+      )
+    `;
+    const mod = parseWat(wat, { target: 'latest', disableVerification: true });
+    const bytes = mod.toBytes();
+    expect(bytes).toBeTruthy();
+  });
+});
+
+describe('WatParser - memory64 and shared', () => {
+  test('parse memory64 with i64 keyword', () => {
+    const wat = `
+      (module
+        (memory i64 1 10)
+        (func $noop nop)
+        (export "noop" (func $noop))
+      )
+    `;
+    const mod = parseWat(wat, { target: 'latest', disableVerification: true });
+    expect(mod._memories[0].isMemory64).toBe(true);
+    const bytes = mod.toBytes();
+    expect(WebAssembly.validate(bytes.buffer as ArrayBuffer)).toBe(true);
+  });
+
+  test('parse shared memory', () => {
+    const wat = `
+      (module
+        (memory 1 10 shared)
+        (func $noop nop)
+        (export "noop" (func $noop))
+      )
+    `;
+    const mod = parseWat(wat);
+    expect(mod._memories[0].isShared).toBe(true);
+    const bytes = mod.toBytes();
+    expect(WebAssembly.validate(bytes.buffer as ArrayBuffer)).toBe(true);
+  });
+
+  test('parse imported memory64', () => {
+    const wat = `
+      (module
+        (import "env" "mem" (memory i64 1 10))
+        (func $noop nop)
+        (export "noop" (func $noop))
+      )
+    `;
+    const mod = parseWat(wat, { target: 'latest', disableVerification: true });
+    expect((mod._imports[0].data as any).memory64).toBe(true);
+  });
+
+  test('parse imported shared memory', () => {
+    const wat = `
+      (module
+        (import "env" "mem" (memory 1 10 shared))
+        (func $noop nop)
+        (export "noop" (func $noop))
+      )
+    `;
+    const mod = parseWat(wat);
+    expect((mod._imports[0].data as any).shared).toBe(true);
+  });
+});
+
+describe('WatParser - concrete ref types', () => {
+  test('parse struct with (ref null $type) field', () => {
+    const wat = `
+      (module
+        (rec
+          (type $node (struct
+            (field $value i32)
+            (field $next (mut (ref null $node)))
+          ))
+        )
+        (func $noop nop)
+        (export "noop" (func $noop))
+      )
+    `;
+    const mod = parseWat(wat, { target: 'latest' });
+    const bytes = mod.toBytes();
+    expect(WebAssembly.validate(bytes.buffer as ArrayBuffer)).toBe(true);
+  });
+
+  test('parse function with (ref null 0) parameter', () => {
+    const wat = `
+      (module
+        (type $point (struct (field $x i32)))
+        (func $test (param (ref null 0)) (result i32)
+          local.get 0
+          struct.get 0 0
+        )
+        (export "test" (func $test))
+      )
+    `;
+    const mod = parseWat(wat, { target: 'latest', disableVerification: true });
+    const bytes = mod.toBytes();
+    expect(WebAssembly.validate(bytes.buffer as ArrayBuffer)).toBe(true);
+  });
+
+  test('parse array with concrete ref element type', () => {
+    const wat = `
+      (module
+        (type $point (struct (field $x i32)))
+        (type $points (array (mut (ref null $point))))
+        (func $noop nop)
+        (export "noop" (func $noop))
+      )
+    `;
+    const mod = parseWat(wat, { target: 'latest', disableVerification: true });
+    const bytes = mod.toBytes();
+    expect(WebAssembly.validate(bytes.buffer as ArrayBuffer)).toBe(true);
+  });
+});
+
+describe('WatParser - block type indices', () => {
+  test('block with (type $sig) using named type', () => {
+    const wat = `
+      (module
+        (type $sig (func (result i32)))
+        (func $test (result i32)
+          block (type $sig)
+            i32.const 42
+          end
+        )
+        (export "test" (func $test))
+      )
+    `;
+    const mod = parseWat(wat, { target: 'latest', disableVerification: true });
+    const bytes = mod.toBytes();
+    expect(WebAssembly.validate(bytes.buffer as ArrayBuffer)).toBe(true);
+  });
+
+  test('block with (type N) using numeric index', () => {
+    const wat = `
+      (module
+        (type (func (result i32)))
+        (func $test (result i32)
+          block (type 0)
+            i32.const 42
+          end
+        )
+        (export "test" (func $test))
+      )
+    `;
+    const mod = parseWat(wat, { target: 'latest', disableVerification: true });
+    const bytes = mod.toBytes();
+    expect(WebAssembly.validate(bytes.buffer as ArrayBuffer)).toBe(true);
+  });
+
+  test('block type index roundtrips through TextModuleWriter', () => {
+    const wat = `
+      (module
+        (type $sig (func (result i32)))
+        (func $test (result i32)
+          block (type $sig)
+            i32.const 42
+          end
+        )
+        (export "test" (func $test))
+      )
+    `;
+    const mod = parseWat(wat, { target: 'latest', disableVerification: true });
+    const watOut = new TextModuleWriter(mod).toString();
+    expect(watOut).toContain('(type 0)');
+  });
+});
+
+describe('WatParser - folded instructions', () => {
+  test('simple folded expression: (i32.add (i32.const 1) (i32.const 2))', async () => {
+    const wat = `
+      (module
+        (func $add (result i32)
+          (i32.add (i32.const 1) (i32.const 2))
+        )
+        (export "add" (func $add))
+      )
+    `;
+    const mod = parseWat(wat);
+    const bytes = mod.toBytes();
+    expect(WebAssembly.validate(bytes.buffer as ArrayBuffer)).toBe(true);
+    const instance = await WebAssembly.instantiate(bytes.buffer as ArrayBuffer);
+    expect((instance.instance.exports.add as Function)()).toBe(3);
+  });
+
+  test('nested folded expressions', async () => {
+    const wat = `
+      (module
+        (func $calc (result i32)
+          (i32.mul
+            (i32.add (i32.const 2) (i32.const 3))
+            (i32.sub (i32.const 10) (i32.const 4))
+          )
+        )
+        (export "calc" (func $calc))
+      )
+    `;
+    const mod = parseWat(wat);
+    const bytes = mod.toBytes();
+    expect(WebAssembly.validate(bytes.buffer as ArrayBuffer)).toBe(true);
+    const instance = await WebAssembly.instantiate(bytes.buffer as ArrayBuffer);
+    expect((instance.instance.exports.calc as Function)()).toBe(30);
+  });
+
+  test('folded block', async () => {
+    const wat = `
+      (module
+        (func $test (result i32)
+          (block (result i32)
+            i32.const 42
+          )
+        )
+        (export "test" (func $test))
+      )
+    `;
+    const mod = parseWat(wat);
+    const bytes = mod.toBytes();
+    expect(WebAssembly.validate(bytes.buffer as ArrayBuffer)).toBe(true);
+    const instance = await WebAssembly.instantiate(bytes.buffer as ArrayBuffer);
+    expect((instance.instance.exports.test as Function)()).toBe(42);
+  });
+
+  test('folded if/then/else', async () => {
+    const wat = `
+      (module
+        (func $test (param i32) (result i32)
+          (if (result i32) (local.get 0)
+            (then (i32.const 1))
+            (else (i32.const 0))
+          )
+        )
+        (export "test" (func $test))
+      )
+    `;
+    const mod = parseWat(wat);
+    const bytes = mod.toBytes();
+    expect(WebAssembly.validate(bytes.buffer as ArrayBuffer)).toBe(true);
+    const instance = await WebAssembly.instantiate(bytes.buffer as ArrayBuffer);
+    expect((instance.instance.exports.test as Function)(1)).toBe(1);
+    expect((instance.instance.exports.test as Function)(0)).toBe(0);
+  });
+
+  test('mixed flat and folded instructions', async () => {
+    const wat = `
+      (module
+        (func $test (result i32)
+          i32.const 10
+          (i32.add (i32.const 5) (i32.const 3))
+          i32.add
+        )
+        (export "test" (func $test))
+      )
+    `;
+    const mod = parseWat(wat);
+    const bytes = mod.toBytes();
+    expect(WebAssembly.validate(bytes.buffer as ArrayBuffer)).toBe(true);
+    const instance = await WebAssembly.instantiate(bytes.buffer as ArrayBuffer);
+    expect((instance.instance.exports.test as Function)()).toBe(18);
+  });
+
+  test('folded with memory immediate', async () => {
+    const wat = `
+      (module
+        (memory 1)
+        (func $test (result i32)
+          (i32.store offset=0 (i32.const 0) (i32.const 99))
+          (i32.load offset=0 (i32.const 0))
+        )
+        (export "test" (func $test))
+      )
+    `;
+    const mod = parseWat(wat);
+    const bytes = mod.toBytes();
+    expect(WebAssembly.validate(bytes.buffer as ArrayBuffer)).toBe(true);
+    const instance = await WebAssembly.instantiate(bytes.buffer as ArrayBuffer);
+    expect((instance.instance.exports.test as Function)()).toBe(99);
+  });
+
+  test('folded loop with br', () => {
+    const wat = `
+      (module
+        (func $test
+          (loop $L
+            br $L
+          )
+        )
+        (export "test" (func $test))
+      )
+    `;
+    const mod = parseWat(wat, { disableVerification: true });
+    const bytes = mod.toBytes();
+    expect(WebAssembly.validate(bytes.buffer as ArrayBuffer)).toBe(true);
+  });
+});
+
+describe('WatParser - rec groups', () => {
+  test('parse rec group with self-referencing struct', () => {
+    const wat = `
+      (module
+        (rec
+          (type $node (struct
+            (field $value i32)
+            (field $next (mut (ref null $node)))
+          ))
+        )
+        (func $noop nop)
+        (export "noop" (func $noop))
+      )
+    `;
+    const mod = parseWat(wat, { target: 'latest' });
+    expect(mod._types.length).toBe(2); // struct type + func type for $noop
+    expect(mod._types[0]).toBeInstanceOf(StructTypeBuilder);
+    const structType = mod._types[0] as StructTypeBuilder;
+    expect(structType.fields.length).toBe(2);
+    expect(structType.fields[0].name).toBe('value');
+    expect(structType.fields[1].name).toBe('next');
+    expect(structType.fields[1].mutable).toBe(true);
+    const bytes = mod.toBytes();
+    expect(WebAssembly.validate(bytes.buffer as ArrayBuffer)).toBe(true);
+  });
+
+  test('parse rec group with mutually recursive types', () => {
+    const wat = `
+      (module
+        (rec
+          (type $a (struct (field $ref_b (ref null $b))))
+          (type $b (struct (field $ref_a (ref null $a))))
+        )
+        (func $noop nop)
+        (export "noop" (func $noop))
+      )
+    `;
+    const mod = parseWat(wat, { target: 'latest' });
+    expect(mod._types.length).toBe(3); // $a, $b, func type for $noop
+    expect(mod._types[0]).toBeInstanceOf(StructTypeBuilder);
+    expect(mod._types[1]).toBeInstanceOf(StructTypeBuilder);
+    expect(mod._typeSectionEntries.length).toBe(2); // 1 rec group + 1 func type
+    const bytes = mod.toBytes();
+    expect(WebAssembly.validate(bytes.buffer as ArrayBuffer)).toBe(true);
+  });
+
+  test('parse rec group with func type', () => {
+    const wat = `
+      (module
+        (rec
+          (type $ft (func (param i32) (result i32)))
+        )
+        (func $test (type $ft) (param i32) (result i32)
+          local.get 0
+        )
+        (export "test" (func $test))
+      )
+    `;
+    const mod = parseWat(wat, { target: 'latest', disableVerification: true });
+    const bytes = mod.toBytes();
+    expect(WebAssembly.validate(bytes.buffer as ArrayBuffer)).toBe(true);
+  });
+
+  test('parse rec group with array type', () => {
+    const wat = `
+      (module
+        (rec
+          (type $arr (array (mut i32)))
+        )
+        (func $noop nop)
+        (export "noop" (func $noop))
+      )
+    `;
+    const mod = parseWat(wat, { target: 'latest' });
+    expect(mod._types.length).toBe(2); // array + func type
+    expect(mod._types[0]).toBeInstanceOf(ArrayTypeBuilder);
+    const bytes = mod.toBytes();
+    expect(WebAssembly.validate(bytes.buffer as ArrayBuffer)).toBe(true);
+  });
+});
+
+describe('WatParser - sub/sub_final types', () => {
+  test('parse sub type with parent', () => {
+    const wat = `
+      (module
+        (type $base (sub (struct (field $x i32))))
+        (type $child (sub $base (struct (field $x i32) (field $y i32))))
+        (func $noop nop)
+        (export "noop" (func $noop))
+      )
+    `;
+    const mod = parseWat(wat, { target: 'latest' });
+    expect(mod._types.length).toBe(3);
+    const base = mod._types[0] as StructTypeBuilder;
+    expect(base.final).toBe(false);
+    expect(base.superTypes).toEqual([]);
+    const child = mod._types[1] as StructTypeBuilder;
+    expect(child.superTypes).toEqual([{ index: 0 }]);
+    expect(child.final).toBe(false);
+    expect(child.fields.length).toBe(2);
+    const bytes = mod.toBytes();
+    expect(WebAssembly.validate(bytes.buffer as ArrayBuffer)).toBe(true);
+  });
+
+  test('parse sub final type', () => {
+    const wat = `
+      (module
+        (type $base (sub (struct (field $x i32))))
+        (type $sealed (sub final (struct (field $x i32) (field $y i32))))
+        (func $noop nop)
+        (export "noop" (func $noop))
+      )
+    `;
+    const mod = parseWat(wat, { target: 'latest' });
+    const sealed = mod._types[1] as StructTypeBuilder;
+    expect(sealed.superTypes).toEqual([]);
+    expect(sealed.final).toBe(true);
+    expect(sealed.fields.length).toBe(2);
+    const bytes = mod.toBytes();
+    expect(WebAssembly.validate(bytes.buffer as ArrayBuffer)).toBe(true);
+  });
+
+  test('parse sub_final keyword', () => {
+    const wat = `
+      (module
+        (type $base (sub (struct (field $x i32))))
+        (type $sealed (sub_final $base (struct (field $x i32) (field $y f64))))
+        (func $noop nop)
+        (export "noop" (func $noop))
+      )
+    `;
+    const mod = parseWat(wat, { target: 'latest' });
+    const sealed = mod._types[1] as StructTypeBuilder;
+    expect(sealed.superTypes).toEqual([{ index: 0 }]);
+    expect(sealed.final).toBe(true);
+    const bytes = mod.toBytes();
+    expect(WebAssembly.validate(bytes.buffer as ArrayBuffer)).toBe(true);
+  });
+
+  test('parse sub type with numeric parent index', () => {
+    const wat = `
+      (module
+        (type (sub (struct (field $x i32))))
+        (type (sub 0 (struct (field $x i32) (field $y i32))))
+        (func $noop nop)
+        (export "noop" (func $noop))
+      )
+    `;
+    const mod = parseWat(wat, { target: 'latest' });
+    const child = mod._types[1] as StructTypeBuilder;
+    expect(child.superTypes).toEqual([{ index: 0 }]);
+    expect(child.final).toBe(false);
+    const bytes = mod.toBytes();
+    expect(WebAssembly.validate(bytes.buffer as ArrayBuffer)).toBe(true);
+  });
+
+  test('parse sub array type', () => {
+    const wat = `
+      (module
+        (type $base_arr (sub (array i32)))
+        (type $child_arr (sub $base_arr (array i32)))
+        (func $noop nop)
+        (export "noop" (func $noop))
+      )
+    `;
+    const mod = parseWat(wat, { target: 'latest' });
+    const child = mod._types[1] as ArrayTypeBuilder;
+    expect(child.superTypes).toEqual([{ index: 0 }]);
+    expect(child.final).toBe(false);
+    const bytes = mod.toBytes();
+    expect(WebAssembly.validate(bytes.buffer as ArrayBuffer)).toBe(true);
+  });
+
+  test('parse sub types inside rec group', () => {
+    const wat = `
+      (module
+        (rec
+          (type $base (sub (struct (field $x i32))))
+          (type $child (sub $base (struct (field $x i32) (field $y i32))))
+        )
+        (func $noop nop)
+        (export "noop" (func $noop))
+      )
+    `;
+    const mod = parseWat(wat, { target: 'latest' });
+    expect(mod._types.length).toBe(3);
+    const child = mod._types[1] as StructTypeBuilder;
+    expect(child.superTypes).toEqual([{ index: 0 }]);
+    expect(child.final).toBe(false);
+    const bytes = mod.toBytes();
+    expect(WebAssembly.validate(bytes.buffer as ArrayBuffer)).toBe(true);
   });
 });

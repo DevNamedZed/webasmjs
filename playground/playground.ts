@@ -15,6 +15,7 @@ import {
   refType,
   refNullType,
   OpCodes,
+  mut,
 } from '../src/index';
 
 import type { WasmTarget, WasmFeature } from '../src/types';
@@ -37,6 +38,7 @@ const GROUP_ICONS: Record<string, string> = {
   WAT: '\u{1F4DD}',
   Debug: '\u{1F50D}',
   GC: '\u{267B}',
+  Imports: '\u{1F4E5}',
 };
 
 // ─── Target ordering for filter comparison ───
@@ -402,7 +404,7 @@ const ALL_SYMBOLS = [
   'ModuleBuilder', 'PackageBuilder', 'ValueType', 'BlockType', 'ElementType',
   'TextModuleWriter', 'BinaryReader', 'parseWat',
   'RefType', 'HeapType', 'StructTypeBuilder', 'ArrayTypeBuilder',
-  'RecGroupBuilder', 'refType', 'refNullType', 'OpCodes',
+  'RecGroupBuilder', 'refType', 'refNullType', 'OpCodes', 'mut',
 ];
 
 // Expose library globally for eval'd code
@@ -423,6 +425,7 @@ const ALL_SYMBOLS = [
   refType,
   refNullType,
   OpCodes,
+  mut,
 };
 
 async function run(): Promise<void> {

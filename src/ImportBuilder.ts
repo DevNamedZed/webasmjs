@@ -47,10 +47,8 @@ export default class ImportBuilder {
   }
 
   write(writer: BinaryWriter): void {
-    writer.writeVarUInt32(this.moduleName.length);
-    writer.writeString(this.moduleName);
-    writer.writeVarUInt32(this.fieldName.length);
-    writer.writeString(this.fieldName);
+    writer.writeLenPrefixedString(this.moduleName);
+    writer.writeLenPrefixedString(this.fieldName);
     writer.writeUInt8(this.externalKind.value);
     switch (this.externalKind) {
       case ExternalKind.Function:

@@ -1,4 +1,5 @@
 import ModuleBuilder from '../src/ModuleBuilder';
+import BinaryReader from '../src/BinaryReader';
 import { ValueType } from '../src/types';
 
 describe('Memory64', () => {
@@ -45,5 +46,32 @@ describe('Memory64', () => {
     mod.defineMemory(1, 100);
     const wat = mod.toString();
     expect(wat).not.toContain('i64');
+  });
+
+  test('memory64 limits encoded as varuint64 and roundtrip', () => {
+    const mod = new ModuleBuilder('test', { target: 'latest', disableVerification: true });
+    mod.defineMemory(1, 16, false, true);
+    mod.defineFunction('noop', null, [], (f, a) => {}).withExport();
+    const bytes = mod.toBytes();
+    const reader = new BinaryReader(bytes);
+    const info = reader.read();
+    expect(info.memories).toHaveLength(1);
+    expect(info.memories[0].initial).toBe(1);
+    expect(info.memories[0].maximum).toBe(16);
+    expect(info.memories[0].memory64).toBe(true);
+  });
+
+  test('memory64 imported memory limits roundtrip', () => {
+    const mod = new ModuleBuilder('test', { target: 'latest', disableVerification: true });
+    mod.importMemory('env', 'mem', 1, 256, false, true);
+    mod.defineFunction('noop', null, [], (f, a) => {}).withExport();
+    const bytes = mod.toBytes();
+    const reader = new BinaryReader(bytes);
+    const info = reader.read();
+    const memImport = info.imports.find(i => i.kind === 2);
+    expect(memImport).toBeDefined();
+    expect(memImport!.memoryType!.initial).toBe(1);
+    expect(memImport!.memoryType!.maximum).toBe(256);
+    expect(memImport!.memoryType!.memory64).toBe(true);
   });
 });
