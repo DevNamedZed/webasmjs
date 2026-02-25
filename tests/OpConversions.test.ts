@@ -1,6 +1,6 @@
 import { ModuleBuilder, ValueType } from '../src/index';
 
-const latestOpts = { generateNameSection: true, disableVerification: true, target: 'latest' as const };
+const latestOpts = { generateNameSection: true, target: 'latest' as const };
 
 describe('type conversions', () => {
   let exports: any;

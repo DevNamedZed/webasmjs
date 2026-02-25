@@ -10,7 +10,7 @@ TypeScript library for programmatically generating WebAssembly modules. Build WA
 ## Features
 
 - Fluent builder pattern for constructing WASM modules
-- **531 instructions** — arithmetic, control flow, memory, tables, globals, SIMD, atomics, exception handling
+- **562 instructions** — arithmetic, control flow, memory, tables, globals, SIMD, atomics, GC, exception handling
 - **Target system** — `mvp`, `2.0`, `3.0`, `latest` with automatic feature gating
 - i32, i64, f32, f64, v128 value types with BigInt support for i64
 - **128-bit SIMD** — 236 vector instructions + 20 relaxed SIMD
@@ -165,7 +165,7 @@ See the [API Reference](docs/api.md) for complete documentation.
 
 ## Playground
 
-Try webasmjs in the browser with the [interactive playground](https://devnamedzed.github.io/webasmjs/). It includes 40+ examples covering arithmetic, control flow, memory, tables, imports, floating point, i64/BigInt, SIMD, algorithms, WAT parsing, and post-MVP features.
+Try webasmjs in the browser with the [interactive playground](https://devnamedzed.github.io/webasmjs/). It includes 100+ examples covering arithmetic, control flow, memory, tables, imports, floating point, i64/BigInt, SIMD, GC types, algorithms, WAT parsing, and post-MVP features.
 
 To run the playground locally:
 

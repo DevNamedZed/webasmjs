@@ -1,10 +1,18 @@
 import Arg from './Arg';
-import { ImmediateType } from './types';
+import { BlockTypeDescriptor, HeapTypeRef, ImmediateType } from './types';
 import ImmediateEncoder from './ImmediateEncoder';
 import BinaryWriter from './BinaryWriter';
+import type LabelBuilder from './LabelBuilder';
+import type FunctionBuilder from './FunctionBuilder';
+import type ImportBuilder from './ImportBuilder';
+import type FuncTypeBuilder from './FuncTypeBuilder';
+import type LocalBuilder from './LocalBuilder';
+import type FunctionParameterBuilder from './FunctionParameterBuilder';
+import type GlobalBuilder from './GlobalBuilder';
 
 export default class Immediate {
   type: ImmediateType;
+  // Internal heterogeneous storage — type safety enforced at factory method boundaries
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   values: any[];
 
@@ -16,17 +24,15 @@ export default class Immediate {
     this.values = values;
   }
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  static createBlockSignature(blockType: any): Immediate {
+  static createBlockSignature(blockType: BlockTypeDescriptor): Immediate {
     return new Immediate(ImmediateType.BlockSignature, [blockType]);
   }
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  static createBranchTable(defaultLabel: any, labels: any[], depth: number): Immediate {
+  static createBranchTable(defaultLabel: LabelBuilder, labels: LabelBuilder[], depth: number): Immediate {
     const relativeDepths = labels.map((x) => {
-      return depth - x.block.depth;
+      return depth - x.block!.depth;
     });
-    const defaultLabelDepth = depth - defaultLabel.block.depth;
+    const defaultLabelDepth = depth - defaultLabel.block!.depth;
     return new Immediate(ImmediateType.BranchTable, [defaultLabelDepth, relativeDepths]);
   }
 
@@ -38,23 +44,19 @@ export default class Immediate {
     return new Immediate(ImmediateType.Float64, [value]);
   }
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  static createFunction(functionBuilder: any): Immediate {
-    return new Immediate(ImmediateType.Function, [functionBuilder]);
+  static createFunction(func: FunctionBuilder | ImportBuilder): Immediate {
+    return new Immediate(ImmediateType.Function, [func]);
   }
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  static createGlobal(globalBuilder: any): Immediate {
-    return new Immediate(ImmediateType.Global, [globalBuilder]);
+  static createGlobal(global: GlobalBuilder | ImportBuilder): Immediate {
+    return new Immediate(ImmediateType.Global, [global]);
   }
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  static createIndirectFunction(functionTypeBuilder: any): Immediate {
-    return new Immediate(ImmediateType.IndirectFunction, [functionTypeBuilder]);
+  static createIndirectFunction(funcType: FuncTypeBuilder): Immediate {
+    return new Immediate(ImmediateType.IndirectFunction, [funcType]);
   }
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  static createLocal(local: any): Immediate {
+  static createLocal(local: LocalBuilder | FunctionParameterBuilder): Immediate {
     return new Immediate(ImmediateType.Local, [local]);
   }
 
@@ -62,8 +64,7 @@ export default class Immediate {
     return new Immediate(ImmediateType.MemoryImmediate, [alignment, offset]);
   }
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  static createRelativeDepth(label: any, depth: number): Immediate {
+  static createRelativeDepth(label: LabelBuilder, depth: number): Immediate {
     return new Immediate(ImmediateType.RelativeDepth, [label, depth]);
   }
 
@@ -109,14 +110,12 @@ export default class Immediate {
     return new Immediate(ImmediateType.TypeIndexIndex, [typeIndex, index]);
   }
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  static createHeapType(heapType: any): Immediate {
+  static createHeapType(heapType: HeapTypeRef): Immediate {
     return new Immediate(ImmediateType.HeapType, [heapType]);
   }
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  static createBrOnCast(flags: number, labelBuilder: any, heapType1: any, heapType2: any): Immediate {
-    return new Immediate(ImmediateType.BrOnCast, [flags, labelBuilder, heapType1, heapType2]);
+  static createBrOnCast(flags: number, label: LabelBuilder, heapType1: HeapTypeRef, heapType2: HeapTypeRef, depth: number): Immediate {
+    return new Immediate(ImmediateType.BrOnCast, [flags, label, heapType1, heapType2, depth]);
   }
 
   writeBytes(writer: BinaryWriter): void {
@@ -202,7 +201,7 @@ export default class Immediate {
         break;
 
       case ImmediateType.BrOnCast:
-        ImmediateEncoder.encodeBrOnCast(writer, this.values[0], this.values[1], this.values[2], this.values[3]);
+        ImmediateEncoder.encodeBrOnCast(writer, this.values[0], this.values[1], this.values[2], this.values[3], this.values[4]);
         break;
 
       default:

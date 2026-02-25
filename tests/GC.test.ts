@@ -9,7 +9,7 @@ import BinaryReader from '../src/BinaryReader';
 
 // All GC tests use target 'latest' which includes the 'gc' feature.
 const createModule = (name = 'gctest') =>
-  new ModuleBuilder(name, { target: 'latest', disableVerification: true });
+  new ModuleBuilder(name, { target: 'latest' });
 
 // ─── Struct Type Definition ──────────────────────────────────────────
 
@@ -695,5 +695,335 @@ describe('GC init expressions', () => {
     // Since latest target includes extended-const, this should work
     const bytes = mod.toBytes();
     expect(bytes.length).toBeGreaterThan(0);
+  });
+});
+
+describe('br_on_cast', () => {
+  test('encodes correct relative depth', () => {
+    const mod = createModule();
+    const struct = mod.defineStructType([
+      { name: 'val', type: ValueType.Int32, mutable: false },
+    ]);
+    const structRef = refNullType(struct.index);
+
+    mod.defineFunction('test_cast', ValueType.Int32, [structRef], (fn, asm) => {
+      const param = fn.getParameter(0);
+      // block $target (result i32)
+      const label = asm.block(BlockType.Int32);
+      // br_on_cast flags=1(nullable src), $target, anyref → struct type
+      asm.get_local(param);
+      asm.br_on_cast(1, label, HeapType.Any, struct);
+      // fall-through: not a struct, return 0
+      asm.drop();
+      asm.const_i32(0);
+      asm.br(label);
+      // end block - cast succeeded, struct is on stack
+      asm.end();
+      asm.struct_get(struct.index, 0);
+    }).withExport('test_cast');
+
+    const bytes = mod.toBytes();
+    expect(bytes.length).toBeGreaterThan(0);
+
+    // Verify binary contains the br_on_cast opcode (0xFB 0x18)
+    const hexStr = Array.from(bytes).map((b) => b.toString(16).padStart(2, '0')).join('');
+    expect(hexStr).toContain('fb18');
+  });
+
+  test('br_on_cast_fail encodes correctly', () => {
+    const mod = createModule();
+    const struct = mod.defineStructType([
+      { name: 'x', type: ValueType.Int32, mutable: false },
+    ]);
+    const structRef = refNullType(struct.index);
+
+    mod.defineFunction('test', ValueType.Int32, [structRef], (fn, asm) => {
+      const param = fn.getParameter(0);
+      const label = asm.block(BlockType.Int32);
+      asm.get_local(param);
+      asm.br_on_cast_fail(1, label, HeapType.Any, struct);
+      // Cast succeeded - get field
+      asm.struct_get(struct.index, 0);
+      asm.br(label);
+      asm.end();
+      // Cast failed - default
+    }).withExport('test');
+
+    const bytes = mod.toBytes();
+    expect(bytes.length).toBeGreaterThan(0);
+
+    const hexStr = Array.from(bytes).map((b) => b.toString(16).padStart(2, '0')).join('');
+    expect(hexStr).toContain('fb19');
+  });
+});
+
+// ─── Additional GC Opcode Coverage ─────────────────────────────────
+
+describe('GC struct signed/unsigned getters', () => {
+  test('struct.get_s emits correctly', () => {
+    const mod = createModule();
+    const struct = mod.defineStructType([
+      { name: 'x', type: ValueType.Int32, mutable: false },
+    ]);
+
+    mod.defineFunction('test', ValueType.Int32, [], (func, asm) => {
+      asm.struct_new_default(struct.index);
+      asm.struct_get_s(struct.index, 0);
+    });
+
+    const bytes = mod.toBytes();
+    expect(bytes.length).toBeGreaterThan(0);
+  });
+
+  test('struct.get_u emits correctly', () => {
+    const mod = createModule();
+    const struct = mod.defineStructType([
+      { name: 'x', type: ValueType.Int32, mutable: false },
+    ]);
+
+    mod.defineFunction('test', ValueType.Int32, [], (func, asm) => {
+      asm.struct_new_default(struct.index);
+      asm.struct_get_u(struct.index, 0);
+    });
+
+    const bytes = mod.toBytes();
+    expect(bytes.length).toBeGreaterThan(0);
+  });
+});
+
+describe('GC array creation variants', () => {
+  test('array.new_default emits correctly', () => {
+    const mod = createModule();
+    const arrayType = mod.defineArrayType(ValueType.Int32, true);
+
+    mod.defineFunction('test', null, [], (func, asm) => {
+      asm.const_i32(10);
+      asm.array_new_default(arrayType.index);
+      asm.drop();
+    });
+
+    const bytes = mod.toBytes();
+    expect(bytes.length).toBeGreaterThan(0);
+  });
+
+  test('array.new_fixed emits with type index and count', () => {
+    const mod = createModule();
+    const arrayType = mod.defineArrayType(ValueType.Int32, true);
+
+    mod.defineFunction('test', null, [], (func, asm) => {
+      asm.const_i32(1);
+      asm.const_i32(2);
+      asm.const_i32(3);
+      asm.array_new_fixed(arrayType.index, 3);
+      asm.drop();
+    });
+
+    const bytes = mod.toBytes();
+    expect(bytes.length).toBeGreaterThan(0);
+    // Verify binary contains the array.new_fixed opcode (0xFB 0x08)
+    const hexStr = Array.from(bytes).map((b) => b.toString(16).padStart(2, '0')).join('');
+    expect(hexStr).toContain('fb08');
+  });
+
+  test('array.get_s and array.get_u emit correctly', () => {
+    const mod = createModule();
+    const arrayType = mod.defineArrayType(ValueType.Int32, true);
+
+    mod.defineFunction('test', null, [], (func, asm) => {
+      asm.const_i32(0);
+      asm.const_i32(5);
+      asm.array_new(arrayType.index);
+      const local = asm.declareLocal(ValueType.AnyRef);
+      asm.set_local(local);
+
+      asm.get_local(local);
+      asm.const_i32(0);
+      asm.array_get_s(arrayType.index);
+      asm.drop();
+
+      asm.get_local(local);
+      asm.const_i32(0);
+      asm.array_get_u(arrayType.index);
+      asm.drop();
+    });
+
+    const bytes = mod.toBytes();
+    expect(bytes.length).toBeGreaterThan(0);
+  });
+});
+
+describe('GC array bulk operations', () => {
+  test('array.fill emits correctly', () => {
+    const mod = createModule();
+    const arrayType = mod.defineArrayType(ValueType.Int32, true);
+
+    mod.defineFunction('test', null, [], (func, asm) => {
+      asm.const_i32(0);
+      asm.const_i32(10);
+      asm.array_new(arrayType.index);
+      const local = asm.declareLocal(ValueType.AnyRef);
+      asm.set_local(local);
+
+      // array.fill: [arrayref, offset, value, count]
+      asm.get_local(local);
+      asm.const_i32(0);  // offset
+      asm.const_i32(42); // fill value
+      asm.const_i32(10); // count
+      asm.array_fill(arrayType.index);
+    });
+
+    const bytes = mod.toBytes();
+    expect(bytes.length).toBeGreaterThan(0);
+    const hexStr = Array.from(bytes).map((b) => b.toString(16).padStart(2, '0')).join('');
+    expect(hexStr).toContain('fb10');  // array.fill = 0xFB 0x10 (16 = 0x10)
+  });
+
+  test('array.copy emits correctly', () => {
+    const mod = createModule();
+    const arrayType = mod.defineArrayType(ValueType.Int32, true);
+
+    mod.defineFunction('test', null, [], (func, asm) => {
+      asm.const_i32(0);
+      asm.const_i32(5);
+      asm.array_new(arrayType.index);
+      const src = asm.declareLocal(ValueType.AnyRef);
+      asm.set_local(src);
+
+      asm.const_i32(0);
+      asm.const_i32(5);
+      asm.array_new(arrayType.index);
+      const dst = asm.declareLocal(ValueType.AnyRef);
+      asm.set_local(dst);
+
+      // array.copy: [dst, dstOffset, src, srcOffset, count]
+      asm.get_local(dst);
+      asm.const_i32(0);
+      asm.get_local(src);
+      asm.const_i32(0);
+      asm.const_i32(5);
+      asm.array_copy(arrayType.index, arrayType.index);
+    });
+
+    const bytes = mod.toBytes();
+    expect(bytes.length).toBeGreaterThan(0);
+  });
+});
+
+describe('GC ref type variants', () => {
+  test('ref.test_null emits with heap type', () => {
+    const mod = createModule();
+
+    mod.defineFunction('test', ValueType.Int32, [], (func, asm) => {
+      asm.ref_null(0x6e); // anyref
+      asm.ref_test_null(HeapType.I31);
+    });
+
+    const bytes = mod.toBytes();
+    expect(bytes.length).toBeGreaterThan(0);
+    const hexStr = Array.from(bytes).map((b) => b.toString(16).padStart(2, '0')).join('');
+    expect(hexStr).toContain('fb15'); // ref.test_null = 0xFB 0x15 (21 = 0x15)
+  });
+
+  test('ref.cast_null emits with heap type', () => {
+    const mod = createModule();
+
+    mod.defineFunction('test', null, [], (func, asm) => {
+      asm.ref_null(0x6e); // anyref
+      asm.ref_cast_null(HeapType.I31);
+      asm.drop();
+    });
+
+    const bytes = mod.toBytes();
+    expect(bytes.length).toBeGreaterThan(0);
+    const hexStr = Array.from(bytes).map((b) => b.toString(16).padStart(2, '0')).join('');
+    expect(hexStr).toContain('fb17'); // ref.cast_null = 0xFB 0x17 (23 = 0x17)
+  });
+
+  test('ref.test with concrete type index', () => {
+    const mod = createModule();
+    const struct = mod.defineStructType([
+      { name: 'x', type: ValueType.Int32, mutable: false },
+    ]);
+
+    mod.defineFunction('test', ValueType.Int32, [], (func, asm) => {
+      asm.ref_null(0x6e); // anyref
+      asm.ref_test(struct);
+    });
+
+    const bytes = mod.toBytes();
+    expect(bytes.length).toBeGreaterThan(0);
+  });
+
+  test('ref.cast with concrete type index', () => {
+    const mod = createModule();
+    const struct = mod.defineStructType([
+      { name: 'x', type: ValueType.Int32, mutable: false },
+    ]);
+
+    mod.defineFunction('test', null, [], (func, asm) => {
+      asm.ref_null(0x6e); // anyref
+      asm.ref_cast(struct);
+      asm.drop();
+    });
+
+    const bytes = mod.toBytes();
+    expect(bytes.length).toBeGreaterThan(0);
+  });
+});
+
+describe('GC WAT text output for opcodes', () => {
+  test('struct opcodes appear in WAT output', () => {
+    const mod = createModule();
+    const struct = mod.defineStructType([
+      { name: 'x', type: ValueType.Int32, mutable: true },
+    ]);
+
+    mod.defineFunction('test', null, [], (func, asm) => {
+      asm.struct_new_default(struct.index);
+      const local = asm.declareLocal(ValueType.AnyRef);
+      asm.set_local(local);
+      asm.get_local(local);
+      asm.const_i32(99);
+      asm.struct_set(struct.index, 0);
+      asm.get_local(local);
+      asm.struct_get(struct.index, 0);
+      asm.drop();
+    }).withExport();
+
+    const wat = mod.toString();
+    expect(wat).toContain('struct.new_default');
+    expect(wat).toContain('struct.set');
+    expect(wat).toContain('struct.get');
+  });
+
+  test('array opcodes appear in WAT output', () => {
+    const mod = createModule();
+    const arrayType = mod.defineArrayType(ValueType.Int32, true);
+
+    mod.defineFunction('test', null, [], (func, asm) => {
+      asm.const_i32(10);
+      asm.array_new_default(arrayType.index);
+      asm.array_len();
+      asm.drop();
+    }).withExport();
+
+    const wat = mod.toString();
+    expect(wat).toContain('array.new_default');
+    expect(wat).toContain('array.len');
+  });
+
+  test('i31 and conversion opcodes appear in WAT output', () => {
+    const mod = createModule();
+
+    mod.defineFunction('test', null, [], (func, asm) => {
+      asm.const_i32(42);
+      asm.ref_i31();
+      asm.i31_get_s();
+      asm.drop();
+    }).withExport();
+
+    const wat = mod.toString();
+    expect(wat).toContain('ref.i31');
+    expect(wat).toContain('i31.get_s');
   });
 });

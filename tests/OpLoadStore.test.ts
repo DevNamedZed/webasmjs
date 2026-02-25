@@ -1,6 +1,6 @@
 import { ModuleBuilder, ValueType } from '../src/index';
 
-const opts = { generateNameSection: true, disableVerification: true };
+const opts = { generateNameSection: true };
 
 describe('i64/f32/f64 load/store', () => {
   let exports: any;

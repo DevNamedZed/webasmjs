@@ -1,5 +1,5 @@
 import BinaryWriter from './BinaryWriter';
-import { TypeForm, ValueTypeDescriptor, writeValueType } from './types';
+import { TypeForm, ValueTypeDescriptor, writeValueType, StructFieldsObject } from './types';
 
 export interface StructField {
   name: string;
@@ -11,6 +11,14 @@ export interface StructTypeOptions {
   superTypes?: { index: number }[];
   final?: boolean;
 }
+
+/**
+ * A StructTypeBuilder with typed field index accessors.
+ * `builder.field.x` returns the field index for 'x' with IDE autocomplete.
+ */
+export type TypedStructBuilder<T extends StructFieldsObject> = StructTypeBuilder & {
+  readonly field: { readonly [K in keyof T & string]: number };
+};
 
 export default class StructTypeBuilder {
   key: string;

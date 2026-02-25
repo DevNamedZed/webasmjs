@@ -147,5 +147,4 @@ console.log(wat);
 
 - [API Reference](api.md) — complete documentation of all builders and emitters
 - [Examples](examples.md) — annotated examples covering common patterns
-- [Feature Spec](../spec/FEATURES.md) — detailed specification of all supported WebAssembly features
 - [Playground](https://devnamedzed.github.io/webasmjs/) — try webasmjs in the browser

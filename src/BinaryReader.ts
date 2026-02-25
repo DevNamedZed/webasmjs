@@ -12,7 +12,7 @@ import OpCodes from './OpCodes';
 
 export interface ModuleInfo {
   version: number;
-  types: FuncTypeInfo[];
+  types: TypeInfo[];
   imports: ImportInfo[];
   functions: FunctionInfo[];
   tables: TableInfo[];
@@ -21,14 +21,49 @@ export interface ModuleInfo {
   exports: ExportInfo[];
   start: number | null;
   elements: ElementInfo[];
+  tags: TagInfo[];
+  dataCount: number | null;
   data: DataInfo[];
   customSections: CustomSectionInfo[];
   nameSection?: NameSectionInfo;
 }
 
+export type TypeInfo = FuncTypeInfo | StructTypeInfo | ArrayTypeInfo | RecGroupTypeInfo;
+
 export interface FuncTypeInfo {
+  kind: 'func';
   parameterTypes: ValueTypeDescriptor[];
   returnTypes: ValueTypeDescriptor[];
+}
+
+export interface StructFieldInfo {
+  type: number;
+  mutable: boolean;
+}
+
+export interface StructTypeInfo {
+  kind: 'struct';
+  fields: StructFieldInfo[];
+  superTypes?: number[];
+  final?: boolean;
+}
+
+export interface ArrayTypeInfo {
+  kind: 'array';
+  elementType: number;
+  mutable: boolean;
+  superTypes?: number[];
+  final?: boolean;
+}
+
+export interface RecGroupTypeInfo {
+  kind: 'rec';
+  types: TypeInfo[];
+}
+
+export interface TagInfo {
+  attribute: number;
+  typeIndex: number;
 }
 
 export interface ImportInfo {
@@ -39,6 +74,7 @@ export interface ImportInfo {
   tableType?: { elementType: number; initial: number; maximum: number | null };
   memoryType?: { initial: number; maximum: number | null };
   globalType?: { valueType: number; mutable: boolean };
+  tagType?: { attribute: number; typeIndex: number };
 }
 
 export interface FunctionInfo {
@@ -77,9 +113,11 @@ export interface ElementInfo {
 }
 
 export interface DataInfo {
+  kind: number;
   memoryIndex: number;
   offsetExpr: Uint8Array;
   data: Uint8Array;
+  passive: boolean;
 }
 
 export interface CustomSectionInfo {
@@ -127,6 +165,8 @@ export default class BinaryReader {
       exports: [],
       start: null,
       elements: [],
+      tags: [],
+      dataCount: null,
       data: [],
       customSections: [],
     };
@@ -175,6 +215,12 @@ export default class BinaryReader {
           break;
         case 11: // Data
           this.readDataSection(module);
+          break;
+        case 12: // DataCount
+          module.dataCount = this.readVarUInt32();
+          break;
+        case 13: // Tag
+          this.readTagSection(module);
           break;
         default:
           // Skip unknown section
@@ -267,19 +313,91 @@ export default class BinaryReader {
   private readTypeSection(module: ModuleInfo): void {
     const count = this.readVarUInt32();
     for (let i = 0; i < count; i++) {
-      const form = this.readVarInt7(); // 0x60 = func
-      const paramCount = this.readVarUInt32();
-      const parameterTypes: ValueTypeDescriptor[] = [];
-      for (let j = 0; j < paramCount; j++) {
-        parameterTypes.push(this.readValueType());
+      const typeInfo = this.readTypeEntry();
+      if (typeInfo.kind === 'rec') {
+        // Rec group: add the group itself AND each type within it
+        module.types.push(typeInfo);
+        // Individual types in a rec group are also indexed in the type space
+        // The rec group acts as a container; we don't add children separately
+        // since the rec group already tracks them
+      } else {
+        module.types.push(typeInfo);
       }
-      const returnCount = this.readVarUInt32();
-      const returnTypes: ValueTypeDescriptor[] = [];
-      for (let j = 0; j < returnCount; j++) {
-        returnTypes.push(this.readValueType());
-      }
-      module.types.push({ parameterTypes, returnTypes });
     }
+  }
+
+  private readTypeEntry(): TypeInfo {
+    const form = this.readVarUInt7();
+
+    switch (form) {
+      case 0x60: // func
+        return this.readFuncType();
+      case 0x5f: // struct
+        return this.readStructType();
+      case 0x5e: // array
+        return this.readArrayType();
+      case 0x4e: { // rec group
+        const typeCount = this.readVarUInt32();
+        const types: TypeInfo[] = [];
+        for (let j = 0; j < typeCount; j++) {
+          types.push(this.readTypeEntry());
+        }
+        return { kind: 'rec', types };
+      }
+      case 0x50: // sub (non-final)
+      case 0x4f: { // sub_final
+        const final = form === 0x4f;
+        const superCount = this.readVarUInt32();
+        const superTypes: number[] = [];
+        for (let j = 0; j < superCount; j++) {
+          superTypes.push(this.readVarUInt32());
+        }
+        // Read the inner type (struct, array, or func)
+        const innerType = this.readTypeEntry();
+        if (innerType.kind === 'struct') {
+          innerType.superTypes = superTypes;
+          innerType.final = final;
+        } else if (innerType.kind === 'array') {
+          innerType.superTypes = superTypes;
+          innerType.final = final;
+        }
+        // For func types with subtyping, return as-is (rare)
+        return innerType;
+      }
+      default:
+        throw new Error(`Unknown type form: 0x${(form & 0xff).toString(16)}`);
+    }
+  }
+
+  private readFuncType(): FuncTypeInfo {
+    const paramCount = this.readVarUInt32();
+    const parameterTypes: ValueTypeDescriptor[] = [];
+    for (let j = 0; j < paramCount; j++) {
+      parameterTypes.push(this.readValueType());
+    }
+    const returnCount = this.readVarUInt32();
+    const returnTypes: ValueTypeDescriptor[] = [];
+    for (let j = 0; j < returnCount; j++) {
+      returnTypes.push(this.readValueType());
+    }
+    return { kind: 'func', parameterTypes, returnTypes };
+  }
+
+  private readStructType(): StructTypeInfo {
+    const fieldCount = this.readVarUInt32();
+    const fields: StructFieldInfo[] = [];
+    for (let j = 0; j < fieldCount; j++) {
+      const type = this.readVarInt7();
+      const mutable = this.readVarUInt1() === 1;
+      fields.push({ type, mutable });
+    }
+    return { kind: 'struct', fields };
+  }
+
+  private readArrayType(): ArrayTypeInfo {
+    const elementType = this.readVarInt7();
+    const mutable = this.readVarUInt1() === 1;
+    return { kind: 'array', elementType, mutable };
   }
 
   private readImportSection(module: ModuleInfo): void {
@@ -312,6 +430,12 @@ export default class BinaryReader {
           const valueType = this.readVarInt7();
           const mutable = this.readVarUInt1() === 1;
           imp.globalType = { valueType, mutable };
+          break;
+        }
+        case 4: { // Tag
+          const attribute = this.readVarUInt32();
+          const typeIndex = this.readVarUInt32();
+          imp.tagType = { attribute, typeIndex };
           break;
         }
       }
@@ -379,6 +503,15 @@ export default class BinaryReader {
     }
   }
 
+  private readTagSection(module: ModuleInfo): void {
+    const count = this.readVarUInt32();
+    for (let i = 0; i < count; i++) {
+      const attribute = this.readVarUInt32(); // 0 = exception
+      const typeIndex = this.readVarUInt32();
+      module.tags.push({ attribute, typeIndex });
+    }
+  }
+
   private readCodeSection(module: ModuleInfo, functionTypeIndices: number[]): void {
     const count = this.readVarUInt32();
     for (let i = 0; i < count; i++) {
@@ -409,11 +542,26 @@ export default class BinaryReader {
   private readDataSection(module: ModuleInfo): void {
     const count = this.readVarUInt32();
     for (let i = 0; i < count; i++) {
-      const memoryIndex = this.readVarUInt32();
-      const offsetExpr = this.readInitExpr();
-      const dataSize = this.readVarUInt32();
-      const data = this.readBytes(dataSize);
-      module.data.push({ memoryIndex, offsetExpr, data });
+      const kind = this.readVarUInt32();
+      if (kind === 1) {
+        // Passive segment: kind=1, data bytes only
+        const dataSize = this.readVarUInt32();
+        const data = this.readBytes(dataSize);
+        module.data.push({ kind, memoryIndex: 0, offsetExpr: new Uint8Array(), data, passive: true });
+      } else if (kind === 2) {
+        // Active with explicit memory index: kind=2, memoryIndex, offsetExpr, data
+        const memoryIndex = this.readVarUInt32();
+        const offsetExpr = this.readInitExpr();
+        const dataSize = this.readVarUInt32();
+        const data = this.readBytes(dataSize);
+        module.data.push({ kind, memoryIndex, offsetExpr, data, passive: false });
+      } else {
+        // Active with default memory 0: kind=0, offsetExpr, data
+        const offsetExpr = this.readInitExpr();
+        const dataSize = this.readVarUInt32();
+        const data = this.readBytes(dataSize);
+        module.data.push({ kind, memoryIndex: 0, offsetExpr, data, passive: false });
+      }
     }
   }
 
@@ -455,12 +603,24 @@ export default class BinaryReader {
 
   private readValueType(): ValueTypeDescriptor {
     const value = this.readVarInt7();
-    // Value types are signed: -1=i32, -2=i64, -3=f32, -4=f64
+    // Value types are signed: -1=i32, -2=i64, -3=f32, -4=f64, -5=v128
+    // Reference types: -16=funcref, -17=externref, -14=anyref, etc.
     switch (value) {
       case -1: return ValueType.Int32;
       case -2: return ValueType.Int64;
       case -3: return ValueType.Float32;
       case -4: return ValueType.Float64;
+      case -5: return ValueType.V128;
+      case -16: return ValueType.FuncRef;
+      case -17: return ValueType.ExternRef;
+      case -14: return ValueType.AnyRef;
+      case -13: return ValueType.EqRef;
+      case -12: return ValueType.I31Ref;
+      case -11: return ValueType.StructRef;
+      case -10: return ValueType.ArrayRef;
+      case -15: return ValueType.NullRef;
+      case -9: return ValueType.NullFuncRef;
+      case -8: return ValueType.NullExternRef;
       default:
         throw new Error(`Unknown value type: 0x${(value & 0xff).toString(16)}`);
     }
@@ -468,11 +628,21 @@ export default class BinaryReader {
 
   // --- Primitive readers ---
 
+  private ensureBytes(count: number): void {
+    if (this.offset + count > this.buffer.length) {
+      throw new Error(
+        `Unexpected end of binary data at offset ${this.offset} (need ${count} bytes, have ${this.buffer.length - this.offset})`
+      );
+    }
+  }
+
   private readUInt8(): number {
+    this.ensureBytes(1);
     return this.buffer[this.offset++];
   }
 
   private readUInt32(): number {
+    this.ensureBytes(4);
     const value =
       this.buffer[this.offset] |
       (this.buffer[this.offset + 1] << 8) |
@@ -483,10 +653,12 @@ export default class BinaryReader {
   }
 
   private readVarUInt1(): number {
+    this.ensureBytes(1);
     return this.buffer[this.offset++] & 1;
   }
 
   private readVarUInt7(): number {
+    this.ensureBytes(1);
     return this.buffer[this.offset++] & 0x7f;
   }
 
@@ -495,6 +667,7 @@ export default class BinaryReader {
     let shift = 0;
     let byte: number;
     do {
+      this.ensureBytes(1);
       byte = this.buffer[this.offset++];
       result |= (byte & 0x7f) << shift;
       shift += 7;
@@ -503,6 +676,7 @@ export default class BinaryReader {
   }
 
   private readVarInt7(): number {
+    this.ensureBytes(1);
     const byte = this.buffer[this.offset++];
     return byte & 0x40 ? byte | 0xffffff80 : byte & 0x7f;
   }
@@ -512,6 +686,7 @@ export default class BinaryReader {
     let shift = 0;
     let byte: number;
     do {
+      this.ensureBytes(1);
       byte = this.buffer[this.offset++];
       result |= (byte & 0x7f) << shift;
       shift += 7;
@@ -527,6 +702,7 @@ export default class BinaryReader {
     let shift = 0n;
     let byte: number;
     do {
+      this.ensureBytes(1);
       byte = this.buffer[this.offset++];
       result |= BigInt(byte & 0x7f) << shift;
       shift += 7n;
@@ -538,12 +714,14 @@ export default class BinaryReader {
   }
 
   private readString(length: number): string {
+    this.ensureBytes(length);
     const bytes = this.buffer.slice(this.offset, this.offset + length);
     this.offset += length;
     return new TextDecoder().decode(bytes);
   }
 
   private readBytes(length: number): Uint8Array {
+    this.ensureBytes(length);
     const bytes = this.buffer.slice(this.offset, this.offset + length);
     this.offset += length;
     return bytes;

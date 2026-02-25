@@ -4,14 +4,14 @@ import {
   ValueType,
   ElementType,
   ElementSegmentBuilder,
-  Instruction,
-  LocalBuilder,
-  LabelBuilder,
-  ResizableLimits,
-  GlobalType,
-  MemoryType,
-  TableType,
 } from '../src/index';
+import Instruction from '../src/Instruction';
+import LocalBuilder from '../src/LocalBuilder';
+import LabelBuilder from '../src/LabelBuilder';
+import ResizableLimits from '../src/ResizableLimits';
+import GlobalType from '../src/GlobalType';
+import MemoryType from '../src/MemoryType';
+import TableType from '../src/TableType';
 import BinaryWriter from '../src/BinaryWriter';
 import OpCodes from '../src/OpCodes';
 

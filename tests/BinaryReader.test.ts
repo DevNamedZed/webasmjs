@@ -1,5 +1,5 @@
 import { ModuleBuilder, ValueType, ElementType } from '../src/index';
-import BinaryReader from '../src/BinaryReader';
+import BinaryReader, { FuncTypeInfo, StructTypeInfo, ArrayTypeInfo, RecGroupTypeInfo } from '../src/BinaryReader';
 
 test('BinaryReader - reads magic and version', () => {
   const mod = new ModuleBuilder('test');
@@ -23,8 +23,9 @@ test('BinaryReader - reads types', () => {
   const reader = new BinaryReader(bytes);
   const result = reader.read();
   expect(result.types.length).toBeGreaterThanOrEqual(1);
-  expect(result.types[0].parameterTypes).toHaveLength(2);
-  expect(result.types[0].returnTypes).toHaveLength(1);
+  const funcType = result.types[0] as FuncTypeInfo;
+  expect(funcType.parameterTypes).toHaveLength(2);
+  expect(funcType.returnTypes).toHaveLength(1);
 });
 
 test('BinaryReader - reads exports', () => {
@@ -353,5 +354,100 @@ describe('BinaryReader roundtrips', () => {
     const globalNames = info.nameSection!.globalNames!;
     expect(globalNames.get(g1._index)).toBe('alpha');
     expect(globalNames.get(g2._index)).toBe('beta');
+  });
+});
+
+describe('BinaryReader - tag section', () => {
+  test('tag section roundtrip', () => {
+    const mod = new ModuleBuilder('test');
+    const tag = mod.defineTag([ValueType.Int32]);
+    mod.defineFunction('noop', null, [], (f, a) => {}).withExport();
+    const bytes = mod.toBytes();
+    const reader = new BinaryReader(bytes);
+    const info = reader.read();
+    expect(info.tags).toHaveLength(1);
+    expect(info.tags[0].attribute).toBe(0);
+    expect(info.tags[0].typeIndex).toBe(tag.funcType.index);
+  });
+
+  test('multiple tags roundtrip', () => {
+    const mod = new ModuleBuilder('test');
+    mod.defineTag([ValueType.Int32]);
+    mod.defineTag([ValueType.Int32, ValueType.Float64]);
+    mod.defineTag([]);
+    mod.defineFunction('noop', null, [], (f, a) => {}).withExport();
+    const bytes = mod.toBytes();
+    const reader = new BinaryReader(bytes);
+    const info = reader.read();
+    expect(info.tags).toHaveLength(3);
+  });
+});
+
+describe('BinaryReader - GC types', () => {
+  test('struct type roundtrip', () => {
+    const mod = new ModuleBuilder('test', { target: 'latest' });
+    mod.defineStructType([
+      { name: 'x', type: ValueType.Int32, mutable: false },
+      { name: 'y', type: ValueType.Float64, mutable: true },
+    ]);
+    mod.defineFunction('noop', null, [], (f, a) => {}).withExport();
+    const bytes = mod.toBytes();
+    const reader = new BinaryReader(bytes);
+    const info = reader.read();
+    // Find the struct type (may be in a rec group)
+    const structType = info.types.find(t => t.kind === 'struct') as StructTypeInfo | undefined;
+    const recGroup = info.types.find(t => t.kind === 'rec') as RecGroupTypeInfo | undefined;
+    const found = structType || (recGroup && recGroup.types.find(t => t.kind === 'struct') as StructTypeInfo | undefined);
+    expect(found).toBeDefined();
+    expect(found!.fields).toHaveLength(2);
+    expect(found!.fields[0].mutable).toBe(false);
+    expect(found!.fields[1].mutable).toBe(true);
+  });
+
+  test('array type roundtrip', () => {
+    const mod = new ModuleBuilder('test', { target: 'latest' });
+    mod.defineArrayType(ValueType.Int32, true);
+    mod.defineFunction('noop', null, [], (f, a) => {}).withExport();
+    const bytes = mod.toBytes();
+    const reader = new BinaryReader(bytes);
+    const info = reader.read();
+    const arrayType = info.types.find(t => t.kind === 'array') as ArrayTypeInfo | undefined;
+    const recGroup = info.types.find(t => t.kind === 'rec') as RecGroupTypeInfo | undefined;
+    const found = arrayType || (recGroup && recGroup.types.find(t => t.kind === 'array') as ArrayTypeInfo | undefined);
+    expect(found).toBeDefined();
+    expect(found!.mutable).toBe(true);
+  });
+
+  test('rec group roundtrip', () => {
+    const mod = new ModuleBuilder('test', { target: 'latest' });
+    mod.defineRecGroup((rec) => {
+      rec.addStructType([
+        { name: 'a', type: ValueType.Int32, mutable: false },
+      ]);
+      rec.addStructType([
+        { name: 'b', type: ValueType.Float64, mutable: true },
+      ]);
+    });
+    mod.defineFunction('noop', null, [], (f, a) => {}).withExport();
+    const bytes = mod.toBytes();
+    const reader = new BinaryReader(bytes);
+    const info = reader.read();
+    const recGroup = info.types.find(t => t.kind === 'rec') as RecGroupTypeInfo | undefined;
+    expect(recGroup).toBeDefined();
+    expect(recGroup!.types.length).toBeGreaterThanOrEqual(2);
+  });
+});
+
+describe('BinaryReader - DataCount section', () => {
+  test('passive data segment includes datacount', () => {
+    const mod = new ModuleBuilder('test', { target: 'latest' });
+    mod.defineMemory(1);
+    const seg = mod.defineData(new Uint8Array([1, 2, 3]));
+    (seg as any)._passive = true;
+    mod.defineFunction('noop', null, [], (f, a) => {}).withExport();
+    const bytes = mod.toBytes();
+    const reader = new BinaryReader(bytes);
+    const info = reader.read();
+    expect(info.dataCount).not.toBeNull();
   });
 });

@@ -61,7 +61,7 @@ test('TextModuleWriter - global', () => {
 });
 
 test('TextModuleWriter - mutable global', () => {
-  const mod = new ModuleBuilder('test', { generateNameSection: true, disableVerification: true });
+  const mod = new ModuleBuilder('test', { generateNameSection: true });
   mod.defineGlobal(ValueType.Int32, true, 0).withExport('g');
   const text = mod.toString();
   expect(text).toContain('(mut i32)');
@@ -133,7 +133,7 @@ test('TextModuleWriter - block/loop indentation', () => {
 
 describe('TextModuleWriter formatting', () => {
   test('function with no body outputs single line', () => {
-    const mod = new ModuleBuilder('test', { disableVerification: true });
+    const mod = new ModuleBuilder('test');
     mod.defineFunction('empty', null, []);
     const wat = mod.toString();
     expect(wat).toContain('(func $empty');
@@ -202,7 +202,7 @@ describe('TextModuleWriter formatting', () => {
   });
 
   test('WAT global init expression with get_global', () => {
-    const mod = new ModuleBuilder('test', { disableVerification: true });
+    const mod = new ModuleBuilder('test');
     const base = mod.defineGlobal(ValueType.Int32, false, 10);
     const g = mod.defineGlobal(ValueType.Int32, false);
     g.value(base);

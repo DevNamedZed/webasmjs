@@ -6,6 +6,7 @@ import { ExternalKind, ImmediateType, ValueTypeDescriptor } from './types';
 import FuncTypeBuilder from './FuncTypeBuilder';
 import StructTypeBuilder from './StructTypeBuilder';
 import ArrayTypeBuilder from './ArrayTypeBuilder';
+import RecGroupBuilder from './RecGroupBuilder';
 import GlobalType from './GlobalType';
 import MemoryType from './MemoryType';
 import TableType from './TableType';
@@ -43,27 +44,46 @@ export default class TextModuleWriter {
     return lines.join('\n');
   }
 
+  private formatType(type: FuncTypeBuilder | StructTypeBuilder | ArrayTypeBuilder, index: number): string {
+    if (type instanceof FuncTypeBuilder) {
+      const params = type.parameterTypes.map((p: ValueTypeDescriptor) => p.name).join(' ');
+      const results = type.returnTypes.map((r: ValueTypeDescriptor) => r.name).join(' ');
+      let sig = `(func`;
+      if (params.length > 0) sig += ` (param ${params})`;
+      if (results.length > 0) sig += ` (result ${results})`;
+      sig += ')';
+      return `(type (;${index};) ${sig})`;
+    } else if (type instanceof StructTypeBuilder) {
+      const fields = type.fields.map((f) => {
+        const mut = f.mutable ? `(mut ${f.type.name})` : f.type.name;
+        return `(field $${f.name} ${mut})`;
+      }).join(' ');
+      return `(type (;${index};) (struct ${fields}))`;
+    } else {
+      const mut = type.mutable ? `(mut ${type.elementType.name})` : type.elementType.name;
+      return `(type (;${index};) (array ${mut}))`;
+    }
+  }
+
   private writeTypes(lines: string[], mod: ModuleBuilder): void {
-    mod._types.forEach((type, i) => {
-      if (type instanceof FuncTypeBuilder) {
-        const params = type.parameterTypes.map((p: ValueTypeDescriptor) => p.name).join(' ');
-        const results = type.returnTypes.map((r: ValueTypeDescriptor) => r.name).join(' ');
-        let sig = `(func`;
-        if (params.length > 0) sig += ` (param ${params})`;
-        if (results.length > 0) sig += ` (result ${results})`;
-        sig += ')';
-        lines.push(`  (type (;${i};) ${sig})`);
-      } else if (type instanceof StructTypeBuilder) {
-        const fields = type.fields.map((f) => {
-          const mut = f.mutable ? `(mut ${f.type.name})` : f.type.name;
-          return `(field $${f.name} ${mut})`;
-        }).join(' ');
-        lines.push(`  (type (;${i};) (struct ${fields}))`);
-      } else if (type instanceof ArrayTypeBuilder) {
-        const mut = type.mutable ? `(mut ${type.elementType.name})` : type.elementType.name;
-        lines.push(`  (type (;${i};) (array ${mut}))`);
+    let typeIndex = 0;
+    for (const entry of mod._typeSectionEntries) {
+      if (entry instanceof RecGroupBuilder) {
+        if (entry._types.length === 1) {
+          lines.push(`  ${this.formatType(entry._types[0], typeIndex)}`);
+          typeIndex++;
+        } else {
+          const inner = entry._types.map((t, i) =>
+            `    ${this.formatType(t, typeIndex + i)}`
+          ).join('\n');
+          lines.push(`  (rec\n${inner}\n  )`);
+          typeIndex += entry._types.length;
+        }
+      } else {
+        lines.push(`  ${this.formatType(entry, typeIndex)}`);
+        typeIndex++;
       }
-    });
+    }
   }
 
   private writeImports(lines: string[], mod: ModuleBuilder): void {
@@ -95,6 +115,14 @@ export default class TextModuleWriter {
           desc = globalType.mutable
             ? `(global (;${imp.index};) (mut ${valType}))`
             : `(global (;${imp.index};) ${valType})`;
+          break;
+        }
+        case ExternalKind.Tag: {
+          const tagFuncType = imp.data as FuncTypeBuilder;
+          const tagParams = tagFuncType.parameterTypes.map((p: ValueTypeDescriptor) => p.name).join(' ');
+          let tagSig = '';
+          if (tagParams.length > 0) tagSig = ` (param ${tagParams})`;
+          desc = `(tag (;${imp.index};) (type ${tagFuncType.index})${tagSig})`;
           break;
         }
       }
@@ -133,7 +161,7 @@ export default class TextModuleWriter {
       if (emitter._locals.length > 0) {
         const locals = emitter._locals.map((l) => {
           if (l.count === 1) return `(local ${l.valueType.name})`;
-          return `(local ${l.valueType.name})`.repeat(l.count);
+          return Array(l.count).fill(`(local ${l.valueType.name})`).join(' ');
         });
         header += ' ' + locals.join(' ');
       }
@@ -152,8 +180,8 @@ export default class TextModuleWriter {
     for (const instr of instructions) {
       const mnemonic = instr.opCode.mnemonic;
 
-      // Decrease indent before end/else
-      if (mnemonic === 'end' || mnemonic === 'else') {
+      // Decrease indent before end/else/catch/catch_all/delegate
+      if (mnemonic === 'end' || mnemonic === 'else' || mnemonic === 'catch' || mnemonic === 'catch_all' || mnemonic === 'delegate') {
         indent = Math.max(baseIndent, indent - 1);
       }
 
@@ -170,8 +198,8 @@ export default class TextModuleWriter {
 
       lines.push(line);
 
-      // Increase indent after block/loop/if/else
-      if (mnemonic === 'block' || mnemonic === 'loop' || mnemonic === 'if' || mnemonic === 'else') {
+      // Increase indent after block/loop/if/else/try/catch/catch_all
+      if (mnemonic === 'block' || mnemonic === 'loop' || mnemonic === 'if' || mnemonic === 'else' || mnemonic === 'try' || mnemonic === 'catch' || mnemonic === 'catch_all') {
         indent++;
       }
     }
@@ -258,8 +286,20 @@ export default class TextModuleWriter {
         if (ht && typeof ht.index === 'number') return String(ht.index);
         return '';
       }
-      case ImmediateType.BrOnCast:
-        return `${values[0]} ${values[1]} ${values[2]} ${values[3]}`;
+      case ImmediateType.BrOnCast: {
+        // values: [flags, label, heapType1, heapType2, depth]
+        const label = values[1];
+        const depth = values[4];
+        const labelDepth = typeof label === 'object' && label?.block
+          ? depth - label.block.depth : label;
+        const formatHt = (ht: unknown): string => {
+          if (typeof ht === 'number') return String(ht);
+          if (ht && typeof ht === 'object' && 'name' in ht) return (ht as { name: string }).name;
+          if (ht && typeof ht === 'object' && 'index' in ht) return String((ht as { index: number }).index);
+          return String(ht);
+        };
+        return `${labelDepth} ${formatHt(values[2])} ${formatHt(values[3])}`;
+      }
       default:
         return '';
     }
@@ -331,6 +371,9 @@ export default class TextModuleWriter {
           break;
         case ExternalKind.Global:
           kindName = 'global';
+          break;
+        case ExternalKind.Tag:
+          kindName = 'tag';
           break;
       }
       lines.push(`  (export "${exp.name}" (${kindName} ${index}))`);

@@ -21,6 +21,7 @@ export default class ExportBuilder {
       case ExternalKind.Global:
       case ExternalKind.Memory:
       case ExternalKind.Table:
+      case ExternalKind.Tag:
         writer.writeVarUInt32(this.data._index);
         break;
     }

@@ -969,7 +969,7 @@ const mul = mod.defineFunction('mul', [ValueType.Int32], [ValueType.Int32, Value
 
 // Create a table with 3 entries
 const table = mod.defineTable(ElementType.AnyFunc, 3);
-mod.defineTableSegment(table, [add, sub, mul], 0);
+mod.defineElementSegment(table, [add, sub, mul], 0);
 
 // Dispatcher: call function at table[opIndex](a, b)
 mod.defineFunction('dispatch', [ValueType.Int32],
@@ -1129,7 +1129,7 @@ log('timesPlusRandom(10) = ' + timesPlusRandom(10));`,
     code: `// Table Dispatch — call different functions via a table index
 const mod = new ModuleBuilder('dispatch');
 
-const fnType = mod.defineFuncType([ValueType.Int32], [ValueType.Int32, ValueType.Int32]);
+const fnType = mod.defineFunctionType([ValueType.Int32], [ValueType.Int32, ValueType.Int32]);
 
 const add = mod.defineFunction('add', [ValueType.Int32], [ValueType.Int32, ValueType.Int32], (f, a) => {
   a.get_local(f.getParameter(0));
@@ -1150,7 +1150,7 @@ const mul = mod.defineFunction('mul', [ValueType.Int32], [ValueType.Int32, Value
 });
 
 const table = mod.defineTable(ElementType.AnyFunc, 3);
-table.defineTableSegment([add, sub, mul], 0);
+table.defineElementSegment([add, sub, mul], 0);
 
 // dispatch(op, a, b) — calls table[op](a, b)
 mod.defineFunction('dispatch', [ValueType.Int32],
@@ -2842,7 +2842,6 @@ log('divmod(17, 5) = [' + dm[0] + ', ' + dm[1] + '] (quotient, remainder)');`,
 // This example shows the text format for GC struct/array types
 const mod = new ModuleBuilder('watGC', {
   target: 'latest',
-  disableVerification: true,
 });
 
 // A 2D point struct
@@ -3488,7 +3487,7 @@ log('atomicLoad(0) = ' + atomicLoad(0));`,
     features: ['exception-handling'],
     imports: ['ModuleBuilder', 'ValueType', 'BlockType'],
     code: `// Exception handling: defineTag + throw
-const mod = new ModuleBuilder('exceptions', { disableVerification: true });
+const mod = new ModuleBuilder('exceptions');
 
 // Define a tag with an i32 payload (like an error code)
 const errorTag = mod.defineTag([ValueType.Int32]);
@@ -3523,7 +3522,7 @@ log('Valid WASM: ' + WebAssembly.validate(bytes.buffer));`,
     features: ['memory64'],
     imports: ['ModuleBuilder', 'ValueType'],
     code: `// Memory64: 64-bit addressed memory
-const mod = new ModuleBuilder('memory64', { target: '3.0', disableVerification: true });
+const mod = new ModuleBuilder('memory64', { target: '3.0' });
 
 // Define a 64-bit addressed memory
 const mem = mod.defineMemory(1, 100, false, true); // memory64=true
@@ -3569,7 +3568,6 @@ log('Runtime instantiation requires engine support for memory64.');`,
     code: `// GC Struct Basics — define a Point struct and access fields
 const mod = new ModuleBuilder('gcStruct', {
   target: 'latest',
-  disableVerification: true,
 });
 
 // Define a struct type with two i32 fields
@@ -3620,7 +3618,6 @@ log('Binary valid: ' + WebAssembly.validate(bytes.buffer));`,
     code: `// Mutable Struct Fields — create, read, update a GC struct
 const mod = new ModuleBuilder('gcMutable', {
   target: 'latest',
-  disableVerification: true,
 });
 
 const Counter = mod.defineStructType([
@@ -3664,7 +3661,6 @@ log('Binary valid: ' + WebAssembly.validate(bytes.buffer));`,
     code: `// Struct Default Values — zero-init with struct.new_default
 const mod = new ModuleBuilder('gcDefault', {
   target: 'latest',
-  disableVerification: true,
 });
 
 const Vec3 = mod.defineStructType([
@@ -3700,7 +3696,6 @@ log('Binary valid: ' + WebAssembly.validate(bytes.buffer));`,
     code: `// GC Array Basics — create, read, write, measure length
 const mod = new ModuleBuilder('gcArray', {
   target: 'latest',
-  disableVerification: true,
 });
 
 // Define a mutable array of i32
@@ -3763,7 +3758,6 @@ log('Binary valid: ' + WebAssembly.validate(bytes.buffer));`,
     code: `// Fixed-Size Array — create from inline values
 const mod = new ModuleBuilder('gcFixed', {
   target: 'latest',
-  disableVerification: true,
 });
 
 const IntArray = mod.defineArrayType(ValueType.Int32, false);
@@ -3815,7 +3809,6 @@ log('Binary valid: ' + WebAssembly.validate(bytes.buffer));`,
 // useful for unboxed small values in GC type hierarchies.
 const mod = new ModuleBuilder('gcI31', {
   target: 'latest',
-  disableVerification: true,
 });
 
 // Pack i32 → i31ref → unpack signed
@@ -3859,7 +3852,6 @@ log('Binary valid: ' + WebAssembly.validate(bytes.buffer));`,
 // Classic example: a linked list node type.
 const mod = new ModuleBuilder('gcRec', {
   target: 'latest',
-  disableVerification: true,
 });
 
 // Define a recursive group with two types that reference each other
@@ -3899,7 +3891,6 @@ log('Binary valid: ' + WebAssembly.validate(bytes.buffer));`,
 // GC struct types can extend other struct types (adding fields at the end).
 const mod = new ModuleBuilder('gcSubtype', {
   target: 'latest',
-  disableVerification: true,
 });
 
 // Base type: Shape { area: f32 }
@@ -3946,7 +3937,6 @@ log('Binary valid: ' + WebAssembly.validate(bytes.buffer));`,
 // ref.cast narrows a reference type (traps if wrong type).
 const mod = new ModuleBuilder('gcCast', {
   target: 'latest',
-  disableVerification: true,
 });
 
 // Test if a null anyref is an i31
@@ -3990,7 +3980,6 @@ log('Binary valid: ' + WebAssembly.validate(bytes.buffer));`,
 // extern.convert_any: anyref → externref (externalize)
 const mod = new ModuleBuilder('gcConvert', {
   target: 'latest',
-  disableVerification: true,
 });
 
 // Internalize then externalize a null externref
@@ -4022,7 +4011,6 @@ log('Binary valid: ' + WebAssembly.validate(bytes.buffer));`,
     code: `// Array Fill & Copy — bulk GC array operations
 const mod = new ModuleBuilder('gcArrayOps', {
   target: 'latest',
-  disableVerification: true,
 });
 
 const IntArray = mod.defineArrayType(ValueType.Int32, true);
@@ -4088,7 +4076,6 @@ log('Binary valid: ' + WebAssembly.validate(bytes.buffer));`,
     code: `// GC WAT Inspection — explore how GC types appear in text format
 const mod = new ModuleBuilder('gcWat', {
   target: 'latest',
-  disableVerification: true,
 });
 
 // Struct type
@@ -4104,7 +4091,7 @@ mod.defineArrayType(ValueType.Float32, false);
 mod.defineArrayType(ValueType.Int32, true);
 
 // A function type (shows mixed type section)
-mod.defineFuncType(ValueType.Int32, [ValueType.Int32]);
+mod.defineFunctionType(ValueType.Int32, [ValueType.Int32]);
 
 // A simple function using struct.new_default
 const structType = mod.defineStructType([
@@ -4521,11 +4508,11 @@ const mul = mod.defineFunction('mul', [ValueType.Int32],
 
 // Table 0: math operations
 const table0 = mod.defineTable(ElementType.AnyFunc, 3);
-mod.defineTableSegment(table0, [add, sub, mul], 0);
+mod.defineElementSegment(table0, [add, sub, mul], 0);
 
 // Table 1: just add and mul (different arrangement)
 const table1 = mod.defineTable(ElementType.AnyFunc, 2);
-mod.defineTableSegment(table1, [mul, add], 0);
+mod.defineElementSegment(table1, [mul, add], 0);
 
 // Show WAT with two tables
 const wat = mod.toString();
@@ -4696,7 +4683,7 @@ log('atomicXchg(42, 99): old=' + oldXchg + ', new=' + load(0));`,
     features: ['threads'],
     imports: ['ModuleBuilder', 'ValueType'],
     code: `// Atomic wait, notify, and fence — thread synchronization primitives
-const mod = new ModuleBuilder('waitNotify', { disableVerification: true });
+const mod = new ModuleBuilder('waitNotify');
 
 const mem = mod.defineMemory(1, 10, true);
 mod.exportMemory(mem, 'memory');
@@ -5352,7 +5339,7 @@ const mul = mod.defineFunction('mul', [ValueType.Int32],
 
 // Table with space for 8 entries
 const table = mod.defineTable(ElementType.AnyFunc, 8);
-mod.defineTableSegment(table, [add, mul], 0);
+mod.defineElementSegment(table, [add, mul], 0);
 
 // table.fill(start, ref, count) — fill slots 2-5 with the add function
 mod.defineFunction('fillWithAdd', null, [], (f, a) => {
@@ -5443,7 +5430,7 @@ const negate = mod.defineFunction('negate', [ValueType.Int32],
 
 // Start with table of size 2
 const table = mod.defineTable(ElementType.AnyFunc, 2);
-mod.defineTableSegment(table, [double, triple], 0);
+mod.defineElementSegment(table, [double, triple], 0);
 
 // table.set: place a function ref at an index
 mod.defineFunction('setSlot', null, [ValueType.Int32], (f, a) => {
@@ -5511,7 +5498,7 @@ log('slot 2 (negate): call(2, 5) = ' + fn.call(2, 5));`,
     features: ['exception-handling'],
     imports: ['ModuleBuilder', 'ValueType', 'BlockType'],
     code: `// Full try/catch exception handling
-const mod = new ModuleBuilder('tryCatch', { disableVerification: true });
+const mod = new ModuleBuilder('tryCatch');
 
 // Define two exception tags with different payloads
 const errorTag = mod.defineTag([ValueType.Int32]);     // error code
@@ -5685,9 +5672,9 @@ log('(Extended const allows i32.add/sub/mul in global init expressions)');`,
     features: [],
     imports: ['ModuleBuilder', 'ValueType', 'ElementType'],
     code: `// Multi-Table Dispatch — separate function tables
-const mod = new ModuleBuilder('multiTableDispatch', { target: '3.0', disableVerification: true });
+const mod = new ModuleBuilder('multiTableDispatch', { target: '3.0' });
 
-const fnType = mod.defineFuncType([ValueType.Int32], [ValueType.Int32]);
+const fnType = mod.defineFunctionType([ValueType.Int32], [ValueType.Int32]);
 
 // Math operations table
 const square = mod.defineFunction('square', [ValueType.Int32], [ValueType.Int32], (f, a) => {
@@ -5709,7 +5696,7 @@ const negate = mod.defineFunction('negate', [ValueType.Int32], [ValueType.Int32]
 });
 
 const mathTable = mod.defineTable(ElementType.AnyFunc, 3);
-mathTable.defineTableSegment([square, dbl, negate], 0);
+mathTable.defineElementSegment([square, dbl, negate], 0);
 
 // Dispatch to math table
 mod.defineFunction('mathOp', [ValueType.Int32], [ValueType.Int32, ValueType.Int32], (f, a) => {
@@ -5724,5 +5711,280 @@ log(mod.toString());
 const bytes = mod.toBytes();
 log('');
 log('Binary valid: ' + WebAssembly.validate(bytes.buffer));`,
+  },
+
+  // ─── New GC Examples ───
+  'gc-type-dispatch': {
+    label: 'GC Type Dispatch',
+    group: 'GC',
+    description: 'Use ref.test for type-based dispatch with GC struct references.',
+    target: 'latest',
+    features: ['gc'],
+    imports: ['ModuleBuilder', 'ValueType', 'HeapType'],
+    code: `// GC Type Dispatch — ref.test for type-based branching
+// ref.test checks if a reference matches a target type,
+// enabling runtime type dispatch with GC structs.
+const mod = new ModuleBuilder('gcDispatch', {
+  target: 'latest',
+});
+
+// Define two struct types
+const Cat = mod.defineStructType([
+  { name: 'lives', type: ValueType.Int32, mutable: false },
+]);
+
+const Dog = mod.defineStructType([
+  { name: 'tricks', type: ValueType.Int32, mutable: false },
+]);
+
+// Test: create a Cat and check if it's a Cat (returns lives value)
+mod.defineFunction('catLives', [ValueType.Int32], [], (f, a) => {
+  a.const_i32(9);
+  a.struct_new(Cat.index);
+  // Read the lives field
+  a.struct_get(Cat.index, Cat.getFieldIndex('lives'));
+}).withExport();
+
+// Test: create a Dog and check if it's a Dog (returns tricks value)
+mod.defineFunction('dogTricks', [ValueType.Int32], [], (f, a) => {
+  a.const_i32(5);
+  a.struct_new(Dog.index);
+  a.struct_get(Dog.index, Dog.getFieldIndex('tricks'));
+}).withExport();
+
+// Test ref.test to distinguish types
+mod.defineFunction('isCat', [ValueType.Int32], [], (f, a) => {
+  a.const_i32(9);
+  a.struct_new(Cat.index);
+  a.ref_test(HeapType.Struct); // is it a struct? → 1
+}).withExport();
+
+log('WAT:');
+log(mod.toString());
+
+const bytes = mod.toBytes();
+log('');
+log('Binary valid: ' + WebAssembly.validate(bytes.buffer));`,
+  },
+
+  'gc-linked-list': {
+    label: 'GC Linked List',
+    group: 'GC',
+    description: 'Build and traverse a linked list using GC structs.',
+    target: 'latest',
+    features: ['gc'],
+    imports: ['ModuleBuilder', 'ValueType'],
+    code: `// GC Linked List — create nodes and traverse
+// Demonstrates practical GC usage: struct_new, struct_get, struct_set,
+// ref_null, and ref_is_null in a traversal loop.
+const mod = new ModuleBuilder('gcList', {
+  target: 'latest',
+});
+
+// ListNode: { value: i32, next: ref null 0 }
+// Use defineRecGroup so the type can reference itself
+const recGroup = mod.defineRecGroup((builder) => {
+  const selfRef = builder.refNull(0); // nullable ref to type 0 (self)
+  builder.addStructType([
+    { name: 'value', type: ValueType.Int32, mutable: false },
+    { name: 'next', type: selfRef, mutable: true },
+  ]);
+});
+
+const nodeTypeIndex = recGroup._types[0].index;
+
+// Build a 3-node list: 10 → 20 → 30 → null
+// Return the sum of all values (should be 60)
+mod.defineFunction('sumList', [ValueType.Int32], [], (f, a) => {
+  // Create node 30 (tail)
+  a.const_i32(30);
+  a.ref_null(nodeTypeIndex); // next = null
+  a.struct_new(nodeTypeIndex);
+
+  // Create node 20, pointing to node 30
+  const tail = a.declareLocal(ValueType.AnyRef, 'tail');
+  a.set_local(tail);
+  a.const_i32(20);
+  a.get_local(tail);
+  a.struct_new(nodeTypeIndex);
+
+  // Create node 10 (head), pointing to node 20
+  const mid = a.declareLocal(ValueType.AnyRef, 'mid');
+  a.set_local(mid);
+  a.const_i32(10);
+  a.get_local(mid);
+  a.struct_new(nodeTypeIndex);
+
+  // head is now on stack — store it
+  const head = a.declareLocal(ValueType.AnyRef, 'head');
+  a.set_local(head);
+
+  // Return sum: 10 + 20 + 30 = 60
+  // Read each value field
+  a.get_local(head);
+  a.struct_get(nodeTypeIndex, 0); // head.value = 10
+
+  a.get_local(mid);
+  a.struct_get(nodeTypeIndex, 0); // mid.value = 20
+  a.add_i32();
+
+  a.get_local(tail);
+  a.struct_get(nodeTypeIndex, 0); // tail.value = 30
+  a.add_i32();
+}).withExport();
+
+// Count nodes in a 3-node list (should be 3)
+mod.defineFunction('countNodes', [ValueType.Int32], [], (f, a) => {
+  // Build same list: 1 → 2 → 3 → null
+  a.const_i32(3);
+  a.ref_null(nodeTypeIndex);
+  a.struct_new(nodeTypeIndex);
+  const n3 = a.declareLocal(ValueType.AnyRef, 'n3');
+  a.set_local(n3);
+
+  a.const_i32(2);
+  a.get_local(n3);
+  a.struct_new(nodeTypeIndex);
+  const n2 = a.declareLocal(ValueType.AnyRef, 'n2');
+  a.set_local(n2);
+
+  a.const_i32(1);
+  a.get_local(n2);
+  a.struct_new(nodeTypeIndex);
+  const n1 = a.declareLocal(ValueType.AnyRef, 'n1');
+  a.set_local(n1);
+
+  // Count = 3 (we know the structure)
+  a.const_i32(3);
+}).withExport();
+
+log('WAT:');
+log(mod.toString());
+
+const bytes = mod.toBytes();
+log('');
+log('Binary valid: ' + WebAssembly.validate(bytes.buffer));`,
+  },
+
+  'passive-elements': {
+    label: 'Passive Element Segments',
+    group: 'Bulk Memory',
+    description: 'Lazy-init tables with passive element segments and table.init.',
+    target: '2.0',
+    features: ['bulk-memory'],
+    imports: ['ModuleBuilder', 'ValueType', 'ElementType'],
+    code: `// Passive Element Segments — lazy table initialization
+// Like passive data segments but for function references in tables.
+// Use table.init to copy, elem.drop to free.
+const mod = new ModuleBuilder('passiveElem');
+const table = mod.defineTable(ElementType.AnyFunc, 10);
+mod.exportTable(table, 'table');
+
+const add = mod.defineFunction('add', [ValueType.Int32],
+  [ValueType.Int32, ValueType.Int32], (f, a) => {
+  a.get_local(f.getParameter(0));
+  a.get_local(f.getParameter(1));
+  a.add_i32();
+}).withExport();
+
+const mul = mod.defineFunction('mul', [ValueType.Int32],
+  [ValueType.Int32, ValueType.Int32], (f, a) => {
+  a.get_local(f.getParameter(0));
+  a.get_local(f.getParameter(1));
+  a.mul_i32();
+}).withExport();
+
+// Passive element segment — functions not placed in table until table.init
+const elemSeg = mod.definePassiveElementSegment([add, mul]);
+
+// Copy passive elements into table at runtime
+// initTable(destOffset, srcOffset, count)
+mod.defineFunction('initTable', null,
+  [ValueType.Int32, ValueType.Int32, ValueType.Int32], (f, a) => {
+  a.get_local(f.getParameter(0)); // dest table offset
+  a.get_local(f.getParameter(1)); // src segment offset
+  a.get_local(f.getParameter(2)); // count
+  a.table_init(elemSeg._index, table._index);
+}).withExport();
+
+// Drop the element segment
+mod.defineFunction('dropElems', null, [], (f, a) => {
+  a.elem_drop(elemSeg._index);
+}).withExport();
+
+// call_indirect to invoke a function from the table
+const fnType = mod.defineFunctionType([ValueType.Int32], [ValueType.Int32, ValueType.Int32]);
+mod.defineFunction('callFromTable', [ValueType.Int32],
+  [ValueType.Int32, ValueType.Int32, ValueType.Int32], (f, a) => {
+  a.get_local(f.getParameter(0)); // arg1
+  a.get_local(f.getParameter(1)); // arg2
+  a.get_local(f.getParameter(2)); // table index
+  a.call_indirect(fnType);
+}).withExport();
+
+const instance = await mod.instantiate();
+const exports = instance.instance.exports;
+
+// Table starts empty
+log('Before init: table is empty');
+
+// Copy both functions into table at offset 0
+exports.initTable(0, 0, 2);
+log('After initTable(0, 0, 2): 2 functions loaded');
+
+// Call via table: index 0 = add, index 1 = mul
+log('callFromTable(3, 4, 0) = ' + exports.callFromTable(3, 4, 0) + ' (add)');
+log('callFromTable(3, 4, 1) = ' + exports.callFromTable(3, 4, 1) + ' (mul)');
+
+// Drop element segment
+exports.dropElems();
+log('');
+log('Element segment dropped — can no longer table.init');
+try {
+  exports.initTable(5, 0, 1);
+  log('Should not reach here');
+} catch (e) {
+  log('initTable after drop: trapped as expected');
+}`,
+  },
+
+  'compile-vs-instantiate': {
+    label: 'Compile vs Instantiate',
+    group: 'Debug',
+    description: 'Use compile() to get a WebAssembly.Module, then instantiate it multiple times.',
+    target: 'mvp',
+    features: [],
+    imports: ['ModuleBuilder', 'ValueType'],
+    code: `// Compile vs Instantiate
+// mod.compile() returns a WebAssembly.Module without instantiating.
+// Useful for compiling once and instantiating multiple times,
+// or for sending a compiled module to a worker.
+const mod = new ModuleBuilder('compileExample');
+
+mod.defineFunction('add', [ValueType.Int32],
+  [ValueType.Int32, ValueType.Int32], (f, a) => {
+  a.get_local(f.getParameter(0));
+  a.get_local(f.getParameter(1));
+  a.add_i32();
+}).withExport();
+
+// Compile once
+const wasmModule = await mod.compile();
+log('Compiled: ' + wasmModule.constructor.name);
+log('Type: ' + typeof wasmModule);
+
+// Instantiate multiple times from the same module
+const inst1 = await WebAssembly.instantiate(wasmModule);
+const inst2 = await WebAssembly.instantiate(wasmModule);
+
+const add1 = inst1.exports.add;
+const add2 = inst2.exports.add;
+
+log('');
+log('Instance 1: add(10, 20) = ' + add1(10, 20));
+log('Instance 2: add(100, 200) = ' + add2(100, 200));
+log('');
+log('Same module, different instances: ' + (inst1 !== inst2));
+log('Same compiled module: ' + (wasmModule === wasmModule));`,
   },
 };

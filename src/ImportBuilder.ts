@@ -26,6 +26,26 @@ export default class ImportBuilder {
     this.index = index;
   }
 
+  isFunctionImport(): this is ImportBuilder & { data: FuncTypeBuilder } {
+    return this.externalKind === ExternalKind.Function;
+  }
+
+  isTagImport(): this is ImportBuilder & { data: FuncTypeBuilder } {
+    return this.externalKind === ExternalKind.Tag;
+  }
+
+  isGlobalImport(): this is ImportBuilder & { data: GlobalType } {
+    return this.externalKind === ExternalKind.Global;
+  }
+
+  isMemoryImport(): this is ImportBuilder & { data: MemoryType } {
+    return this.externalKind === ExternalKind.Memory;
+  }
+
+  isTableImport(): this is ImportBuilder & { data: TableType } {
+    return this.externalKind === ExternalKind.Table;
+  }
+
   write(writer: BinaryWriter): void {
     writer.writeVarUInt32(this.moduleName.length);
     writer.writeString(this.moduleName);
@@ -34,6 +54,12 @@ export default class ImportBuilder {
     writer.writeUInt8(this.externalKind.value);
     switch (this.externalKind) {
       case ExternalKind.Function:
+        writer.writeVarUInt32((this.data as FuncTypeBuilder).index);
+        break;
+
+      case ExternalKind.Tag:
+        // Tag import: attribute (0 = exception) + type index
+        writer.writeVarUInt32(0); // attribute
         writer.writeVarUInt32((this.data as FuncTypeBuilder).index);
         break;
 

@@ -21,7 +21,8 @@ export default class ControlFlowVerifier {
     operandStack: OperandStack,
     blockType: BlockTypeDescriptor,
     label: LabelBuilder | null = null,
-    isLoop: boolean = false
+    isLoop: boolean = false,
+    isTry: boolean = false
   ): LabelBuilder {
     const current = this.peek();
     if (label) {
@@ -62,7 +63,8 @@ export default class ControlFlowVerifier {
           current.block!.childrenCount++,
           current.block!.depth + 1,
           0,
-          isLoop
+          isLoop,
+          isTry
         );
 
     label.resolve(block);

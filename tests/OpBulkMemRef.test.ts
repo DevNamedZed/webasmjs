@@ -1,6 +1,6 @@
 import { ModuleBuilder, ValueType, ElementType } from '../src/index';
 
-const latestOpts = { generateNameSection: true, disableVerification: true, target: 'latest' as const };
+const latestOpts = { generateNameSection: true, target: 'latest' as const };
 
 describe('bulk memory operations', () => {
   let exports: any;

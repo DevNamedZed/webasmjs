@@ -1,5 +1,8 @@
 # Examples
 
+> For all 103 interactive examples, see the [playground](https://devnamedzed.github.io/webasmjs/).
+> This page covers the most important patterns in detail.
+
 ## Factorial
 
 Iterative factorial using a loop with block/break pattern:
@@ -180,7 +183,7 @@ const mul = mod.defineFunction('mul', [ValueType.Int32],
 
 // Create table and populate it
 const table = mod.defineTable(ElementType.AnyFunc, 3);
-mod.defineTableSegment(table, [add, sub, mul], 0);
+mod.defineElementSegment(table, [add, sub, mul], 0);
 
 // Dispatcher: calls table[opIndex](a, b)
 mod.defineFunction('dispatch', [ValueType.Int32],
@@ -830,7 +833,7 @@ Define exception tags and throw exceptions:
 ```typescript
 import { ModuleBuilder, ValueType, BlockType } from 'webasmjs';
 
-const mod = new ModuleBuilder('exceptions', { disableVerification: true });
+const mod = new ModuleBuilder('exceptions');
 
 // Define a tag with an i32 payload (like an error code)
 const errorTag = mod.defineTag([ValueType.Int32]);
@@ -886,38 +889,6 @@ console.log(`Module compiled: ${bytes.length} bytes`);
 
 const wat = mod.toString();
 console.log(wat); // shows (memory i64 1 100)
-```
-
-## Passive Data Segments
-
-Use passive data segments with `memory.init` for lazy initialization:
-
-```typescript
-import { ModuleBuilder, ValueType } from 'webasmjs';
-
-const mod = new ModuleBuilder('passiveData');
-const mem = mod.defineMemory(1);
-mod.exportMemory(mem, 'memory');
-
-// Define a passive data segment (not placed in memory automatically)
-const greeting = new TextEncoder().encode('Hello, WebAssembly!');
-const dataSegment = mod.defineData(new Uint8Array([...greeting]));
-
-// Copy passive data into memory at runtime using memory.init
-mod.defineFunction('init', null, [ValueType.Int32], (f, a) => {
-  a.get_local(f.getParameter(0)); // destination offset
-  a.const_i32(0);                  // source offset in data segment
-  a.const_i32(greeting.length);    // length
-  a.memory_init(dataSegment._index, 0);
-}).withExport();
-
-const instance = await mod.instantiate();
-const { init, memory } = instance.instance.exports as any;
-
-init(0); // copy data to offset 0
-const view = new Uint8Array(memory.buffer);
-const text = new TextDecoder().decode(view.slice(0, greeting.length));
-console.log(text); // Hello, WebAssembly!
 ```
 
 ## Extended Constants
@@ -1056,10 +1027,10 @@ const mul = mod.defineFunction('mul', [ValueType.Int32],
 
 // Two tables with different function arrangements
 const table0 = mod.defineTable(ElementType.AnyFunc, 3);
-mod.defineTableSegment(table0, [add, sub, mul], 0);
+mod.defineElementSegment(table0, [add, sub, mul], 0);
 
 const table1 = mod.defineTable(ElementType.AnyFunc, 2);
-mod.defineTableSegment(table1, [mul, add], 0);
+mod.defineElementSegment(table1, [mul, add], 0);
 
 const bytes = mod.toBytes();
 console.log(`Module compiled: ${bytes.length} bytes`);
@@ -1177,7 +1148,7 @@ Thread synchronization primitives — wait/notify for blocking coordination, fen
 ```typescript
 import { ModuleBuilder, ValueType } from 'webasmjs';
 
-const mod = new ModuleBuilder('waitNotify', { disableVerification: true });
+const mod = new ModuleBuilder('waitNotify');
 const mem = mod.defineMemory(1, 10, true);
 mod.exportMemory(mem, 'memory');
 
@@ -1465,7 +1436,7 @@ const mul = mod.defineFunction('mul', [ValueType.Int32],
 }).withExport();
 
 const table = mod.defineTable(ElementType.AnyFunc, 8);
-mod.defineTableSegment(table, [add, mul], 0);
+mod.defineElementSegment(table, [add, mul], 0);
 
 // table.fill(start, ref, count)
 mod.defineFunction('fillWithAdd', null, [], (f, a) => {
@@ -1501,7 +1472,7 @@ const double = mod.defineFunction('double', [ValueType.Int32],
 }).withExport();
 
 const table = mod.defineTable(ElementType.AnyFunc, 2);
-mod.defineTableSegment(table, [double], 0);
+mod.defineElementSegment(table, [double], 0);
 
 // table.set: place a function ref at an index
 mod.defineFunction('setSlot', null, [ValueType.Int32], (f, a) => {
@@ -1539,7 +1510,7 @@ Full try/catch exception handling with multiple tags:
 ```typescript
 import { ModuleBuilder, ValueType, BlockType } from 'webasmjs';
 
-const mod = new ModuleBuilder('tryCatch', { disableVerification: true });
+const mod = new ModuleBuilder('tryCatch');
 
 // Define two exception tags with different payloads
 const errorTag = mod.defineTag([ValueType.Int32]);     // error code
@@ -1633,4 +1604,429 @@ console.log('abs(-42.5) =', abs(-42.5));
 console.log('sqrt(9.0) =', sqrt(9.0));
 console.log('f32: 0.1 + 0.2 =', addF32(0.1, 0.2));
 console.log('f64: 0.1 + 0.2 =', addF64(0.1, 0.2));
+```
+
+## GC Struct Types
+
+Define GC struct types with mutable fields, create instances, and read/write fields:
+
+```typescript
+import { ModuleBuilder, ValueType } from 'webasmjs';
+
+const mod = new ModuleBuilder('gcStruct', {
+  target: 'latest',
+});
+
+// Define a struct type with two mutable i32 fields
+const Point = mod.defineStructType([
+  { name: 'x', type: ValueType.Int32, mutable: true },
+  { name: 'y', type: ValueType.Int32, mutable: true },
+]);
+
+// Create a Point and read the x field
+mod.defineFunction('getX', [ValueType.Int32], [], (f, a) => {
+  a.const_i32(10); // x = 10
+  a.const_i32(20); // y = 20
+  a.struct_new(Point.index);
+  a.struct_get(Point.index, Point.getFieldIndex('x'));
+}).withExport();
+
+// Create a Point and read the y field
+mod.defineFunction('getY', [ValueType.Int32], [], (f, a) => {
+  a.const_i32(10);
+  a.const_i32(20);
+  a.struct_new(Point.index);
+  a.struct_get(Point.index, Point.getFieldIndex('y'));
+}).withExport();
+
+// Create a counter, set it, and read it back
+const Counter = mod.defineStructType([
+  { name: 'count', type: ValueType.Int32, mutable: true },
+]);
+
+mod.defineFunction('setAndGet', [ValueType.Int32], [], (f, a) => {
+  a.const_i32(0);
+  a.struct_new(Counter.index);
+  const ref = a.declareLocal(ValueType.AnyRef, 'ref');
+  a.set_local(ref);
+
+  // Set count = 42
+  a.get_local(ref);
+  a.const_i32(42);
+  a.struct_set(Counter.index, Counter.getFieldIndex('count'));
+
+  // Read count back
+  a.get_local(ref);
+  a.struct_get(Counter.index, Counter.getFieldIndex('count'));
+}).withExport();
+
+const bytes = mod.toBytes();
+console.log(`Valid: ${WebAssembly.validate(bytes.buffer)}`);
+```
+
+## GC Struct Default Values
+
+Zero-initialize a struct with `struct.new_default`:
+
+```typescript
+import { ModuleBuilder, ValueType } from 'webasmjs';
+
+const mod = new ModuleBuilder('gcDefault', {
+  target: 'latest',
+});
+
+const Vec3 = mod.defineStructType([
+  { name: 'x', type: ValueType.Float32, mutable: true },
+  { name: 'y', type: ValueType.Float32, mutable: true },
+  { name: 'z', type: ValueType.Float32, mutable: true },
+]);
+
+// struct.new_default creates a struct with all fields zeroed
+mod.defineFunction('defaultX', [ValueType.Float32], [], (f, a) => {
+  a.struct_new_default(Vec3.index);
+  a.struct_get(Vec3.index, Vec3.getFieldIndex('x')); // returns 0.0
+}).withExport();
+
+const bytes = mod.toBytes();
+console.log(`Valid: ${WebAssembly.validate(bytes.buffer)}`);
+```
+
+## GC Array Types
+
+Define GC array types — create, read, write, and get length:
+
+```typescript
+import { ModuleBuilder, ValueType } from 'webasmjs';
+
+const mod = new ModuleBuilder('gcArray', {
+  target: 'latest',
+});
+
+// Define a mutable array of i32
+const IntArray = mod.defineArrayType(ValueType.Int32, true);
+
+// Create an array of 5 elements, all initialized to 0
+mod.defineFunction('createArray', null, [], (f, a) => {
+  a.const_i32(0);  // default value
+  a.const_i32(5);  // length
+  a.array_new(IntArray.index);
+  a.drop();
+}).withExport();
+
+// Get array length
+mod.defineFunction('getLen', [ValueType.Int32], [], (f, a) => {
+  a.const_i32(0);
+  a.const_i32(10);
+  a.array_new(IntArray.index);
+  a.array_len();
+}).withExport();
+
+// Set and get an element
+mod.defineFunction('setAndGet', [ValueType.Int32], [], (f, a) => {
+  // Create array of length 3
+  a.const_i32(0);
+  a.const_i32(3);
+  a.array_new(IntArray.index);
+  const arr = a.declareLocal(ValueType.AnyRef, 'arr');
+  a.set_local(arr);
+
+  // Set index 1 to 99
+  a.get_local(arr);
+  a.const_i32(1);  // index
+  a.const_i32(99); // value
+  a.array_set(IntArray.index);
+
+  // Get index 1
+  a.get_local(arr);
+  a.const_i32(1);
+  a.array_get(IntArray.index);
+}).withExport();
+
+const bytes = mod.toBytes();
+console.log(`Valid: ${WebAssembly.validate(bytes.buffer)}`);
+```
+
+## GC Fixed-Size Arrays
+
+Create arrays from inline values with `array.new_fixed`:
+
+```typescript
+import { ModuleBuilder, ValueType } from 'webasmjs';
+
+const mod = new ModuleBuilder('gcFixed', {
+  target: 'latest',
+});
+
+const IntArray = mod.defineArrayType(ValueType.Int32, false);
+
+// Create a fixed array [10, 20, 30] and sum it
+mod.defineFunction('sumFixed', [ValueType.Int32], [], (f, a) => {
+  // Push values, then array.new_fixed(typeIndex, count)
+  a.const_i32(10);
+  a.const_i32(20);
+  a.const_i32(30);
+  a.array_new_fixed(IntArray.index, 3);
+
+  const arr = a.declareLocal(ValueType.AnyRef, 'arr');
+  a.set_local(arr);
+
+  // Sum: arr[0] + arr[1] + arr[2]
+  a.get_local(arr);
+  a.const_i32(0);
+  a.array_get(IntArray.index);
+
+  a.get_local(arr);
+  a.const_i32(1);
+  a.array_get(IntArray.index);
+  a.add_i32();
+
+  a.get_local(arr);
+  a.const_i32(2);
+  a.array_get(IntArray.index);
+  a.add_i32();
+}).withExport();
+
+const bytes = mod.toBytes();
+console.log(`Valid: ${WebAssembly.validate(bytes.buffer)}`);
+```
+
+## GC i31 References
+
+Pack/unpack small integers as `i31ref` — useful for unboxed values in GC type hierarchies:
+
+```typescript
+import { ModuleBuilder, ValueType } from 'webasmjs';
+
+const mod = new ModuleBuilder('gcI31', {
+  target: 'latest',
+});
+
+// Pack i32 → i31ref → unpack signed
+mod.defineFunction('roundtrip_s', [ValueType.Int32], [], (f, a) => {
+  a.const_i32(42);
+  a.ref_i31();      // box: i32 → i31ref
+  a.i31_get_s();    // unbox signed: i31ref → i32
+}).withExport();
+
+// Pack i32 → i31ref → unpack unsigned
+mod.defineFunction('roundtrip_u', [ValueType.Int32], [], (f, a) => {
+  a.const_i32(-1);   // negative value
+  a.ref_i31();
+  a.i31_get_u();     // unbox unsigned
+}).withExport();
+
+// Negative number roundtrip (signed)
+mod.defineFunction('negative_s', [ValueType.Int32], [], (f, a) => {
+  a.const_i32(-100);
+  a.ref_i31();
+  a.i31_get_s();    // returns -100
+}).withExport();
+
+const bytes = mod.toBytes();
+console.log(`Valid: ${WebAssembly.validate(bytes.buffer)}`);
+```
+
+## GC Recursive Types
+
+Define mutually-recursive types using `defineRecGroup` — a rec group allows types to reference each other via forward references:
+
+```typescript
+import { ModuleBuilder, ValueType } from 'webasmjs';
+
+const mod = new ModuleBuilder('gcRec', {
+  target: 'latest',
+});
+
+// Define a recursive group
+const recGroup = mod.defineRecGroup((builder) => {
+  // Type 0: ListNode { value: i32, next: ref null ListNode }
+  const listNodeRef = builder.refNull(0); // forward ref to type 0 (self)
+  builder.addStructType([
+    { name: 'value', type: ValueType.Int32, mutable: false },
+    { name: 'next', type: listNodeRef, mutable: true },
+  ]);
+
+  // Type 1: array of ListNode refs
+  builder.addArrayType(builder.refNull(0), true);
+});
+
+console.log('Recursive group with', recGroup._types.length, 'types');
+console.log('WAT:', mod.toString());
+
+const bytes = mod.toBytes();
+console.log(`Valid: ${WebAssembly.validate(bytes.buffer)}`);
+```
+
+## GC Struct Subtyping
+
+Extend a base struct type with `superTypes` to create a type hierarchy:
+
+```typescript
+import { ModuleBuilder, ValueType } from 'webasmjs';
+
+const mod = new ModuleBuilder('gcSubtype', {
+  target: 'latest',
+});
+
+// Base type: Shape { area: f32 }
+const Shape = mod.defineStructType([
+  { name: 'area', type: ValueType.Float32, mutable: false },
+]);
+
+// Subtype: Circle extends Shape, adds radius
+const Circle = mod.defineStructType([
+  { name: 'area', type: ValueType.Float32, mutable: false },
+  { name: 'radius', type: ValueType.Float32, mutable: false },
+], { superTypes: [Shape], final: false });
+
+// Final subtype: FilledCircle extends Circle, adds color
+const FilledCircle = mod.defineStructType([
+  { name: 'area', type: ValueType.Float32, mutable: false },
+  { name: 'radius', type: ValueType.Float32, mutable: false },
+  { name: 'color', type: ValueType.Int32, mutable: false },
+], { superTypes: [Circle], final: true });
+
+console.log('Shape index:', Shape.index);
+console.log('Circle index:', Circle.index);
+console.log('FilledCircle index:', FilledCircle.index);
+
+const bytes = mod.toBytes();
+console.log(`Valid: ${WebAssembly.validate(bytes.buffer)}`);
+```
+
+## GC Runtime Type Checks
+
+Use `ref.test` and `ref.cast` to check and narrow reference types at runtime:
+
+```typescript
+import { ModuleBuilder, ValueType, HeapType } from 'webasmjs';
+
+const mod = new ModuleBuilder('gcCast', {
+  target: 'latest',
+});
+
+// Test if a null anyref is an i31 (returns 0)
+mod.defineFunction('testNull', [ValueType.Int32], [], (f, a) => {
+  a.ref_null(0x6e);          // null anyref
+  a.ref_test(HeapType.I31);  // is it an i31? → 0
+}).withExport();
+
+// Test if an i31ref is an i31 (returns 1)
+mod.defineFunction('testI31', [ValueType.Int32], [], (f, a) => {
+  a.const_i32(42);
+  a.ref_i31();               // create i31ref
+  a.ref_test(HeapType.I31);  // is it an i31? → 1
+}).withExport();
+
+// Cast: narrow anyref to i31ref (traps if wrong type)
+mod.defineFunction('castI31', null, [], (f, a) => {
+  a.const_i32(7);
+  a.ref_i31();
+  a.ref_cast(HeapType.I31);  // succeeds
+  a.drop();
+}).withExport();
+
+const bytes = mod.toBytes();
+console.log(`Valid: ${WebAssembly.validate(bytes.buffer)}`);
+```
+
+## Multi-Module with PackageBuilder
+
+Use `PackageBuilder` to link multiple WebAssembly modules with imports:
+
+```typescript
+import { PackageBuilder, ValueType } from 'webasmjs';
+
+const pkg = new PackageBuilder();
+
+// Module "math": provides utility functions
+const mathMod = pkg.defineModule('math');
+mathMod.defineFunction('double', [ValueType.Int32], [ValueType.Int32], (f, a) => {
+  a.get_local(f.getParameter(0));
+  a.const_i32(2);
+  a.mul_i32();
+}).withExport();
+
+mathMod.defineFunction('square', [ValueType.Int32], [ValueType.Int32], (f, a) => {
+  a.get_local(f.getParameter(0));
+  a.get_local(f.getParameter(0));
+  a.mul_i32();
+}).withExport();
+
+// Module "main": imports from "math" and composes
+const mainMod = pkg.defineModule('main');
+const doubleFn = mainMod.importFunction('math', 'double', [ValueType.Int32], [ValueType.Int32]);
+const squareFn = mainMod.importFunction('math', 'square', [ValueType.Int32], [ValueType.Int32]);
+
+// quadruple(x) = double(double(x))
+mainMod.defineFunction('quadruple', [ValueType.Int32], [ValueType.Int32], (f, a) => {
+  a.get_local(f.getParameter(0));
+  a.call(doubleFn);
+  a.call(doubleFn);
+}).withExport();
+
+// doubleSquare(x) = double(square(x)) = 2 * x^2
+mainMod.defineFunction('doubleSquare', [ValueType.Int32], [ValueType.Int32], (f, a) => {
+  a.get_local(f.getParameter(0));
+  a.call(squareFn);
+  a.call(doubleFn);
+}).withExport();
+
+pkg.addDependency('main', 'math');
+const result = await pkg.instantiate();
+const { quadruple, doubleSquare } = result.main.exports as any;
+
+console.log('quadruple(3) =', quadruple(3));       // 12
+console.log('doubleSquare(5) =', doubleSquare(5));  // 50
+```
+
+## Debug Name Section
+
+Attach debug names to functions, parameters, locals, and globals — then inspect them with `BinaryReader`:
+
+```typescript
+import { ModuleBuilder, ValueType, BinaryReader } from 'webasmjs';
+
+const mod = new ModuleBuilder('debugExample');
+
+const g = mod.defineGlobal(ValueType.Int32, true, 0);
+g.withName('counter');
+
+mod.defineFunction('add', [ValueType.Int32],
+  [ValueType.Int32, ValueType.Int32], (f, a) => {
+  f.getParameter(0).withName('x');
+  f.getParameter(1).withName('y');
+  a.get_local(f.getParameter(0));
+  a.get_local(f.getParameter(1));
+  a.add_i32();
+}).withExport();
+
+mod.defineFunction('addThree', [ValueType.Int32],
+  [ValueType.Int32, ValueType.Int32, ValueType.Int32], (f, a) => {
+  f.getParameter(0).withName('a');
+  f.getParameter(1).withName('b');
+  f.getParameter(2).withName('c');
+  const temp = a.declareLocal(ValueType.Int32, 'temp');
+  a.get_local(f.getParameter(0));
+  a.get_local(f.getParameter(1));
+  a.add_i32();
+  a.get_local(f.getParameter(2));
+  a.add_i32();
+}).withExport();
+
+// Read back the name section
+const bytes = mod.toBytes();
+const reader = new BinaryReader(bytes);
+const info = reader.read();
+const ns = info.nameSection;
+
+if (ns) {
+  console.log('Module:', ns.moduleName);
+  ns.functionNames?.forEach((name, idx) => console.log(`  func[${idx}] = ${name}`));
+  ns.localNames?.forEach((locals, funcIdx) => {
+    const funcName = ns.functionNames?.get(funcIdx) || `func${funcIdx}`;
+    locals.forEach((name, localIdx) => console.log(`  ${funcName}[${localIdx}] = ${name}`));
+  });
+  ns.globalNames?.forEach((name, idx) => console.log(`  global[${idx}] = ${name}`));
+}
 ```

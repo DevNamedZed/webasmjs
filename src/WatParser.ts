@@ -7,12 +7,16 @@ import {
   BlockTypeDescriptor,
   ElementType,
   ExternalKind,
+  HeapType,
+  HeapTypeRef,
   OpCodeDef,
   ModuleBuilderOptions,
 } from './types';
 import FunctionBuilder from './FunctionBuilder';
 import FunctionEmitter from './FunctionEmitter';
+import GlobalBuilder from './GlobalBuilder';
 import ImportBuilder from './ImportBuilder';
+import LabelBuilder from './LabelBuilder';
 
 // --- Tokenizer ---
 
@@ -180,6 +184,13 @@ const valueTypeMap: Record<string, ValueTypeDescriptor> = {
   'f32': ValueType.Float32,
   'f64': ValueType.Float64,
   'v128': ValueType.V128,
+  'funcref': ValueType.FuncRef,
+  'externref': ValueType.ExternRef,
+  'anyref': ValueType.AnyRef,
+  'eqref': ValueType.EqRef,
+  'i31ref': ValueType.I31Ref,
+  'structref': ValueType.StructRef,
+  'arrayref': ValueType.ArrayRef,
 };
 
 const blockTypeMap: Record<string, BlockTypeDescriptor> = {
@@ -204,8 +215,9 @@ class WatParserImpl {
   funcNames: Map<string, number> = new Map();
   globalNames: Map<string, number> = new Map();
   typeNames: Map<string, number> = new Map();
+  tagNames: Map<string, number> = new Map();
   funcList: (FunctionBuilder | ImportBuilder)[] = [];
-  labelStack: { name: string; label: any }[] = [];
+  labelStack: { name: string; label: LabelBuilder }[] = [];
 
   constructor(tokens: Token[]) {
     this.tokens = tokens;
@@ -315,6 +327,9 @@ class WatParserImpl {
         case 'data':
           this.parseData();
           break;
+        case 'tag':
+          this.parseTag();
+          break;
         default:
           // Skip unknown section
           this.skipSExpr();
@@ -352,7 +367,8 @@ class WatParserImpl {
 
   parseType(): void {
     // (type $name (func (param i32 i32) (result i32)))
-    // (type (;0;) (func (param i32 i32) (result i32)))
+    // (type (;0;) (struct (field $x (mut i32))))
+    // (type (;0;) (array (mut i32)))
     // We already consumed: ( type
     let typeName: string | null = null;
     if (this.peek().type === TokenType.Id) {
@@ -360,34 +376,92 @@ class WatParserImpl {
     }
     this.skipInlineComment();
     this.expect(TokenType.LeftParen);
-    this.expectKeyword('func');
 
-    const params: ValueTypeDescriptor[] = [];
-    const results: ValueTypeDescriptor[] = [];
+    const kw = this.peek().value;
+    if (kw === 'func') {
+      this.advance();
+      const params: ValueTypeDescriptor[] = [];
+      const results: ValueTypeDescriptor[] = [];
 
-    while (this.isLeftParen()) {
-      this.expect(TokenType.LeftParen);
-      const kw = this.advance().value;
-      if (kw === 'param') {
-        while (!this.isRightParen()) {
-          // skip $name in param
-          if (this.peek().type === TokenType.Id) this.advance();
-          else params.push(this.parseValueType());
+      while (this.isLeftParen()) {
+        this.expect(TokenType.LeftParen);
+        const innerKw = this.advance().value;
+        if (innerKw === 'param') {
+          while (!this.isRightParen()) {
+            if (this.peek().type === TokenType.Id) this.advance();
+            else params.push(this.parseValueType());
+          }
+        } else if (innerKw === 'result') {
+          while (!this.isRightParen()) {
+            results.push(this.parseValueType());
+          }
         }
-      } else if (kw === 'result') {
-        while (!this.isRightParen()) {
-          results.push(this.parseValueType());
-        }
+        this.expect(TokenType.RightParen);
       }
-      this.expect(TokenType.RightParen);
-    }
 
-    this.expect(TokenType.RightParen); // closing func
-    this.expect(TokenType.RightParen); // closing type
+      this.expect(TokenType.RightParen); // closing func
+      this.expect(TokenType.RightParen); // closing type
 
-    const funcType = this.moduleBuilder.defineFuncType(results.length > 0 ? results : null, params);
-    if (typeName) {
-      this.typeNames.set(typeName, funcType.index);
+      const funcType = this.moduleBuilder.defineFunctionType(results.length > 0 ? results : null, params);
+      if (typeName) {
+        this.typeNames.set(typeName, funcType.index);
+      }
+    } else if (kw === 'struct') {
+      this.advance();
+      const fields: { name: string; type: ValueTypeDescriptor; mutable: boolean }[] = [];
+
+      while (this.isLeftParen()) {
+        this.expect(TokenType.LeftParen);
+        this.expectKeyword('field');
+        let fieldName = `f${fields.length}`;
+        if (this.peek().type === TokenType.Id) {
+          fieldName = this.advance().value.replace(/^\$/, '');
+        }
+        let mutable = false;
+        let fieldType: ValueTypeDescriptor;
+        if (this.isLeftParen()) {
+          this.expect(TokenType.LeftParen);
+          this.expectKeyword('mut');
+          fieldType = this.parseValueType();
+          mutable = true;
+          this.expect(TokenType.RightParen);
+        } else {
+          fieldType = this.parseValueType();
+        }
+        fields.push({ name: fieldName, type: fieldType, mutable });
+        this.expect(TokenType.RightParen);
+      }
+
+      this.expect(TokenType.RightParen); // closing struct
+      this.expect(TokenType.RightParen); // closing type
+
+      const structType = this.moduleBuilder.defineStructType(fields);
+      if (typeName) {
+        this.typeNames.set(typeName, structType.index);
+      }
+    } else if (kw === 'array') {
+      this.advance();
+      let mutable = false;
+      let elementType: ValueTypeDescriptor;
+      if (this.isLeftParen()) {
+        this.expect(TokenType.LeftParen);
+        this.expectKeyword('mut');
+        elementType = this.parseValueType();
+        mutable = true;
+        this.expect(TokenType.RightParen);
+      } else {
+        elementType = this.parseValueType();
+      }
+
+      this.expect(TokenType.RightParen); // closing array
+      this.expect(TokenType.RightParen); // closing type
+
+      const arrayType = this.moduleBuilder.defineArrayType(elementType, mutable);
+      if (typeName) {
+        this.typeNames.set(typeName, arrayType.index);
+      }
+    } else {
+      throw this.error(`Expected 'func', 'struct', or 'array' in type definition, got '${kw}'`);
     }
   }
 
@@ -678,8 +752,8 @@ class WatParserImpl {
     const tok = this.advance();
     const mnemonic = tok.value;
 
-    // Special handling for block/loop/if which have block signatures
-    if (mnemonic === 'block' || mnemonic === 'loop' || mnemonic === 'if') {
+    // Special handling for block/loop/if/try which have block signatures
+    if (mnemonic === 'block' || mnemonic === 'loop' || mnemonic === 'if' || mnemonic === 'try') {
       // Check for optional $label
       let labelName: string | null = null;
       if (this.peek().type === TokenType.Id) {
@@ -716,9 +790,30 @@ class WatParserImpl {
       return;
     }
 
+    // Handle 'delegate' — pops try block (acts like end for try)
+    if (mnemonic === 'delegate') {
+      const depth = this.parseNumber();
+      asm.emit(mnemonicToOpCode.get(mnemonic)!, depth);
+      // Pop named label if present (delegate closes the try block)
+      if (this.labelStack.length > 0) {
+        const cfStack = (asm as any)._controlFlowVerifier._stack;
+        const top = this.labelStack[this.labelStack.length - 1];
+        if (top.label.block && !cfStack.includes(top.label)) {
+          this.labelStack.pop();
+        }
+      }
+      return;
+    }
+
     const opCode = mnemonicToOpCode.get(mnemonic);
     if (!opCode) {
       throw this.error(`Unknown instruction: ${mnemonic}`, tok);
+    }
+
+    // Special handling for throw/catch which reference tags
+    if (mnemonic === 'throw' || mnemonic === 'catch') {
+      asm.emit(opCode, this.resolveTag());
+      return;
     }
 
     // Parse immediates based on opcode definition
@@ -844,13 +939,65 @@ class WatParserImpl {
         asm.emit(opCode, mask);
         break;
       }
+      case 'TypeIndexField': {
+        // struct.get $typeIndex $fieldIndex
+        const typeIndex = this.parseNumber();
+        const fieldIndex = this.parseNumber();
+        asm.emit(opCode, typeIndex, fieldIndex);
+        break;
+      }
+      case 'TypeIndexIndex': {
+        // array.new_fixed $typeIndex $count
+        const typeIndex = this.parseNumber();
+        const index = this.parseNumber();
+        asm.emit(opCode, typeIndex, index);
+        break;
+      }
+      case 'HeapType':
+        asm.emit(opCode, this.parseHeapType());
+        break;
+      case 'BrOnCast': {
+        // br_on_cast $label $heapType1 $heapType2
+        const label = this.resolveBranchTarget(asm);
+        const ht1 = this.parseHeapType();
+        const ht2 = this.parseHeapType();
+        asm.emit(opCode, label, ht1, ht2);
+        break;
+      }
       default:
         asm.emit(opCode);
         break;
     }
   }
 
-  getLabelAtDepth(asm: FunctionEmitter, relativeDepth: number): any {
+  parseHeapType(): HeapTypeRef {
+    const heapTypeKeywords: Record<string, HeapTypeRef> = {
+      func: HeapType.Func,
+      extern: HeapType.Extern,
+      any: HeapType.Any,
+      eq: HeapType.Eq,
+      i31: HeapType.I31,
+      struct: HeapType.Struct,
+      array: HeapType.Array,
+      none: HeapType.None,
+      nofunc: HeapType.NoFunc,
+      noextern: HeapType.NoExtern,
+    };
+
+    // Abstract heap type keyword: func, extern, any, eq, i31, struct, array, none, nofunc, noextern
+    if (this.peek().type === TokenType.Keyword && heapTypeKeywords[this.peek().value] !== undefined) {
+      return heapTypeKeywords[this.advance().value];
+    }
+
+    // Numeric type index
+    if (this.peek().type === TokenType.Number) {
+      return this.parseNumber();
+    }
+
+    throw this.error(`Expected heap type but found '${this.peek().value}'`);
+  }
+
+  getLabelAtDepth(asm: FunctionEmitter, relativeDepth: number): LabelBuilder {
     const stack = (asm as any)._controlFlowVerifier._stack;
     const targetIndex = stack.length - 1 - relativeDepth;
     if (targetIndex < 0 || targetIndex >= stack.length) {
@@ -859,7 +1006,7 @@ class WatParserImpl {
     return stack[targetIndex];
   }
 
-  resolveBranchTarget(asm: FunctionEmitter): any {
+  resolveBranchTarget(asm: FunctionEmitter): LabelBuilder {
     if (this.peek().type === TokenType.Id) {
       const id = this.advance().value;
       // Search label stack for matching name (search from top = most recent)
@@ -885,7 +1032,7 @@ class WatParserImpl {
     return this.funcList[index];
   }
 
-  resolveGlobal(): any {
+  resolveGlobal(): GlobalBuilder | ImportBuilder {
     let index: number;
     if (this.peek().type === TokenType.Id) {
       const id = this.advance().value;
@@ -1144,6 +1291,54 @@ class WatParserImpl {
     this.expect(TokenType.RightParen);
 
     this.moduleBuilder.defineData(bytes, offset);
+  }
+
+  parseTag(): void {
+    // (tag (;0;) (type 0) (param i32))
+    // (tag $myTag (type 0))
+    // (tag (param i32 f64))
+    let tagName: string | null = null;
+    if (this.peek().type === TokenType.Id) {
+      tagName = this.advance().value;
+    }
+    this.skipInlineComment();
+
+    const params: ValueTypeDescriptor[] = [];
+
+    // Parse (type N) if present — skip it, we build from params
+    if (this.isLeftParen() && this.tokens[this.pos + 1]?.value === 'type') {
+      this.expect(TokenType.LeftParen);
+      this.advance(); // 'type'
+      this.parseNumber(); // skip type index
+      this.expect(TokenType.RightParen);
+    }
+
+    // Parse (param ...) if present
+    if (this.isLeftParen() && this.tokens[this.pos + 1]?.value === 'param') {
+      this.expect(TokenType.LeftParen);
+      this.advance(); // 'param'
+      while (!this.isRightParen()) {
+        params.push(this.parseValueType());
+      }
+      this.expect(TokenType.RightParen);
+    }
+
+    this.expect(TokenType.RightParen);
+
+    const tag = this.moduleBuilder.defineTag(params);
+    if (tagName) {
+      this.tagNames.set(tagName, tag._index);
+    }
+  }
+
+  resolveTag(): number {
+    if (this.peek().type === TokenType.Id) {
+      const id = this.advance().value;
+      const idx = this.tagNames.get(id);
+      if (idx === undefined) throw this.error(`Unknown tag: ${id}`);
+      return idx;
+    }
+    return this.parseNumber();
   }
 
   // --- Helpers ---

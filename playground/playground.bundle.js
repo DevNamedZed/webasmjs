@@ -1,5 +1,61 @@
 "use strict";
 var webasmPlayground = (() => {
+  // src/Arg.ts
+  var formatOrList = (values) => {
+    if (values.length === 1) {
+      return values[0];
+    }
+    let text = "";
+    for (let index = 0; index < values.length; index++) {
+      text += values[index];
+      if (index === values.length - 2) {
+        text += " or ";
+      } else if (index !== values.length - 1) {
+        text += ", ";
+      }
+    }
+    return text;
+  };
+  var Arg = class _Arg {
+    static notNull(name, value) {
+      if (value === null || value === void 0) {
+        throw new Error(`The parameter ${name} must be specified.`);
+      }
+    }
+    static notEmpty(name, value) {
+      _Arg.notNull(name, value);
+      if (value === "" || Array.isArray(value) && value.length === 0) {
+        throw new Error(`The parameter ${name} cannot be empty.`);
+      }
+    }
+    static notEmptyString(name, value) {
+      _Arg.string(name, value);
+      if (value === "") {
+        throw new Error(`The parameter ${name} cannot be empty.`);
+      }
+    }
+    static string(name, value) {
+      _Arg.notNull(name, value);
+      if (typeof value !== "string") {
+        throw new Error(`The parameter ${name} must be a string.`);
+      }
+    }
+    static number(name, value) {
+      _Arg.notNull(name, value);
+      if (typeof value !== "number" || isNaN(value)) {
+        throw new Error(`The parameter ${name} must be a number.`);
+      }
+    }
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    static instanceOf(name, value, ...types) {
+      if (!types.some((x) => value instanceof x)) {
+        throw new Error(
+          `The parameter ${name} must be a ${formatOrList(types.map((x) => x.name))}.`
+        );
+      }
+    }
+  };
+
   // src/types.ts
   function isConcreteRefType(vt) {
     return "refPrefix" in vt;
@@ -101,7 +157,8 @@ var webasmPlayground = (() => {
     Function: { name: "Function", value: 0 },
     Table: { name: "Table", value: 1 },
     Memory: { name: "Memory", value: 2 },
-    Global: { name: "Global", value: 3 }
+    Global: { name: "Global", value: 3 },
+    Tag: { name: "Tag", value: 4 }
   };
   var SectionType = {
     Type: { name: "Type", value: 1 },
@@ -138,62 +195,18 @@ var webasmPlayground = (() => {
       writer.writeVarInt7(vt.value);
     }
   }
-
-  // src/Arg.ts
-  var formatOrList = (values) => {
-    if (values.length === 1) {
-      return values[0];
-    }
-    let text = "";
-    for (let index = 0; index < values.length; index++) {
-      text += values[index];
-      if (index === values.length - 2) {
-        text += " or ";
-      } else if (index !== values.length - 1) {
-        text += ", ";
-      }
-    }
-    return text;
-  };
-  var Arg = class _Arg {
-    static notNull(name, value) {
-      if (value === null || value === void 0) {
-        throw new Error(`The parameter ${name} must be specified.`);
-      }
-    }
-    static notEmpty(name, value) {
-      _Arg.notNull(name, value);
-      if (value === "" || Array.isArray(value) && value.length === 0) {
-        throw new Error(`The parameter ${name} cannot be empty.`);
-      }
-    }
-    static notEmptyString(name, value) {
-      _Arg.string(name, value);
-      if (value === "") {
-        throw new Error(`The parameter ${name} cannot be empty.`);
-      }
-    }
-    static string(name, value) {
-      _Arg.notNull(name, value);
-      if (typeof value !== "string") {
-        throw new Error(`The parameter ${name} must be a string.`);
-      }
-    }
-    static number(name, value) {
-      _Arg.notNull(name, value);
-      if (typeof value !== "number" || isNaN(value)) {
-        throw new Error(`The parameter ${name} must be a number.`);
-      }
-    }
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    static instanceOf(name, value, ...types) {
-      if (!types.some((x) => value instanceof x)) {
-        throw new Error(
-          `The parameter ${name} must be a ${formatOrList(types.map((x) => x.name))}.`
-        );
-      }
-    }
-  };
+  var i32 = ValueType.Int32;
+  var i64 = ValueType.Int64;
+  var f32 = ValueType.Float32;
+  var f64 = ValueType.Float64;
+  var v128 = ValueType.V128;
+  var funcref = ValueType.FuncRef;
+  var externref = ValueType.ExternRef;
+  var anyref = ValueType.AnyRef;
+  var eqref = ValueType.EqRef;
+  var i31ref = ValueType.I31Ref;
+  var structref = ValueType.StructRef;
+  var arrayref = ValueType.ArrayRef;
 
   // src/BinaryWriter.ts
   var GrowthRate = 1024;
@@ -328,41 +341,6 @@ var webasmPlayground = (() => {
       const array = new Uint8Array(this.size);
       array.set(this.buffer.subarray(0, this.size), 0);
       return array;
-    }
-  };
-
-  // src/ArrayTypeBuilder.ts
-  var ArrayTypeBuilder = class {
-    constructor(key, elementType, mutable, index, options) {
-      this.key = key;
-      this.elementType = elementType;
-      this.mutable = mutable;
-      this.index = index;
-      this.superTypes = options?.superTypes || [];
-      this.final = options?.final !== false;
-    }
-    get typeForm() {
-      return TypeForm.Array;
-    }
-    static createKey(elementType, mutable) {
-      return `array(${elementType.short}:${mutable ? "m" : "i"})`;
-    }
-    write(writer) {
-      if (this.superTypes.length > 0 || !this.final) {
-        writer.writeVarInt7(this.final ? TypeForm.SubFinal.value : TypeForm.Sub.value);
-        writer.writeVarUInt32(this.superTypes.length);
-        this.superTypes.forEach((st) => {
-          writer.writeVarUInt32(st.index);
-        });
-      }
-      writer.writeVarInt7(TypeForm.Array.value);
-      writeValueType(writer, this.elementType);
-      writer.writeVarUInt1(this.mutable ? 1 : 0);
-    }
-    toBytes() {
-      const buffer = new BinaryWriter();
-      this.write(buffer);
-      return buffer.toArray();
     }
   };
 
@@ -571,6 +549,531 @@ var webasmPlayground = (() => {
       this.writeDataSection(writer);
       this.writeCustomSections(writer);
       return writer.toArray();
+    }
+  };
+
+  // src/FunctionParameterBuilder.ts
+  var FunctionParameterBuilder = class {
+    constructor(valueType, index) {
+      this.name = null;
+      this.valueType = valueType;
+      this.index = index;
+    }
+    withName(name) {
+      this.name = name;
+      return this;
+    }
+  };
+
+  // src/LocalBuilder.ts
+  var LocalBuilder = class {
+    constructor(valueType, name, index, count) {
+      this.index = index;
+      this.valueType = valueType;
+      this.name = name;
+      this.count = count;
+    }
+    write(writer) {
+      writer.writeVarUInt32(this.count);
+      writer.writeVarInt7(this.valueType.value);
+    }
+    toBytes() {
+      const buffer = new BinaryWriter();
+      this.write(buffer);
+      return buffer.toArray();
+    }
+  };
+
+  // src/GlobalType.ts
+  var GlobalType = class {
+    constructor(valueType, mutable) {
+      this._valueType = valueType;
+      this._mutable = mutable;
+    }
+    get valueType() {
+      return this._valueType;
+    }
+    get mutable() {
+      return this._mutable;
+    }
+    write(writer) {
+      writer.writeVarInt7(this._valueType.value);
+      writer.writeVarUInt1(this._mutable ? 1 : 0);
+    }
+    toBytes() {
+      const buffer = new BinaryWriter();
+      this.write(buffer);
+      return buffer.toArray();
+    }
+  };
+
+  // src/GlobalBuilder.ts
+  var GlobalBuilder = class _GlobalBuilder {
+    constructor(moduleBuilder, valueType, mutable, index) {
+      this._initExpressionEmitter = null;
+      this.name = null;
+      this._moduleBuilder = moduleBuilder;
+      this._globalType = new GlobalType(valueType, mutable);
+      this._index = index;
+    }
+    withName(name) {
+      this.name = name;
+      return this;
+    }
+    get globalType() {
+      return this._globalType;
+    }
+    get valueType() {
+      return this._globalType.valueType;
+    }
+    createInitEmitter(callback) {
+      if (this._initExpressionEmitter) {
+        throw new Error("Initialization expression emitter has already been created.");
+      }
+      this._initExpressionEmitter = new InitExpressionEmitter(
+        "Global" /* Global */,
+        this.valueType,
+        this._moduleBuilder.features,
+        this._moduleBuilder.disableVerification
+      );
+      if (callback) {
+        callback(this._initExpressionEmitter);
+        this._initExpressionEmitter.end();
+      }
+      return this._initExpressionEmitter;
+    }
+    value(value) {
+      if (typeof value === "function") {
+        this.createInitEmitter(value);
+      } else if (value instanceof _GlobalBuilder) {
+        this.createInitEmitter((asm) => {
+          asm.get_global(value);
+        });
+      } else if (typeof value === "number" || typeof value === "bigint") {
+        this.createInitEmitter((asm) => {
+          const vt = this.valueType;
+          if (vt === ValueType.Int32) {
+            asm.const_i32(Number(value));
+          } else if (vt === ValueType.Int64) {
+            asm.const_i64(BigInt(value));
+          } else if (vt === ValueType.Float32) {
+            asm.const_f32(Number(value));
+          } else if (vt === ValueType.Float64) {
+            asm.const_f64(Number(value));
+          } else {
+            throw new Error(`Unsupported global value type: ${vt.name}`);
+          }
+        });
+      } else {
+        throw new Error("Unsupported global value.");
+      }
+    }
+    withExport(name) {
+      this._moduleBuilder.exportGlobal(this, name);
+      return this;
+    }
+    write(writer) {
+      if (!this._initExpressionEmitter) {
+        throw new Error("The initialization expression was not defined.");
+      }
+      this._globalType.write(writer);
+      this._initExpressionEmitter.write(writer);
+    }
+    toBytes() {
+      const buffer = new BinaryWriter();
+      this.write(buffer);
+      return buffer.toArray();
+    }
+  };
+
+  // src/ImportBuilder.ts
+  var ImportBuilder = class {
+    constructor(moduleName, fieldName, externalKind, data, index) {
+      this.moduleName = moduleName;
+      this.fieldName = fieldName;
+      this.externalKind = externalKind;
+      this.data = data;
+      this.index = index;
+    }
+    isFunctionImport() {
+      return this.externalKind === ExternalKind.Function;
+    }
+    isTagImport() {
+      return this.externalKind === ExternalKind.Tag;
+    }
+    isGlobalImport() {
+      return this.externalKind === ExternalKind.Global;
+    }
+    isMemoryImport() {
+      return this.externalKind === ExternalKind.Memory;
+    }
+    isTableImport() {
+      return this.externalKind === ExternalKind.Table;
+    }
+    write(writer) {
+      writer.writeVarUInt32(this.moduleName.length);
+      writer.writeString(this.moduleName);
+      writer.writeVarUInt32(this.fieldName.length);
+      writer.writeString(this.fieldName);
+      writer.writeUInt8(this.externalKind.value);
+      switch (this.externalKind) {
+        case ExternalKind.Function:
+          writer.writeVarUInt32(this.data.index);
+          break;
+        case ExternalKind.Tag:
+          writer.writeVarUInt32(0);
+          writer.writeVarUInt32(this.data.index);
+          break;
+        case ExternalKind.Global:
+        case ExternalKind.Memory:
+        case ExternalKind.Table:
+          this.data.write(writer);
+          break;
+        default:
+          throw new Error("Unknown external kind.");
+      }
+    }
+    toBytes() {
+      const buffer = new BinaryWriter();
+      this.write(buffer);
+      return buffer.toArray();
+    }
+  };
+
+  // src/ImmediateEncoder.ts
+  var ImmediateEncoder = class _ImmediateEncoder {
+    static encodeBlockSignature(writer, blockType) {
+      writer.writeVarInt7(blockType.value);
+    }
+    static encodeRelativeDepth(writer, label, depth) {
+      const relativeDepth = depth - label.block.depth;
+      writer.writeVarInt7(relativeDepth);
+    }
+    static encodeBranchTable(writer, defaultLabel, labels) {
+      writer.writeVarUInt32(labels.length);
+      labels.forEach((x) => {
+        writer.writeVarUInt32(x);
+      });
+      writer.writeVarUInt32(defaultLabel);
+    }
+    static encodeFunction(writer, func) {
+      let functionIndex = 0;
+      if (func instanceof ImportBuilder) {
+        functionIndex = func.index;
+      } else if (typeof func === "object" && func !== null && "_index" in func) {
+        functionIndex = func._index;
+      } else if (typeof func === "number") {
+        functionIndex = func;
+      } else {
+        throw new Error(
+          "Function argument must either be the index of the function or a FunctionBuilder."
+        );
+      }
+      writer.writeVarUInt32(functionIndex);
+    }
+    static encodeIndirectFunction(writer, funcType) {
+      writer.writeVarUInt32(funcType.index);
+      writer.writeVarUInt1(0);
+    }
+    static encodeLocal(writer, local) {
+      Arg.notNull("local", local);
+      let localIndex = 0;
+      if (local instanceof LocalBuilder) {
+        localIndex = local.index;
+      } else if (local instanceof FunctionParameterBuilder) {
+        localIndex = local.index;
+      } else if (typeof local === "number") {
+        localIndex = local;
+      } else {
+        throw new Error(
+          "Local argument must either be the index of the local variable or a LocalBuilder."
+        );
+      }
+      writer.writeVarUInt32(localIndex);
+    }
+    static encodeGlobal(writer, global) {
+      Arg.notNull("global", global);
+      let globalIndex = 0;
+      if (global instanceof GlobalBuilder) {
+        globalIndex = global._index;
+      } else if (global instanceof ImportBuilder) {
+        if (global.externalKind !== ExternalKind.Global) {
+          throw new Error("Import external kind must be global.");
+        }
+        globalIndex = global.index;
+      } else if (typeof global === "number") {
+        globalIndex = global;
+      } else {
+        throw new Error(
+          "Global argument must either be the index of the global variable, GlobalBuilder, or an ImportBuilder."
+        );
+      }
+      writer.writeVarUInt32(globalIndex);
+    }
+    static encodeFloat32(writer, value) {
+      writer.writeFloat32(value);
+    }
+    static encodeFloat64(writer, value) {
+      writer.writeFloat64(value);
+    }
+    static encodeVarInt32(writer, value) {
+      writer.writeVarInt32(value);
+    }
+    static encodeVarInt64(writer, value) {
+      writer.writeVarInt64(value);
+    }
+    static encodeVarUInt32(writer, value) {
+      writer.writeVarUInt32(value);
+    }
+    static encodeVarUInt1(writer, value) {
+      writer.writeVarUInt1(value);
+    }
+    static encodeMemoryImmediate(writer, alignment, offset) {
+      writer.writeVarUInt32(alignment);
+      writer.writeVarUInt32(offset);
+    }
+    static encodeV128Const(writer, bytes) {
+      for (let i = 0; i < 16; i++) {
+        writer.writeByte(bytes[i]);
+      }
+    }
+    static encodeLaneIndex(writer, index) {
+      writer.writeByte(index);
+    }
+    static encodeShuffleMask(writer, mask) {
+      for (let i = 0; i < 16; i++) {
+        writer.writeByte(mask[i]);
+      }
+    }
+    static encodeTypeIndexField(writer, typeIndex, fieldIndex) {
+      writer.writeVarUInt32(typeIndex);
+      writer.writeVarUInt32(fieldIndex);
+    }
+    static encodeTypeIndexIndex(writer, typeIndex, index) {
+      writer.writeVarUInt32(typeIndex);
+      writer.writeVarUInt32(index);
+    }
+    static encodeHeapType(writer, heapType) {
+      if (typeof heapType === "number") {
+        writer.writeVarInt32(heapType);
+      } else if (typeof heapType === "object" && "value" in heapType && typeof heapType.value === "number") {
+        writer.writeVarInt7(heapType.value);
+      } else if (typeof heapType === "object" && "index" in heapType && typeof heapType.index === "number") {
+        writer.writeVarInt32(heapType.index);
+      } else {
+        throw new Error("Invalid heap type argument.");
+      }
+    }
+    static encodeBrOnCast(writer, flags, label, heapType1, heapType2, depth) {
+      writer.writeByte(flags);
+      const relativeDepth = depth - label.block.depth;
+      writer.writeVarUInt32(relativeDepth);
+      _ImmediateEncoder.encodeHeapType(writer, heapType1);
+      _ImmediateEncoder.encodeHeapType(writer, heapType2);
+    }
+  };
+
+  // src/Immediate.ts
+  var Immediate = class _Immediate {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    constructor(type, values) {
+      Arg.notNull("type", type);
+      Arg.notNull("values", values);
+      this.type = type;
+      this.values = values;
+    }
+    static createBlockSignature(blockType) {
+      return new _Immediate("BlockSignature" /* BlockSignature */, [blockType]);
+    }
+    static createBranchTable(defaultLabel, labels, depth) {
+      const relativeDepths = labels.map((x) => {
+        return depth - x.block.depth;
+      });
+      const defaultLabelDepth = depth - defaultLabel.block.depth;
+      return new _Immediate("BranchTable" /* BranchTable */, [defaultLabelDepth, relativeDepths]);
+    }
+    static createFloat32(value) {
+      return new _Immediate("Float32" /* Float32 */, [value]);
+    }
+    static createFloat64(value) {
+      return new _Immediate("Float64" /* Float64 */, [value]);
+    }
+    static createFunction(func) {
+      return new _Immediate("Function" /* Function */, [func]);
+    }
+    static createGlobal(global) {
+      return new _Immediate("Global" /* Global */, [global]);
+    }
+    static createIndirectFunction(funcType) {
+      return new _Immediate("IndirectFunction" /* IndirectFunction */, [funcType]);
+    }
+    static createLocal(local) {
+      return new _Immediate("Local" /* Local */, [local]);
+    }
+    static createMemoryImmediate(alignment, offset) {
+      return new _Immediate("MemoryImmediate" /* MemoryImmediate */, [alignment, offset]);
+    }
+    static createRelativeDepth(label, depth) {
+      return new _Immediate("RelativeDepth" /* RelativeDepth */, [label, depth]);
+    }
+    static createVarUInt1(value) {
+      return new _Immediate("VarUInt1" /* VarUInt1 */, [value]);
+    }
+    static createVarInt32(value) {
+      return new _Immediate("VarInt32" /* VarInt32 */, [value]);
+    }
+    static createVarInt64(value) {
+      return new _Immediate("VarInt64" /* VarInt64 */, [value]);
+    }
+    static createVarUInt32(value) {
+      return new _Immediate("VarUInt32" /* VarUInt32 */, [value]);
+    }
+    static createV128Const(bytes) {
+      if (bytes.length !== 16) {
+        throw new Error("V128 constant must be exactly 16 bytes.");
+      }
+      return new _Immediate("V128Const" /* V128Const */, [bytes]);
+    }
+    static createLaneIndex(index) {
+      return new _Immediate("LaneIndex" /* LaneIndex */, [index]);
+    }
+    static createShuffleMask(mask) {
+      if (mask.length !== 16) {
+        throw new Error("Shuffle mask must be exactly 16 bytes.");
+      }
+      return new _Immediate("ShuffleMask" /* ShuffleMask */, [mask]);
+    }
+    static createTypeIndexField(typeIndex, fieldIndex) {
+      return new _Immediate("TypeIndexField" /* TypeIndexField */, [typeIndex, fieldIndex]);
+    }
+    static createTypeIndexIndex(typeIndex, index) {
+      return new _Immediate("TypeIndexIndex" /* TypeIndexIndex */, [typeIndex, index]);
+    }
+    static createHeapType(heapType) {
+      return new _Immediate("HeapType" /* HeapType */, [heapType]);
+    }
+    static createBrOnCast(flags, label, heapType1, heapType2, depth) {
+      return new _Immediate("BrOnCast" /* BrOnCast */, [flags, label, heapType1, heapType2, depth]);
+    }
+    writeBytes(writer) {
+      switch (this.type) {
+        case "BlockSignature" /* BlockSignature */:
+          ImmediateEncoder.encodeBlockSignature(writer, this.values[0]);
+          break;
+        case "BranchTable" /* BranchTable */:
+          ImmediateEncoder.encodeBranchTable(writer, this.values[0], this.values[1]);
+          break;
+        case "Float32" /* Float32 */:
+          ImmediateEncoder.encodeFloat32(writer, this.values[0]);
+          break;
+        case "Float64" /* Float64 */:
+          ImmediateEncoder.encodeFloat64(writer, this.values[0]);
+          break;
+        case "Function" /* Function */:
+          ImmediateEncoder.encodeFunction(writer, this.values[0]);
+          break;
+        case "Global" /* Global */:
+          ImmediateEncoder.encodeGlobal(writer, this.values[0]);
+          break;
+        case "IndirectFunction" /* IndirectFunction */:
+          ImmediateEncoder.encodeIndirectFunction(writer, this.values[0]);
+          break;
+        case "Local" /* Local */:
+          ImmediateEncoder.encodeLocal(writer, this.values[0]);
+          break;
+        case "MemoryImmediate" /* MemoryImmediate */:
+          ImmediateEncoder.encodeMemoryImmediate(writer, this.values[0], this.values[1]);
+          break;
+        case "RelativeDepth" /* RelativeDepth */:
+          ImmediateEncoder.encodeRelativeDepth(writer, this.values[0], this.values[1]);
+          break;
+        case "VarInt32" /* VarInt32 */:
+          ImmediateEncoder.encodeVarInt32(writer, this.values[0]);
+          break;
+        case "VarInt64" /* VarInt64 */:
+          ImmediateEncoder.encodeVarInt64(writer, this.values[0]);
+          break;
+        case "VarUInt1" /* VarUInt1 */:
+          ImmediateEncoder.encodeVarUInt1(writer, this.values[0]);
+          break;
+        case "VarUInt32" /* VarUInt32 */:
+          ImmediateEncoder.encodeVarUInt32(writer, this.values[0]);
+          break;
+        case "V128Const" /* V128Const */:
+          ImmediateEncoder.encodeV128Const(writer, this.values[0]);
+          break;
+        case "LaneIndex" /* LaneIndex */:
+          ImmediateEncoder.encodeLaneIndex(writer, this.values[0]);
+          break;
+        case "ShuffleMask" /* ShuffleMask */:
+          ImmediateEncoder.encodeShuffleMask(writer, this.values[0]);
+          break;
+        case "TypeIndexField" /* TypeIndexField */:
+          ImmediateEncoder.encodeTypeIndexField(writer, this.values[0], this.values[1]);
+          break;
+        case "TypeIndexIndex" /* TypeIndexIndex */:
+          ImmediateEncoder.encodeTypeIndexIndex(writer, this.values[0], this.values[1]);
+          break;
+        case "HeapType" /* HeapType */:
+          ImmediateEncoder.encodeHeapType(writer, this.values[0]);
+          break;
+        case "BrOnCast" /* BrOnCast */:
+          ImmediateEncoder.encodeBrOnCast(writer, this.values[0], this.values[1], this.values[2], this.values[3], this.values[4]);
+          break;
+        default:
+          throw new Error("Cannot encode unknown operand type.");
+      }
+    }
+    toBytes() {
+      const buffer = new BinaryWriter();
+      this.writeBytes(buffer);
+      return buffer.toArray();
+    }
+  };
+
+  // src/Instruction.ts
+  var Instruction = class {
+    constructor(opCode, immediate) {
+      Arg.notNull("opCode", opCode);
+      this.opCode = opCode;
+      this.immediate = immediate;
+    }
+    write(writer) {
+      if (this.opCode.prefix !== void 0) {
+        writer.writeByte(this.opCode.prefix);
+        writer.writeVarUInt32(this.opCode.value);
+      } else {
+        writer.writeByte(this.opCode.value);
+      }
+      if (this.immediate) {
+        this.immediate.writeBytes(writer);
+      }
+    }
+    toBytes() {
+      const buffer = new BinaryWriter();
+      this.write(buffer);
+      return buffer.toArray();
+    }
+  };
+
+  // src/LabelBuilder.ts
+  var LabelBuilder = class {
+    constructor() {
+      this.resolved = false;
+      this.block = null;
+    }
+    get isResolved() {
+      return this.resolved;
+    }
+    resolve(block) {
+      this.block = block;
+      this.resolved = true;
+    }
+    reference(block) {
+      if (this.isResolved) {
+        throw new Error("Cannot add a reference to a label that has been resolved.");
+      }
+      this.block = block;
     }
   };
 
@@ -5379,948 +5882,6 @@ var webasmPlayground = (() => {
   };
   var OpCodes_default = OpCodes;
 
-  // src/BinaryReader.ts
-  var MagicHeader2 = 1836278016;
-  var BinaryReader = class {
-    constructor(buffer) {
-      this.buffer = buffer;
-      this.offset = 0;
-    }
-    read() {
-      const magic = this.readUInt32();
-      if (magic !== MagicHeader2) {
-        throw new Error(`Invalid WASM magic header: 0x${magic.toString(16)}`);
-      }
-      const version = this.readUInt32();
-      if (version !== 1) {
-        throw new Error(`Unsupported WASM version: ${version}`);
-      }
-      const module = {
-        version,
-        types: [],
-        imports: [],
-        functions: [],
-        tables: [],
-        memories: [],
-        globals: [],
-        exports: [],
-        start: null,
-        elements: [],
-        data: [],
-        customSections: []
-      };
-      const functionTypeIndices = [];
-      while (this.offset < this.buffer.length) {
-        const sectionId = this.readVarUInt7();
-        const sectionSize = this.readVarUInt32();
-        const sectionEnd = this.offset + sectionSize;
-        switch (sectionId) {
-          case 0:
-            this.readCustomSection(module, sectionEnd);
-            break;
-          case 1:
-            this.readTypeSection(module);
-            break;
-          case 2:
-            this.readImportSection(module);
-            break;
-          case 3:
-            this.readFunctionSection(functionTypeIndices);
-            break;
-          case 4:
-            this.readTableSection(module);
-            break;
-          case 5:
-            this.readMemorySection(module);
-            break;
-          case 6:
-            this.readGlobalSection(module);
-            break;
-          case 7:
-            this.readExportSection(module);
-            break;
-          case 8:
-            module.start = this.readVarUInt32();
-            break;
-          case 9:
-            this.readElementSection(module);
-            break;
-          case 10:
-            this.readCodeSection(module, functionTypeIndices);
-            break;
-          case 11:
-            this.readDataSection(module);
-            break;
-          default:
-            this.offset = sectionEnd;
-            break;
-        }
-        this.offset = sectionEnd;
-      }
-      return module;
-    }
-    readCustomSection(module, sectionEnd) {
-      const nameLen = this.readVarUInt32();
-      const name = this.readString(nameLen);
-      if (name === "name") {
-        module.nameSection = this.readNameSection(sectionEnd);
-        return;
-      }
-      const remaining = sectionEnd - this.offset;
-      const data = this.readBytes(remaining);
-      module.customSections.push({ name, data });
-    }
-    readNameSection(sectionEnd) {
-      const info = {};
-      while (this.offset < sectionEnd) {
-        const subsectionId = this.readVarUInt7();
-        const subsectionSize = this.readVarUInt32();
-        const subsectionEnd = this.offset + subsectionSize;
-        switch (subsectionId) {
-          case 0: {
-            const len = this.readVarUInt32();
-            info.moduleName = this.readString(len);
-            break;
-          }
-          case 1: {
-            const count = this.readVarUInt32();
-            info.functionNames = /* @__PURE__ */ new Map();
-            for (let i = 0; i < count; i++) {
-              const index = this.readVarUInt32();
-              const len = this.readVarUInt32();
-              info.functionNames.set(index, this.readString(len));
-            }
-            break;
-          }
-          case 2: {
-            const funcCount = this.readVarUInt32();
-            info.localNames = /* @__PURE__ */ new Map();
-            for (let i = 0; i < funcCount; i++) {
-              const funcIndex = this.readVarUInt32();
-              const localCount = this.readVarUInt32();
-              const locals = /* @__PURE__ */ new Map();
-              for (let j = 0; j < localCount; j++) {
-                const localIndex = this.readVarUInt32();
-                const len = this.readVarUInt32();
-                locals.set(localIndex, this.readString(len));
-              }
-              info.localNames.set(funcIndex, locals);
-            }
-            break;
-          }
-          case 7: {
-            const count = this.readVarUInt32();
-            info.globalNames = /* @__PURE__ */ new Map();
-            for (let i = 0; i < count; i++) {
-              const index = this.readVarUInt32();
-              const len = this.readVarUInt32();
-              info.globalNames.set(index, this.readString(len));
-            }
-            break;
-          }
-          default:
-            this.offset = subsectionEnd;
-            break;
-        }
-        this.offset = subsectionEnd;
-      }
-      return info;
-    }
-    readTypeSection(module) {
-      const count = this.readVarUInt32();
-      for (let i = 0; i < count; i++) {
-        const form = this.readVarInt7();
-        const paramCount = this.readVarUInt32();
-        const parameterTypes = [];
-        for (let j = 0; j < paramCount; j++) {
-          parameterTypes.push(this.readValueType());
-        }
-        const returnCount = this.readVarUInt32();
-        const returnTypes = [];
-        for (let j = 0; j < returnCount; j++) {
-          returnTypes.push(this.readValueType());
-        }
-        module.types.push({ parameterTypes, returnTypes });
-      }
-    }
-    readImportSection(module) {
-      const count = this.readVarUInt32();
-      for (let i = 0; i < count; i++) {
-        const moduleNameLen = this.readVarUInt32();
-        const moduleName = this.readString(moduleNameLen);
-        const fieldNameLen = this.readVarUInt32();
-        const fieldName = this.readString(fieldNameLen);
-        const kind = this.readUInt8();
-        const imp = { moduleName, fieldName, kind };
-        switch (kind) {
-          case 0:
-            imp.typeIndex = this.readVarUInt32();
-            break;
-          case 1: {
-            const elementType = this.readVarInt7();
-            const { initial, maximum } = this.readResizableLimits();
-            imp.tableType = { elementType, initial, maximum };
-            break;
-          }
-          case 2: {
-            const { initial, maximum } = this.readResizableLimits();
-            imp.memoryType = { initial, maximum };
-            break;
-          }
-          case 3: {
-            const valueType = this.readVarInt7();
-            const mutable = this.readVarUInt1() === 1;
-            imp.globalType = { valueType, mutable };
-            break;
-          }
-        }
-        module.imports.push(imp);
-      }
-    }
-    readFunctionSection(functionTypeIndices) {
-      const count = this.readVarUInt32();
-      for (let i = 0; i < count; i++) {
-        functionTypeIndices.push(this.readVarUInt32());
-      }
-    }
-    readTableSection(module) {
-      const count = this.readVarUInt32();
-      for (let i = 0; i < count; i++) {
-        const elementType = this.readVarInt7();
-        const { initial, maximum } = this.readResizableLimits();
-        module.tables.push({ elementType, initial, maximum });
-      }
-    }
-    readMemorySection(module) {
-      const count = this.readVarUInt32();
-      for (let i = 0; i < count; i++) {
-        const { initial, maximum } = this.readResizableLimits();
-        module.memories.push({ initial, maximum });
-      }
-    }
-    readGlobalSection(module) {
-      const count = this.readVarUInt32();
-      for (let i = 0; i < count; i++) {
-        const valueType = this.readVarInt7();
-        const mutable = this.readVarUInt1() === 1;
-        const initExpr = this.readInitExpr();
-        module.globals.push({ valueType, mutable, initExpr });
-      }
-    }
-    readExportSection(module) {
-      const count = this.readVarUInt32();
-      for (let i = 0; i < count; i++) {
-        const nameLen = this.readVarUInt32();
-        const name = this.readString(nameLen);
-        const kind = this.readUInt8();
-        const index = this.readVarUInt32();
-        module.exports.push({ name, kind, index });
-      }
-    }
-    readElementSection(module) {
-      const count = this.readVarUInt32();
-      for (let i = 0; i < count; i++) {
-        const tableIndex = this.readVarUInt32();
-        const offsetExpr = this.readInitExpr();
-        const numElems = this.readVarUInt32();
-        const functionIndices = [];
-        for (let j = 0; j < numElems; j++) {
-          functionIndices.push(this.readVarUInt32());
-        }
-        module.elements.push({ tableIndex, offsetExpr, functionIndices });
-      }
-    }
-    readCodeSection(module, functionTypeIndices) {
-      const count = this.readVarUInt32();
-      for (let i = 0; i < count; i++) {
-        const bodySize = this.readVarUInt32();
-        const bodyEnd = this.offset + bodySize;
-        const localCount = this.readVarUInt32();
-        const locals = [];
-        for (let j = 0; j < localCount; j++) {
-          const lCount = this.readVarUInt32();
-          const type = this.readVarInt7();
-          locals.push({ count: lCount, type });
-        }
-        const bodyLength = bodyEnd - this.offset;
-        const body = this.readBytes(bodyLength);
-        module.functions.push({
-          typeIndex: functionTypeIndices[i],
-          locals,
-          body
-        });
-        this.offset = bodyEnd;
-      }
-    }
-    readDataSection(module) {
-      const count = this.readVarUInt32();
-      for (let i = 0; i < count; i++) {
-        const memoryIndex = this.readVarUInt32();
-        const offsetExpr = this.readInitExpr();
-        const dataSize = this.readVarUInt32();
-        const data = this.readBytes(dataSize);
-        module.data.push({ memoryIndex, offsetExpr, data });
-      }
-    }
-    readInitExpr() {
-      const start = this.offset;
-      while (this.offset < this.buffer.length) {
-        const byte = this.buffer[this.offset++];
-        if (byte === OpCodes_default.end.value) {
-          break;
-        }
-        switch (byte) {
-          case OpCodes_default.i32_const.value:
-            this.readVarInt32();
-            break;
-          case OpCodes_default.i64_const.value:
-            this.readVarInt64();
-            break;
-          case OpCodes_default.f32_const.value:
-            this.offset += 4;
-            break;
-          case OpCodes_default.f64_const.value:
-            this.offset += 8;
-            break;
-          case OpCodes_default.get_global.value:
-            this.readVarUInt32();
-            break;
-        }
-      }
-      return this.buffer.slice(start, this.offset);
-    }
-    readResizableLimits() {
-      const flags = this.readVarUInt1();
-      const initial = this.readVarUInt32();
-      const maximum = flags === 1 ? this.readVarUInt32() : null;
-      return { initial, maximum };
-    }
-    readValueType() {
-      const value = this.readVarInt7();
-      switch (value) {
-        case -1:
-          return ValueType.Int32;
-        case -2:
-          return ValueType.Int64;
-        case -3:
-          return ValueType.Float32;
-        case -4:
-          return ValueType.Float64;
-        default:
-          throw new Error(`Unknown value type: 0x${(value & 255).toString(16)}`);
-      }
-    }
-    // --- Primitive readers ---
-    readUInt8() {
-      return this.buffer[this.offset++];
-    }
-    readUInt32() {
-      const value = this.buffer[this.offset] | this.buffer[this.offset + 1] << 8 | this.buffer[this.offset + 2] << 16 | this.buffer[this.offset + 3] << 24;
-      this.offset += 4;
-      return value >>> 0;
-    }
-    readVarUInt1() {
-      return this.buffer[this.offset++] & 1;
-    }
-    readVarUInt7() {
-      return this.buffer[this.offset++] & 127;
-    }
-    readVarUInt32() {
-      let result = 0;
-      let shift = 0;
-      let byte;
-      do {
-        byte = this.buffer[this.offset++];
-        result |= (byte & 127) << shift;
-        shift += 7;
-      } while (byte & 128);
-      return result >>> 0;
-    }
-    readVarInt7() {
-      const byte = this.buffer[this.offset++];
-      return byte & 64 ? byte | 4294967168 : byte & 127;
-    }
-    readVarInt32() {
-      let result = 0;
-      let shift = 0;
-      let byte;
-      do {
-        byte = this.buffer[this.offset++];
-        result |= (byte & 127) << shift;
-        shift += 7;
-      } while (byte & 128);
-      if (shift < 32 && byte & 64) {
-        result |= -(1 << shift);
-      }
-      return result;
-    }
-    readVarInt64() {
-      let result = 0n;
-      let shift = 0n;
-      let byte;
-      do {
-        byte = this.buffer[this.offset++];
-        result |= BigInt(byte & 127) << shift;
-        shift += 7n;
-      } while (byte & 128);
-      if (shift < 64n && byte & 64) {
-        result |= -(1n << shift);
-      }
-      return result;
-    }
-    readString(length) {
-      const bytes = this.buffer.slice(this.offset, this.offset + length);
-      this.offset += length;
-      return new TextDecoder().decode(bytes);
-    }
-    readBytes(length) {
-      const bytes = this.buffer.slice(this.offset, this.offset + length);
-      this.offset += length;
-      return bytes;
-    }
-  };
-
-  // src/CustomSectionBuilder.ts
-  var CustomSectionBuilder = class {
-    constructor(name, data) {
-      this.name = name;
-      this.type = SectionType.createCustom(name);
-      this._data = data || new Uint8Array(0);
-    }
-    write(writer) {
-      const sectionWriter = new BinaryWriter();
-      sectionWriter.writeLenPrefixedString(this.name);
-      if (this._data.length > 0) {
-        sectionWriter.writeBytes(this._data);
-      }
-      writer.writeVarUInt7(0);
-      writer.writeVarUInt32(sectionWriter.length);
-      writer.writeBytes(sectionWriter);
-    }
-    toBytes() {
-      const buffer = new BinaryWriter();
-      this.write(buffer);
-      return buffer.toArray();
-    }
-  };
-
-  // src/FunctionParameterBuilder.ts
-  var FunctionParameterBuilder = class {
-    constructor(valueType, index) {
-      this.name = null;
-      this.valueType = valueType;
-      this.index = index;
-    }
-    withName(name) {
-      this.name = name;
-      return this;
-    }
-  };
-
-  // src/LocalBuilder.ts
-  var LocalBuilder = class {
-    constructor(valueType, name, index, count) {
-      this.index = index;
-      this.valueType = valueType;
-      this.name = name;
-      this.count = count;
-    }
-    write(writer) {
-      writer.writeVarUInt32(this.count);
-      writer.writeVarInt7(this.valueType.value);
-    }
-    toBytes() {
-      const buffer = new BinaryWriter();
-      this.write(buffer);
-      return buffer.toArray();
-    }
-  };
-
-  // src/GlobalType.ts
-  var GlobalType = class {
-    constructor(valueType, mutable) {
-      this._valueType = valueType;
-      this._mutable = mutable;
-    }
-    get valueType() {
-      return this._valueType;
-    }
-    get mutable() {
-      return this._mutable;
-    }
-    write(writer) {
-      writer.writeVarInt7(this._valueType.value);
-      writer.writeVarUInt1(this._mutable ? 1 : 0);
-    }
-    toBytes() {
-      const buffer = new BinaryWriter();
-      this.write(buffer);
-      return buffer.toArray();
-    }
-  };
-
-  // src/GlobalBuilder.ts
-  var GlobalBuilder = class _GlobalBuilder {
-    constructor(moduleBuilder, valueType, mutable, index) {
-      this._initExpressionEmitter = null;
-      this.name = null;
-      this._moduleBuilder = moduleBuilder;
-      this._globalType = new GlobalType(valueType, mutable);
-      this._index = index;
-    }
-    withName(name) {
-      this.name = name;
-      return this;
-    }
-    get globalType() {
-      return this._globalType;
-    }
-    get valueType() {
-      return this._globalType.valueType;
-    }
-    createInitEmitter(callback) {
-      if (this._initExpressionEmitter) {
-        throw new Error("Initialization expression emitter has already been created.");
-      }
-      this._initExpressionEmitter = new InitExpressionEmitter(
-        "Global" /* Global */,
-        this.valueType,
-        this._moduleBuilder.features,
-        this._moduleBuilder.disableVerification
-      );
-      if (callback) {
-        callback(this._initExpressionEmitter);
-        this._initExpressionEmitter.end();
-      }
-      return this._initExpressionEmitter;
-    }
-    value(value) {
-      if (typeof value === "function") {
-        this.createInitEmitter(value);
-      } else if (value instanceof _GlobalBuilder) {
-        this.createInitEmitter((asm) => {
-          asm.get_global(value);
-        });
-      } else if (typeof value === "number" || typeof value === "bigint") {
-        this.createInitEmitter((asm) => {
-          const vt = this.valueType;
-          if (vt === ValueType.Int32) {
-            asm.const_i32(Number(value));
-          } else if (vt === ValueType.Int64) {
-            asm.const_i64(BigInt(value));
-          } else if (vt === ValueType.Float32) {
-            asm.const_f32(Number(value));
-          } else if (vt === ValueType.Float64) {
-            asm.const_f64(Number(value));
-          } else {
-            throw new Error(`Unsupported global value type: ${vt.name}`);
-          }
-        });
-      } else {
-        throw new Error("Unsupported global value.");
-      }
-    }
-    withExport(name) {
-      this._moduleBuilder.exportGlobal(this, name);
-      return this;
-    }
-    write(writer) {
-      if (!this._initExpressionEmitter) {
-        throw new Error("The initialization expression was not defined.");
-      }
-      this._globalType.write(writer);
-      this._initExpressionEmitter.write(writer);
-    }
-    toBytes() {
-      const buffer = new BinaryWriter();
-      this.write(buffer);
-      return buffer.toArray();
-    }
-  };
-
-  // src/ImportBuilder.ts
-  var ImportBuilder = class {
-    constructor(moduleName, fieldName, externalKind, data, index) {
-      this.moduleName = moduleName;
-      this.fieldName = fieldName;
-      this.externalKind = externalKind;
-      this.data = data;
-      this.index = index;
-    }
-    write(writer) {
-      writer.writeVarUInt32(this.moduleName.length);
-      writer.writeString(this.moduleName);
-      writer.writeVarUInt32(this.fieldName.length);
-      writer.writeString(this.fieldName);
-      writer.writeUInt8(this.externalKind.value);
-      switch (this.externalKind) {
-        case ExternalKind.Function:
-          writer.writeVarUInt32(this.data.index);
-          break;
-        case ExternalKind.Global:
-        case ExternalKind.Memory:
-        case ExternalKind.Table:
-          this.data.write(writer);
-          break;
-        default:
-          throw new Error("Unknown external kind.");
-      }
-    }
-    toBytes() {
-      const buffer = new BinaryWriter();
-      this.write(buffer);
-      return buffer.toArray();
-    }
-  };
-
-  // src/ImmediateEncoder.ts
-  var ImmediateEncoder = class _ImmediateEncoder {
-    static encodeBlockSignature(writer, blockType) {
-      writer.writeVarInt7(blockType.value);
-    }
-    static encodeRelativeDepth(writer, label, depth) {
-      const relativeDepth = depth - label.block.depth;
-      writer.writeVarInt7(relativeDepth);
-    }
-    static encodeBranchTable(writer, defaultLabel, labels) {
-      writer.writeVarUInt32(labels.length);
-      labels.forEach((x) => {
-        writer.writeVarUInt32(x);
-      });
-      writer.writeVarUInt32(defaultLabel);
-    }
-    static encodeFunction(writer, func) {
-      let functionIndex = 0;
-      if (func instanceof ImportBuilder) {
-        functionIndex = func.index;
-      } else if (typeof func === "object" && func !== null && "_index" in func) {
-        functionIndex = func._index;
-      } else if (typeof func === "number") {
-        functionIndex = func;
-      } else {
-        throw new Error(
-          "Function argument must either be the index of the function or a FunctionBuilder."
-        );
-      }
-      writer.writeVarUInt32(functionIndex);
-    }
-    static encodeIndirectFunction(writer, funcType) {
-      writer.writeVarUInt32(funcType.index);
-      writer.writeVarUInt1(0);
-    }
-    static encodeLocal(writer, local) {
-      Arg.notNull("local", local);
-      let localIndex = 0;
-      if (local instanceof LocalBuilder) {
-        localIndex = local.index;
-      } else if (local instanceof FunctionParameterBuilder) {
-        localIndex = local.index;
-      } else if (typeof local === "number") {
-        localIndex = local;
-      } else {
-        throw new Error(
-          "Local argument must either be the index of the local variable or a LocalBuilder."
-        );
-      }
-      writer.writeVarUInt32(localIndex);
-    }
-    static encodeGlobal(writer, global) {
-      Arg.notNull("global", global);
-      let globalIndex = 0;
-      if (global instanceof GlobalBuilder) {
-        globalIndex = global._index;
-      } else if (global instanceof ImportBuilder) {
-        if (global.externalKind !== ExternalKind.Global) {
-          throw new Error("Import external kind must be global.");
-        }
-        globalIndex = global.index;
-      } else if (typeof global === "number") {
-        globalIndex = global;
-      } else {
-        throw new Error(
-          "Global argument must either be the index of the global variable, GlobalBuilder, or an ImportBuilder."
-        );
-      }
-      writer.writeVarUInt32(globalIndex);
-    }
-    static encodeFloat32(writer, value) {
-      writer.writeFloat32(value);
-    }
-    static encodeFloat64(writer, value) {
-      writer.writeFloat64(value);
-    }
-    static encodeVarInt32(writer, value) {
-      writer.writeVarInt32(value);
-    }
-    static encodeVarInt64(writer, value) {
-      writer.writeVarInt64(value);
-    }
-    static encodeVarUInt32(writer, value) {
-      writer.writeVarUInt32(value);
-    }
-    static encodeVarUInt1(writer, value) {
-      writer.writeVarUInt1(value);
-    }
-    static encodeMemoryImmediate(writer, alignment, offset) {
-      writer.writeVarUInt32(alignment);
-      writer.writeVarUInt32(offset);
-    }
-    static encodeV128Const(writer, bytes) {
-      for (let i = 0; i < 16; i++) {
-        writer.writeByte(bytes[i]);
-      }
-    }
-    static encodeLaneIndex(writer, index) {
-      writer.writeByte(index);
-    }
-    static encodeShuffleMask(writer, mask) {
-      for (let i = 0; i < 16; i++) {
-        writer.writeByte(mask[i]);
-      }
-    }
-    static encodeTypeIndexField(writer, typeIndex, fieldIndex) {
-      writer.writeVarUInt32(typeIndex);
-      writer.writeVarUInt32(fieldIndex);
-    }
-    static encodeTypeIndexIndex(writer, typeIndex, index) {
-      writer.writeVarUInt32(typeIndex);
-      writer.writeVarUInt32(index);
-    }
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    static encodeHeapType(writer, heapType) {
-      if (typeof heapType === "number") {
-        writer.writeVarInt32(heapType);
-      } else if (heapType && typeof heapType.value === "number") {
-        writer.writeVarInt7(heapType.value);
-      } else if (heapType && typeof heapType.index === "number") {
-        writer.writeVarInt32(heapType.index);
-      } else {
-        throw new Error("Invalid heap type argument.");
-      }
-    }
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    static encodeBrOnCast(writer, flags, labelBuilder, heapType1, heapType2) {
-      writer.writeByte(flags);
-      const relativeDepth = labelBuilder;
-      writer.writeVarUInt32(typeof relativeDepth === "number" ? relativeDepth : 0);
-      _ImmediateEncoder.encodeHeapType(writer, heapType1);
-      _ImmediateEncoder.encodeHeapType(writer, heapType2);
-    }
-  };
-
-  // src/Immediate.ts
-  var Immediate = class _Immediate {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    constructor(type, values) {
-      Arg.notNull("type", type);
-      Arg.notNull("values", values);
-      this.type = type;
-      this.values = values;
-    }
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    static createBlockSignature(blockType) {
-      return new _Immediate("BlockSignature" /* BlockSignature */, [blockType]);
-    }
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    static createBranchTable(defaultLabel, labels, depth) {
-      const relativeDepths = labels.map((x) => {
-        return depth - x.block.depth;
-      });
-      const defaultLabelDepth = depth - defaultLabel.block.depth;
-      return new _Immediate("BranchTable" /* BranchTable */, [defaultLabelDepth, relativeDepths]);
-    }
-    static createFloat32(value) {
-      return new _Immediate("Float32" /* Float32 */, [value]);
-    }
-    static createFloat64(value) {
-      return new _Immediate("Float64" /* Float64 */, [value]);
-    }
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    static createFunction(functionBuilder) {
-      return new _Immediate("Function" /* Function */, [functionBuilder]);
-    }
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    static createGlobal(globalBuilder) {
-      return new _Immediate("Global" /* Global */, [globalBuilder]);
-    }
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    static createIndirectFunction(functionTypeBuilder) {
-      return new _Immediate("IndirectFunction" /* IndirectFunction */, [functionTypeBuilder]);
-    }
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    static createLocal(local) {
-      return new _Immediate("Local" /* Local */, [local]);
-    }
-    static createMemoryImmediate(alignment, offset) {
-      return new _Immediate("MemoryImmediate" /* MemoryImmediate */, [alignment, offset]);
-    }
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    static createRelativeDepth(label, depth) {
-      return new _Immediate("RelativeDepth" /* RelativeDepth */, [label, depth]);
-    }
-    static createVarUInt1(value) {
-      return new _Immediate("VarUInt1" /* VarUInt1 */, [value]);
-    }
-    static createVarInt32(value) {
-      return new _Immediate("VarInt32" /* VarInt32 */, [value]);
-    }
-    static createVarInt64(value) {
-      return new _Immediate("VarInt64" /* VarInt64 */, [value]);
-    }
-    static createVarUInt32(value) {
-      return new _Immediate("VarUInt32" /* VarUInt32 */, [value]);
-    }
-    static createV128Const(bytes) {
-      if (bytes.length !== 16) {
-        throw new Error("V128 constant must be exactly 16 bytes.");
-      }
-      return new _Immediate("V128Const" /* V128Const */, [bytes]);
-    }
-    static createLaneIndex(index) {
-      return new _Immediate("LaneIndex" /* LaneIndex */, [index]);
-    }
-    static createShuffleMask(mask) {
-      if (mask.length !== 16) {
-        throw new Error("Shuffle mask must be exactly 16 bytes.");
-      }
-      return new _Immediate("ShuffleMask" /* ShuffleMask */, [mask]);
-    }
-    static createTypeIndexField(typeIndex, fieldIndex) {
-      return new _Immediate("TypeIndexField" /* TypeIndexField */, [typeIndex, fieldIndex]);
-    }
-    static createTypeIndexIndex(typeIndex, index) {
-      return new _Immediate("TypeIndexIndex" /* TypeIndexIndex */, [typeIndex, index]);
-    }
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    static createHeapType(heapType) {
-      return new _Immediate("HeapType" /* HeapType */, [heapType]);
-    }
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    static createBrOnCast(flags, labelBuilder, heapType1, heapType2) {
-      return new _Immediate("BrOnCast" /* BrOnCast */, [flags, labelBuilder, heapType1, heapType2]);
-    }
-    writeBytes(writer) {
-      switch (this.type) {
-        case "BlockSignature" /* BlockSignature */:
-          ImmediateEncoder.encodeBlockSignature(writer, this.values[0]);
-          break;
-        case "BranchTable" /* BranchTable */:
-          ImmediateEncoder.encodeBranchTable(writer, this.values[0], this.values[1]);
-          break;
-        case "Float32" /* Float32 */:
-          ImmediateEncoder.encodeFloat32(writer, this.values[0]);
-          break;
-        case "Float64" /* Float64 */:
-          ImmediateEncoder.encodeFloat64(writer, this.values[0]);
-          break;
-        case "Function" /* Function */:
-          ImmediateEncoder.encodeFunction(writer, this.values[0]);
-          break;
-        case "Global" /* Global */:
-          ImmediateEncoder.encodeGlobal(writer, this.values[0]);
-          break;
-        case "IndirectFunction" /* IndirectFunction */:
-          ImmediateEncoder.encodeIndirectFunction(writer, this.values[0]);
-          break;
-        case "Local" /* Local */:
-          ImmediateEncoder.encodeLocal(writer, this.values[0]);
-          break;
-        case "MemoryImmediate" /* MemoryImmediate */:
-          ImmediateEncoder.encodeMemoryImmediate(writer, this.values[0], this.values[1]);
-          break;
-        case "RelativeDepth" /* RelativeDepth */:
-          ImmediateEncoder.encodeRelativeDepth(writer, this.values[0], this.values[1]);
-          break;
-        case "VarInt32" /* VarInt32 */:
-          ImmediateEncoder.encodeVarInt32(writer, this.values[0]);
-          break;
-        case "VarInt64" /* VarInt64 */:
-          ImmediateEncoder.encodeVarInt64(writer, this.values[0]);
-          break;
-        case "VarUInt1" /* VarUInt1 */:
-          ImmediateEncoder.encodeVarUInt1(writer, this.values[0]);
-          break;
-        case "VarUInt32" /* VarUInt32 */:
-          ImmediateEncoder.encodeVarUInt32(writer, this.values[0]);
-          break;
-        case "V128Const" /* V128Const */:
-          ImmediateEncoder.encodeV128Const(writer, this.values[0]);
-          break;
-        case "LaneIndex" /* LaneIndex */:
-          ImmediateEncoder.encodeLaneIndex(writer, this.values[0]);
-          break;
-        case "ShuffleMask" /* ShuffleMask */:
-          ImmediateEncoder.encodeShuffleMask(writer, this.values[0]);
-          break;
-        case "TypeIndexField" /* TypeIndexField */:
-          ImmediateEncoder.encodeTypeIndexField(writer, this.values[0], this.values[1]);
-          break;
-        case "TypeIndexIndex" /* TypeIndexIndex */:
-          ImmediateEncoder.encodeTypeIndexIndex(writer, this.values[0], this.values[1]);
-          break;
-        case "HeapType" /* HeapType */:
-          ImmediateEncoder.encodeHeapType(writer, this.values[0]);
-          break;
-        case "BrOnCast" /* BrOnCast */:
-          ImmediateEncoder.encodeBrOnCast(writer, this.values[0], this.values[1], this.values[2], this.values[3]);
-          break;
-        default:
-          throw new Error("Cannot encode unknown operand type.");
-      }
-    }
-    toBytes() {
-      const buffer = new BinaryWriter();
-      this.writeBytes(buffer);
-      return buffer.toArray();
-    }
-  };
-
-  // src/Instruction.ts
-  var Instruction = class {
-    constructor(opCode, immediate) {
-      Arg.notNull("opCode", opCode);
-      this.opCode = opCode;
-      this.immediate = immediate;
-    }
-    write(writer) {
-      if (this.opCode.prefix !== void 0) {
-        writer.writeByte(this.opCode.prefix);
-        writer.writeVarUInt32(this.opCode.value);
-      } else {
-        writer.writeByte(this.opCode.value);
-      }
-      if (this.immediate) {
-        this.immediate.writeBytes(writer);
-      }
-    }
-    toBytes() {
-      const buffer = new BinaryWriter();
-      this.write(buffer);
-      return buffer.toArray();
-    }
-  };
-
-  // src/LabelBuilder.ts
-  var LabelBuilder = class {
-    constructor() {
-      this.resolved = false;
-      this.block = null;
-    }
-    get isResolved() {
-      return this.resolved;
-    }
-    resolve(block) {
-      this.block = block;
-      this.resolved = true;
-    }
-    reference(block) {
-      if (this.isResolved) {
-        throw new Error("Cannot add a reference to a label that has been resolved.");
-      }
-      this.block = block;
-    }
-  };
-
   // src/OpCodeEmitter.ts
   var OpCodeEmitter = class {
     unreachable() {
@@ -6356,29 +5917,29 @@ var webasmPlayground = (() => {
     end() {
       return this.emit(OpCodes_default.end);
     }
-    br(labelBuilder) {
-      return this.emit(OpCodes_default.br, labelBuilder);
+    br(label) {
+      return this.emit(OpCodes_default.br, label);
     }
-    br_if(labelBuilder) {
-      return this.emit(OpCodes_default.br_if, labelBuilder);
+    br_if(label) {
+      return this.emit(OpCodes_default.br_if, label);
     }
-    br_table(defaultLabelBuilder, ...labelBuilders) {
-      return this.emit(OpCodes_default.br_table, defaultLabelBuilder, labelBuilders);
+    br_table(defaultLabel, ...labels) {
+      return this.emit(OpCodes_default.br_table, defaultLabel, labels);
     }
     return() {
       return this.emit(OpCodes_default.return);
     }
-    call(functionBuilder) {
-      return this.emit(OpCodes_default.call, functionBuilder);
+    call(func) {
+      return this.emit(OpCodes_default.call, func);
     }
-    call_indirect(funcTypeBuilder) {
-      return this.emit(OpCodes_default.call_indirect, funcTypeBuilder);
+    call_indirect(funcType) {
+      return this.emit(OpCodes_default.call_indirect, funcType);
     }
-    return_call(functionBuilder) {
-      return this.emit(OpCodes_default.return_call, functionBuilder);
+    return_call(func) {
+      return this.emit(OpCodes_default.return_call, func);
     }
-    return_call_indirect(funcTypeBuilder) {
-      return this.emit(OpCodes_default.return_call_indirect, funcTypeBuilder);
+    return_call_indirect(funcType) {
+      return this.emit(OpCodes_default.return_call_indirect, funcType);
     }
     delegate(varUInt32) {
       return this.emit(OpCodes_default.delegate, varUInt32);
@@ -6938,8 +6499,8 @@ var webasmPlayground = (() => {
     ref_is_null() {
       return this.emit(OpCodes_default.ref_is_null);
     }
-    ref_func(functionBuilder) {
-      return this.emit(OpCodes_default.ref_func, functionBuilder);
+    ref_func(func) {
+      return this.emit(OpCodes_default.ref_func, func);
     }
     table_get(varUInt32) {
       return this.emit(OpCodes_default.table_get, varUInt32);
@@ -7988,11 +7549,11 @@ var webasmPlayground = (() => {
     ref_cast_null(heapType) {
       return this.emit(OpCodes_default.ref_cast_null, heapType);
     }
-    br_on_cast(flags, labelBuilder, heapType1, heapType2) {
-      return this.emit(OpCodes_default.br_on_cast, flags, labelBuilder, heapType1, heapType2);
+    br_on_cast(flags, label, heapType1, heapType2) {
+      return this.emit(OpCodes_default.br_on_cast, flags, label, heapType1, heapType2);
     }
-    br_on_cast_fail(flags, labelBuilder, heapType1, heapType2) {
-      return this.emit(OpCodes_default.br_on_cast_fail, flags, labelBuilder, heapType1, heapType2);
+    br_on_cast_fail(flags, label, heapType1, heapType2) {
+      return this.emit(OpCodes_default.br_on_cast_fail, flags, label, heapType1, heapType2);
     }
     any_convert_extern() {
       return this.emit(OpCodes_default.any_convert_extern);
@@ -8013,7 +7574,7 @@ var webasmPlayground = (() => {
 
   // src/verification/ControlFlowBlock.ts
   var ControlFlowBlock = class {
-    constructor(stack, blockType, parent, index, depth, childrenCount, isLoop = false) {
+    constructor(stack, blockType, parent, index, depth, childrenCount, isLoop = false, isTry = false) {
       this.stack = stack;
       this.blockType = blockType;
       this.parent = parent;
@@ -8021,6 +7582,8 @@ var webasmPlayground = (() => {
       this.depth = depth;
       this.childrenCount = childrenCount;
       this.isLoop = isLoop;
+      this.isTry = isTry;
+      this.inCatchHandler = false;
     }
     canReference(block) {
       if (this.depth > block.depth) {
@@ -8067,7 +7630,7 @@ var webasmPlayground = (() => {
     get size() {
       return this._stack.length;
     }
-    push(operandStack, blockType, label = null, isLoop = false) {
+    push(operandStack, blockType, label = null, isLoop = false, isTry = false) {
       const current = this.peek();
       if (label) {
         if (!this._disableVerification && label.isResolved) {
@@ -8095,7 +7658,8 @@ var webasmPlayground = (() => {
         current.block.childrenCount++,
         current.block.depth + 1,
         0,
-        isLoop
+        isLoop,
+        isTry
       );
       label.resolve(block);
       this._stack.push(label);
@@ -8259,32 +7823,83 @@ var webasmPlayground = (() => {
   };
 
   // src/verification/OperandStackVerifier.ts
+  var heapTypeToValueType = {
+    112: ValueType.FuncRef,
+    111: ValueType.ExternRef,
+    110: ValueType.AnyRef,
+    109: ValueType.EqRef,
+    108: ValueType.I31Ref,
+    107: ValueType.StructRef,
+    106: ValueType.ArrayRef,
+    113: ValueType.NullRef,
+    115: ValueType.NullFuncRef,
+    114: ValueType.NullExternRef
+  };
+  var _refTypes = /* @__PURE__ */ new Set([
+    ValueType.FuncRef,
+    ValueType.ExternRef,
+    ValueType.AnyRef,
+    ValueType.EqRef,
+    ValueType.I31Ref,
+    ValueType.StructRef,
+    ValueType.ArrayRef,
+    ValueType.NullRef,
+    ValueType.NullFuncRef,
+    ValueType.NullExternRef
+  ]);
+  function _isRefType(vt) {
+    return _refTypes.has(vt);
+  }
   var OperandStackVerifier = class {
-    constructor(funcType) {
+    constructor(funcType, typeResolver, memory64) {
       this._operandStack = OperandStack.Empty;
       this._instructionCount = 0;
       this._funcType = funcType;
+      this._unreachable = false;
+      this._typeResolver = typeResolver || null;
+      this._memory64 = memory64 || false;
     }
     get stack() {
       return this._operandStack;
     }
     verifyInstruction(controlBlock, opCode, immediate) {
+      if (this._unreachable) {
+        if (opCode.controlFlow === "Pop" /* Pop */) {
+          this._unreachable = false;
+          this._operandStack = controlBlock.stack;
+          if (controlBlock.blockType !== BlockType.Void) {
+            const resultType = controlBlock.blockType;
+            this._operandStack = this._operandStack.push(resultType);
+          }
+        }
+        this._instructionCount++;
+        return;
+      }
       let modifiedStack = this._operandStack;
       if (opCode.stackBehavior !== "None" /* None */) {
         modifiedStack = this._verifyStack(controlBlock, opCode, immediate);
       }
       if (opCode.controlFlow === "Pop" /* Pop */) {
         this._verifyControlFlowPop(controlBlock, modifiedStack);
-      } else if (opCode === OpCodes_default.return) {
+      } else if (opCode === OpCodes_default["return"]) {
         modifiedStack = this._verifyReturnValues(modifiedStack, true);
+        this._unreachable = true;
       }
       if (immediate && immediate.type === "RelativeDepth" /* RelativeDepth */) {
         this._verifyBranch(modifiedStack, immediate);
+      }
+      if (opCode === OpCodes_default["throw"] || opCode === OpCodes_default.rethrow || opCode === OpCodes_default.unreachable || opCode === OpCodes_default.br || opCode === OpCodes_default.br_table) {
+        this._unreachable = true;
       }
       this._operandStack = modifiedStack;
       this._instructionCount++;
     }
     verifyElse(controlBlock) {
+      if (this._unreachable) {
+        this._unreachable = false;
+        this._operandStack = controlBlock.stack;
+        return;
+      }
       if (controlBlock.blockType !== BlockType.Void) {
         if (this._operandStack.isEmpty) {
           throw new VerificationError(
@@ -8292,7 +7907,7 @@ var webasmPlayground = (() => {
           );
         }
         const expectedType = controlBlock.blockType;
-        if (this._operandStack.valueType !== expectedType) {
+        if (!this._isAssignableTo(this._operandStack.valueType, expectedType)) {
           throw new VerificationError(
             `else: expected ${expectedType.name} on the stack but found ${this._operandStack.valueType.name}.`
           );
@@ -8330,7 +7945,7 @@ var webasmPlayground = (() => {
           );
         }
         const expectedType = targetBlock.blockType;
-        if (stack.valueType !== expectedType) {
+        if (!this._isAssignableTo(stack.valueType, expectedType)) {
           throw new VerificationError(
             `Branch expects ${expectedType.name} but found ${stack.valueType.name} on the stack.`
           );
@@ -8361,7 +7976,7 @@ var webasmPlayground = (() => {
       }
       let errorMessage = "";
       for (let index = 0; index < remaining.length; index++) {
-        if (remaining[index] !== this._funcType.returnTypes[index]) {
+        if (!this._isAssignableTo(remaining[index], this._funcType.returnTypes[index])) {
           errorMessage = `A ${this._funcType.returnTypes[index].name} was expected at ${remaining.length - index} but a ${remaining[index].name} was found. `;
         }
       }
@@ -8388,6 +8003,36 @@ var webasmPlayground = (() => {
     _verifyStack(controlFlowBlock, opCode, immediate) {
       let modifiedStack = this._operandStack;
       const funcType = this._getFuncType(opCode, immediate);
+      if (opCode === OpCodes_default.ref_null && immediate) {
+        const heapType = immediate.values[0];
+        const refVt = typeof heapType === "number" && heapTypeToValueType[heapType] ? heapTypeToValueType[heapType] : ValueType.AnyRef;
+        return modifiedStack.push(refVt);
+      }
+      if (opCode === OpCodes_default.ref_is_null) {
+        return modifiedStack.pop().push(ValueType.Int32);
+      }
+      if (opCode === OpCodes_default.ref_func) {
+        return modifiedStack.push(ValueType.FuncRef);
+      }
+      if (opCode === OpCodes_default.struct_new && this._typeResolver && immediate) {
+        const typeIndex = immediate.values[0];
+        const structType = this._typeResolver.getStructType(typeIndex);
+        if (structType) {
+          for (let i = structType.fields.length - 1; i >= 0; i--) {
+            modifiedStack = modifiedStack.pop();
+          }
+        }
+        modifiedStack = modifiedStack.push(ValueType.AnyRef);
+        return modifiedStack;
+      }
+      if (opCode === OpCodes_default.array_new_fixed && immediate) {
+        const fixedLength = immediate.values[1];
+        for (let i = 0; i < fixedLength; i++) {
+          modifiedStack = modifiedStack.pop();
+        }
+        modifiedStack = modifiedStack.push(ValueType.AnyRef);
+        return modifiedStack;
+      }
       if (opCode.stackBehavior === "Pop" /* Pop */ || opCode.stackBehavior === "PopPush" /* PopPush */) {
         modifiedStack = this._verifyStackPop(modifiedStack, opCode, funcType);
       }
@@ -8411,7 +8056,7 @@ var webasmPlayground = (() => {
           continue;
         }
         const valueType = ValueType[x];
-        if (valueType !== stack.valueType) {
+        if (!this._isAssignableTo(stack.valueType, valueType)) {
           throw new VerificationError(
             `Unexpected type found on stack at offset ${this._instructionCount + 1}. A ${valueType.name} was expected but a ${stack.valueType.name} was found.`
           );
@@ -8486,8 +8131,78 @@ var webasmPlayground = (() => {
         }
         return immediate.values[0].valueType;
       }
+      if (opCode === OpCodes_default.struct_get && this._typeResolver && immediate) {
+        const typeIndex = immediate.values[0];
+        const fieldIndex = immediate.values[1];
+        const structType = this._typeResolver.getStructType(typeIndex);
+        if (structType && fieldIndex < structType.fields.length) {
+          return structType.fields[fieldIndex].type;
+        }
+      }
+      if (opCode === OpCodes_default.struct_new_default) {
+        return ValueType.AnyRef;
+      }
+      if (opCode === OpCodes_default.array_new || opCode === OpCodes_default.array_new_default || opCode === OpCodes_default.array_new_data || opCode === OpCodes_default.array_new_elem) {
+        return ValueType.AnyRef;
+      }
+      if (opCode === OpCodes_default.array_get && this._typeResolver && immediate) {
+        const typeIndex = immediate.values[0];
+        const arrayType = this._typeResolver.getArrayType(typeIndex);
+        if (arrayType) {
+          return arrayType.elementType;
+        }
+      }
+      if (opCode === OpCodes_default.ref_cast || opCode === OpCodes_default.ref_cast_null) {
+        return ValueType.AnyRef;
+      }
+      if (opCode === OpCodes_default.ref_i31) {
+        return ValueType.I31Ref;
+      }
+      if (opCode === OpCodes_default.any_convert_extern) {
+        return ValueType.AnyRef;
+      }
+      if (opCode === OpCodes_default.extern_convert_any) {
+        return ValueType.ExternRef;
+      }
+      if (opCode === OpCodes_default.br_on_cast || opCode === OpCodes_default.br_on_cast_fail) {
+        return ValueType.AnyRef;
+      }
+      if (opCode === OpCodes_default.ref_null && immediate) {
+        const heapType = immediate.values[0];
+        if (typeof heapType === "number" && heapTypeToValueType[heapType]) {
+          return heapTypeToValueType[heapType];
+        }
+        return ValueType.AnyRef;
+      }
       const stackArgTypes = this._getStackValueTypes(this._operandStack, argCount);
       return stackArgTypes[0];
+    }
+    /**
+     * Check if `actual` is assignable to `expected` considering GC reference subtyping.
+     * Subtype hierarchy: anyref ← eqref ← {i31ref, structref, arrayref}
+     * Bottom types: nullref → any, nullfuncref → funcref, nullexternref → externref
+     */
+    _isAssignableTo(actual, expected) {
+      if (actual === expected) return true;
+      if (expected === ValueType.AnyRef) {
+        return actual === ValueType.EqRef || actual === ValueType.I31Ref || actual === ValueType.StructRef || actual === ValueType.ArrayRef || actual === ValueType.NullRef;
+      }
+      if (expected === ValueType.EqRef) {
+        return actual === ValueType.I31Ref || actual === ValueType.StructRef || actual === ValueType.ArrayRef || actual === ValueType.NullRef;
+      }
+      if (expected === ValueType.FuncRef) {
+        return actual === ValueType.NullFuncRef;
+      }
+      if (expected === ValueType.ExternRef) {
+        return actual === ValueType.NullExternRef;
+      }
+      if (expected === ValueType.Int32 && _isRefType(actual)) {
+        return true;
+      }
+      if (expected === ValueType.Int32 && actual === ValueType.Int64 && this._memory64) {
+        return true;
+      }
+      return false;
     }
     _getStackValueTypes(stack, count) {
       const results = [];
@@ -8522,13 +8237,13 @@ var webasmPlayground = (() => {
     }
   };
   var AssemblyEmitter = class extends OpCodeEmitter {
-    constructor(funcSignature, options = { disableVerification: false }) {
+    constructor(funcSignature, options = { disableVerification: false }, typeResolver, memory64) {
       super();
       Arg.instanceOf("funcSignature", funcSignature, FuncTypeSignature);
       this._instructions = [];
       this._locals = [];
       this._controlFlowVerifier = new ControlFlowVerifier(options.disableVerification);
-      this._operandStackVerifier = new OperandStackVerifier(funcSignature);
+      this._operandStackVerifier = new OperandStackVerifier(funcSignature, typeResolver, memory64);
       this._entryLabel = this._controlFlowVerifier.push(
         this._operandStackVerifier.stack,
         BlockType.Void
@@ -8609,16 +8324,41 @@ var webasmPlayground = (() => {
         }
       }
       if (!this.disableVerification) {
+        if (opCode === OpCodes_default["throw"] && immediate) {
+          const tagParamTypes = this._getTagParameterTypes(immediate.values[0]);
+          if (tagParamTypes) {
+            for (let i = tagParamTypes.length - 1; i >= 0; i--) {
+              this._operandStackVerifier._operandStack = this._operandStackVerifier._operandStack.pop();
+            }
+          }
+        }
         this._operandStackVerifier.verifyInstruction(
           this._controlFlowVerifier.peek().block,
           opCode,
           immediate
         );
-        if (opCode === OpCodes_default.else) {
+        if (opCode === OpCodes_default["else"]) {
           this._operandStackVerifier.verifyElse(
             this._controlFlowVerifier.peek().block
           );
         }
+        if (opCode === OpCodes_default["catch"] || opCode === OpCodes_default.catch_all) {
+          const block = this._controlFlowVerifier.peek().block;
+          this._operandStackVerifier._operandStack = block.stack;
+          this._operandStackVerifier._unreachable = false;
+          block.inCatchHandler = true;
+          if (opCode === OpCodes_default["catch"] && immediate) {
+            const tagParamTypes = this._getTagParameterTypes(immediate.values[0]);
+            if (tagParamTypes) {
+              for (const paramType of tagParamTypes) {
+                this._operandStackVerifier._operandStack = this._operandStackVerifier._operandStack.push(paramType);
+              }
+            }
+          }
+        }
+      }
+      if (opCode === OpCodes_default.delegate) {
+        this._controlFlowVerifier.pop();
       }
       if (opCode.controlFlow) {
         result = this._updateControlFlow(opCode, immediate, pushLabel);
@@ -8635,16 +8375,21 @@ var webasmPlayground = (() => {
       if (opCode.controlFlow === "Push" /* Push */) {
         const blockType = immediate.values[0];
         const isLoop = opCode === OpCodes_default.loop;
+        const isTry = opCode === OpCodes_default["try"];
         result = this._controlFlowVerifier.push(
           this._operandStackVerifier.stack,
           blockType,
           label,
-          isLoop
+          isLoop,
+          isTry
         );
       } else if (opCode.controlFlow === "Pop" /* Pop */) {
         this._controlFlowVerifier.pop();
       }
       return result;
+    }
+    _getTagParameterTypes(_tagIndex) {
+      return null;
     }
     write(writer) {
       this._controlFlowVerifier.verify();
@@ -8739,7 +8484,7 @@ var webasmPlayground = (() => {
           return Immediate.createHeapType(values[0]);
         case "BrOnCast" /* BrOnCast */:
           validateParameters(immediateType, values, 4);
-          return Immediate.createBrOnCast(values[0], values[1], values[2], values[3]);
+          return Immediate.createBrOnCast(values[0], values[1], values[2], values[3], depth);
         default:
           throw new Error("Unknown operand type.");
       }
@@ -8937,9 +8682,33 @@ var webasmPlayground = (() => {
   };
 
   // src/FunctionEmitter.ts
+  function createTypeResolver(functionBuilder) {
+    const moduleBuilder = functionBuilder._moduleBuilder;
+    if (!moduleBuilder || !moduleBuilder._types) return void 0;
+    const types = moduleBuilder._types;
+    return {
+      getStructType(typeIndex) {
+        const t = types[typeIndex];
+        if (t && "fields" in t) return t;
+        return null;
+      },
+      getArrayType(typeIndex) {
+        const t = types[typeIndex];
+        if (t && "elementType" in t) return t;
+        return null;
+      }
+    };
+  }
   var FunctionEmitter = class extends AssemblyEmitter {
     constructor(functionBuilder, options) {
-      super(functionBuilder.funcTypeBuilder.toSignature(), options);
+      const moduleBuilder = functionBuilder._moduleBuilder;
+      const memory64 = moduleBuilder?._memories?.some((m) => m.isMemory64) || false;
+      super(
+        functionBuilder.funcTypeBuilder.toSignature(),
+        options,
+        createTypeResolver(functionBuilder),
+        memory64
+      );
       this._functionBuilder = functionBuilder;
       this._locals = [];
     }
@@ -8948,6 +8717,13 @@ var webasmPlayground = (() => {
     }
     get parameters() {
       return this._functionBuilder.parameters;
+    }
+    _getTagParameterTypes(tagIndex) {
+      const moduleBuilder = this._functionBuilder._moduleBuilder;
+      if (moduleBuilder && moduleBuilder._tags && tagIndex < moduleBuilder._tags.length) {
+        return moduleBuilder._tags[tagIndex]._funcType.parameterTypes;
+      }
+      return null;
     }
     getParameter(index) {
       if (index >= 0) {
@@ -9117,6 +8893,7 @@ var webasmPlayground = (() => {
         case ExternalKind.Global:
         case ExternalKind.Memory:
         case ExternalKind.Table:
+        case ExternalKind.Tag:
           writer.writeVarUInt32(this.data._index);
           break;
       }
@@ -9258,8 +9035,12 @@ var webasmPlayground = (() => {
       this._moduleBuilder.exportTable(this, name);
       return this;
     }
+    defineElementSegment(elements, offset) {
+      this._moduleBuilder.defineElementSegment(this, elements, offset);
+    }
+    /** @deprecated Use defineElementSegment instead */
     defineTableSegment(elements, offset) {
-      this._moduleBuilder.defineTableSegment(this, elements, offset);
+      this.defineElementSegment(elements, offset);
     }
     write(writer) {
       this._tableType.write(writer);
@@ -9324,6 +9105,96 @@ var webasmPlayground = (() => {
     }
   };
 
+  // src/ArrayTypeBuilder.ts
+  var ArrayTypeBuilder = class {
+    constructor(key, elementType, mutable, index, options) {
+      this.key = key;
+      this.elementType = elementType;
+      this.mutable = mutable;
+      this.index = index;
+      this.superTypes = options?.superTypes || [];
+      this.final = options?.final !== false;
+    }
+    get typeForm() {
+      return TypeForm.Array;
+    }
+    static createKey(elementType, mutable) {
+      return `array(${elementType.short}:${mutable ? "m" : "i"})`;
+    }
+    write(writer) {
+      if (this.superTypes.length > 0 || !this.final) {
+        writer.writeVarInt7(this.final ? TypeForm.SubFinal.value : TypeForm.Sub.value);
+        writer.writeVarUInt32(this.superTypes.length);
+        this.superTypes.forEach((st) => {
+          writer.writeVarUInt32(st.index);
+        });
+      }
+      writer.writeVarInt7(TypeForm.Array.value);
+      writeValueType(writer, this.elementType);
+      writer.writeVarUInt1(this.mutable ? 1 : 0);
+    }
+    toBytes() {
+      const buffer = new BinaryWriter();
+      this.write(buffer);
+      return buffer.toArray();
+    }
+  };
+
+  // src/RecGroupBuilder.ts
+  var RecGroupBuilder = class {
+    constructor(baseIndex) {
+      this._types = [];
+      this._baseIndex = baseIndex;
+    }
+    addStructType(fields, options) {
+      const index = this._baseIndex + this._types.length;
+      const key = StructTypeBuilder.createKey(fields);
+      const builder = new StructTypeBuilder(key, fields, index, options);
+      this._types.push(builder);
+      return builder;
+    }
+    addArrayType(elementType, mutable, options) {
+      const index = this._baseIndex + this._types.length;
+      const key = ArrayTypeBuilder.createKey(elementType, mutable);
+      const builder = new ArrayTypeBuilder(key, elementType, mutable, index, options);
+      this._types.push(builder);
+      return builder;
+    }
+    addFuncType(returnTypes, parameterTypes) {
+      const index = this._baseIndex + this._types.length;
+      const key = FuncTypeBuilder.createKey(returnTypes, parameterTypes);
+      const builder = new FuncTypeBuilder(key, returnTypes, parameterTypes, index);
+      this._types.push(builder);
+      return builder;
+    }
+    /**
+     * Create a nullable reference to a type within this group by group-relative index.
+     */
+    refNull(groupRelativeIndex) {
+      return refNullType(this._baseIndex + groupRelativeIndex);
+    }
+    /**
+     * Create a non-nullable reference to a type within this group by group-relative index.
+     */
+    ref(groupRelativeIndex) {
+      return refType(this._baseIndex + groupRelativeIndex);
+    }
+    write(writer) {
+      if (this._types.length === 1) {
+        this._types[0].write(writer);
+      } else {
+        writer.writeVarInt7(TypeForm.Rec.value);
+        writer.writeVarUInt32(this._types.length);
+        this._types.forEach((t) => t.write(writer));
+      }
+    }
+    toBytes() {
+      const buffer = new BinaryWriter();
+      this.write(buffer);
+      return buffer.toArray();
+    }
+  };
+
   // src/TextModuleWriter.ts
   var TextModuleWriter = class {
     constructor(moduleBuilder) {
@@ -9347,27 +9218,47 @@ var webasmPlayground = (() => {
       lines.push(")");
       return lines.join("\n");
     }
+    formatType(type, index) {
+      if (type instanceof FuncTypeBuilder) {
+        const params = type.parameterTypes.map((p) => p.name).join(" ");
+        const results = type.returnTypes.map((r) => r.name).join(" ");
+        let sig = `(func`;
+        if (params.length > 0) sig += ` (param ${params})`;
+        if (results.length > 0) sig += ` (result ${results})`;
+        sig += ")";
+        return `(type (;${index};) ${sig})`;
+      } else if (type instanceof StructTypeBuilder) {
+        const fields = type.fields.map((f) => {
+          const mut2 = f.mutable ? `(mut ${f.type.name})` : f.type.name;
+          return `(field $${f.name} ${mut2})`;
+        }).join(" ");
+        return `(type (;${index};) (struct ${fields}))`;
+      } else {
+        const mut2 = type.mutable ? `(mut ${type.elementType.name})` : type.elementType.name;
+        return `(type (;${index};) (array ${mut2}))`;
+      }
+    }
     writeTypes(lines, mod) {
-      mod._types.forEach((type, i) => {
-        if (type instanceof FuncTypeBuilder) {
-          const params = type.parameterTypes.map((p) => p.name).join(" ");
-          const results = type.returnTypes.map((r) => r.name).join(" ");
-          let sig = `(func`;
-          if (params.length > 0) sig += ` (param ${params})`;
-          if (results.length > 0) sig += ` (result ${results})`;
-          sig += ")";
-          lines.push(`  (type (;${i};) ${sig})`);
-        } else if (type instanceof StructTypeBuilder) {
-          const fields = type.fields.map((f) => {
-            const mut = f.mutable ? `(mut ${f.type.name})` : f.type.name;
-            return `(field $${f.name} ${mut})`;
-          }).join(" ");
-          lines.push(`  (type (;${i};) (struct ${fields}))`);
-        } else if (type instanceof ArrayTypeBuilder) {
-          const mut = type.mutable ? `(mut ${type.elementType.name})` : type.elementType.name;
-          lines.push(`  (type (;${i};) (array ${mut}))`);
+      let typeIndex = 0;
+      for (const entry of mod._typeSectionEntries) {
+        if (entry instanceof RecGroupBuilder) {
+          if (entry._types.length === 1) {
+            lines.push(`  ${this.formatType(entry._types[0], typeIndex)}`);
+            typeIndex++;
+          } else {
+            const inner = entry._types.map(
+              (t, i) => `    ${this.formatType(t, typeIndex + i)}`
+            ).join("\n");
+            lines.push(`  (rec
+${inner}
+  )`);
+            typeIndex += entry._types.length;
+          }
+        } else {
+          lines.push(`  ${this.formatType(entry, typeIndex)}`);
+          typeIndex++;
         }
-      });
+      }
     }
     writeImports(lines, mod) {
       mod._imports.forEach((imp, i) => {
@@ -9398,6 +9289,14 @@ var webasmPlayground = (() => {
             desc = globalType.mutable ? `(global (;${imp.index};) (mut ${valType}))` : `(global (;${imp.index};) ${valType})`;
             break;
           }
+          case ExternalKind.Tag: {
+            const tagFuncType = imp.data;
+            const tagParams = tagFuncType.parameterTypes.map((p) => p.name).join(" ");
+            let tagSig = "";
+            if (tagParams.length > 0) tagSig = ` (param ${tagParams})`;
+            desc = `(tag (;${imp.index};) (type ${tagFuncType.index})${tagSig})`;
+            break;
+          }
         }
         lines.push(`  (import "${imp.moduleName}" "${imp.fieldName}" ${desc})`);
       });
@@ -9425,7 +9324,7 @@ var webasmPlayground = (() => {
         if (emitter._locals.length > 0) {
           const locals = emitter._locals.map((l) => {
             if (l.count === 1) return `(local ${l.valueType.name})`;
-            return `(local ${l.valueType.name})`.repeat(l.count);
+            return Array(l.count).fill(`(local ${l.valueType.name})`).join(" ");
           });
           header += " " + locals.join(" ");
         }
@@ -9438,7 +9337,7 @@ var webasmPlayground = (() => {
       let indent = baseIndent;
       for (const instr of instructions) {
         const mnemonic = instr.opCode.mnemonic;
-        if (mnemonic === "end" || mnemonic === "else") {
+        if (mnemonic === "end" || mnemonic === "else" || mnemonic === "catch" || mnemonic === "catch_all" || mnemonic === "delegate") {
           indent = Math.max(baseIndent, indent - 1);
         }
         const prefix = "  ".repeat(indent);
@@ -9450,7 +9349,7 @@ var webasmPlayground = (() => {
           }
         }
         lines.push(line);
-        if (mnemonic === "block" || mnemonic === "loop" || mnemonic === "if" || mnemonic === "else") {
+        if (mnemonic === "block" || mnemonic === "loop" || mnemonic === "if" || mnemonic === "else" || mnemonic === "try" || mnemonic === "catch" || mnemonic === "catch_all") {
           indent++;
         }
       }
@@ -9535,8 +9434,18 @@ var webasmPlayground = (() => {
           if (ht && typeof ht.index === "number") return String(ht.index);
           return "";
         }
-        case "BrOnCast" /* BrOnCast */:
-          return `${values[0]} ${values[1]} ${values[2]} ${values[3]}`;
+        case "BrOnCast" /* BrOnCast */: {
+          const label = values[1];
+          const depth = values[4];
+          const labelDepth = typeof label === "object" && label?.block ? depth - label.block.depth : label;
+          const formatHt = (ht) => {
+            if (typeof ht === "number") return String(ht);
+            if (ht && typeof ht === "object" && "name" in ht) return ht.name;
+            if (ht && typeof ht === "object" && "index" in ht) return String(ht.index);
+            return String(ht);
+          };
+          return `${labelDepth} ${formatHt(values[2])} ${formatHt(values[3])}`;
+        }
         default:
           return "";
       }
@@ -9600,6 +9509,9 @@ var webasmPlayground = (() => {
             break;
           case ExternalKind.Global:
             kindName = "global";
+            break;
+          case ExternalKind.Tag:
+            kindName = "tag";
             break;
         }
         lines.push(`  (export "${exp.name}" (${kindName} ${index}))`);
@@ -9702,53 +9614,22 @@ var webasmPlayground = (() => {
     }
   };
 
-  // src/RecGroupBuilder.ts
-  var RecGroupBuilder = class {
-    constructor(baseIndex) {
-      this._types = [];
-      this._baseIndex = baseIndex;
-    }
-    addStructType(fields, options) {
-      const index = this._baseIndex + this._types.length;
-      const key = StructTypeBuilder.createKey(fields);
-      const builder = new StructTypeBuilder(key, fields, index, options);
-      this._types.push(builder);
-      return builder;
-    }
-    addArrayType(elementType, mutable, options) {
-      const index = this._baseIndex + this._types.length;
-      const key = ArrayTypeBuilder.createKey(elementType, mutable);
-      const builder = new ArrayTypeBuilder(key, elementType, mutable, index, options);
-      this._types.push(builder);
-      return builder;
-    }
-    addFuncType(returnTypes, parameterTypes) {
-      const index = this._baseIndex + this._types.length;
-      const key = FuncTypeBuilder.createKey(returnTypes, parameterTypes);
-      const builder = new FuncTypeBuilder(key, returnTypes, parameterTypes, index);
-      this._types.push(builder);
-      return builder;
-    }
-    /**
-     * Create a nullable reference to a type within this group by group-relative index.
-     */
-    refNull(groupRelativeIndex) {
-      return refNullType(this._baseIndex + groupRelativeIndex);
-    }
-    /**
-     * Create a non-nullable reference to a type within this group by group-relative index.
-     */
-    ref(groupRelativeIndex) {
-      return refType(this._baseIndex + groupRelativeIndex);
+  // src/CustomSectionBuilder.ts
+  var CustomSectionBuilder = class {
+    constructor(name, data) {
+      this.name = name;
+      this.type = SectionType.createCustom(name);
+      this._data = data || new Uint8Array(0);
     }
     write(writer) {
-      if (this._types.length === 1) {
-        this._types[0].write(writer);
-      } else {
-        writer.writeVarInt7(TypeForm.Rec.value);
-        writer.writeVarUInt32(this._types.length);
-        this._types.forEach((t) => t.write(writer));
+      const sectionWriter = new BinaryWriter();
+      sectionWriter.writeLenPrefixedString(this.name);
+      if (this._data.length > 0) {
+        sectionWriter.writeBytes(this._data);
       }
+      writer.writeVarUInt7(0);
+      writer.writeVarUInt32(sectionWriter.length);
+      writer.writeBytes(sectionWriter);
     }
     toBytes() {
       const buffer = new BinaryWriter();
@@ -9777,7 +9658,8 @@ var webasmPlayground = (() => {
         function: 0,
         table: 0,
         memory: 0,
-        global: 0
+        global: 0,
+        tag: 0
       };
       Arg.notNull("name", name);
       this._name = name;
@@ -9799,7 +9681,7 @@ var webasmPlayground = (() => {
     get disableVerification() {
       return this._options && this._options.disableVerification === true;
     }
-    defineFuncType(returnTypes, parameters) {
+    defineFunctionType(returnTypes, parameters) {
       let normalizedReturnTypes;
       if (!returnTypes) {
         normalizedReturnTypes = [];
@@ -9825,8 +9707,12 @@ var webasmPlayground = (() => {
       }
       return funcType;
     }
+    /** @deprecated Use defineFunctionType instead */
+    defineFuncType(returnTypes, parameters) {
+      return this.defineFunctionType(returnTypes, parameters);
+    }
     importFunction(moduleName, name, returnTypes, parameters) {
-      const funcType = this.defineFuncType(returnTypes, parameters);
+      const funcType = this.defineFunctionType(returnTypes, parameters);
       if (this._imports.some(
         (x) => x.externalKind === ExternalKind.Function && x.moduleName === moduleName && x.fieldName === name
       )) {
@@ -9911,12 +9797,32 @@ var webasmPlayground = (() => {
       });
       return importBuilder;
     }
+    importTag(moduleName, name, parameters) {
+      if (this._imports.some(
+        (x) => x.externalKind === ExternalKind.Tag && x.moduleName === moduleName && x.fieldName === name
+      )) {
+        throw new Error(`An import already exists for ${moduleName}.${name}`);
+      }
+      const funcType = this.defineFunctionType(null, parameters);
+      const importBuilder = new ImportBuilder(
+        moduleName,
+        name,
+        ExternalKind.Tag,
+        funcType,
+        this._importsIndexSpace.tag++
+      );
+      this._imports.push(importBuilder);
+      this._tags.forEach((x) => {
+        x._index++;
+      });
+      return importBuilder;
+    }
     defineFunction(name, returnTypes, parameters, createCallback) {
       const existing = this._functions.find((x) => x.name === name);
       if (existing) {
         throw new Error(`Function has already been defined with the name ${name}`);
       }
-      const funcType = this.defineFuncType(returnTypes, parameters);
+      const funcType = this.defineFunctionType(returnTypes, parameters);
       const functionBuilder = new FunctionBuilder(
         this,
         name,
@@ -9972,11 +9878,11 @@ var webasmPlayground = (() => {
       return globalBuilder;
     }
     defineTag(parameters) {
-      const funcType = this.defineFuncType(null, parameters);
+      const funcType = this.defineFunctionType(null, parameters);
       const tagBuilder = new TagBuilder(
         this,
         funcType,
-        this._tags.length
+        this._tags.length + this._importsIndexSpace.tag
       );
       this._tags.push(tagBuilder);
       return tagBuilder;
@@ -10041,13 +9947,28 @@ var webasmPlayground = (() => {
       this._exports.push(exportBuilder);
       return exportBuilder;
     }
-    defineTableSegment(table, elements, offset) {
+    exportTag(tagBuilder, name) {
+      Arg.notEmptyString("name", name);
+      if (this._exports.find(
+        (x) => x.externalKind === ExternalKind.Tag && x.name === name
+      )) {
+        throw new Error(`An export already exists for a tag named ${name}.`);
+      }
+      const exportBuilder = new ExportBuilder(name, ExternalKind.Tag, tagBuilder);
+      this._exports.push(exportBuilder);
+      return exportBuilder;
+    }
+    defineElementSegment(table, elements, offset) {
       const segment = new ElementSegmentBuilder(table, elements, this._resolvedFeatures, this.disableVerification);
       if (offset !== void 0) {
         segment.offset(offset);
       }
       this._elements.push(segment);
       return segment;
+    }
+    /** @deprecated Use defineElementSegment instead */
+    defineTableSegment(table, elements, offset) {
+      return this.defineElementSegment(table, elements, offset);
     }
     definePassiveElementSegment(elements) {
       const segment = new ElementSegmentBuilder(null, elements, this._resolvedFeatures, this.disableVerification);
@@ -10079,10 +10000,40 @@ var webasmPlayground = (() => {
     }
     defineStructType(fields, options) {
       this._requireFeature("gc");
-      const key = StructTypeBuilder.createKey(fields);
-      const structType = new StructTypeBuilder(key, fields, this._types.length, options);
+      let structFields;
+      let fieldNames = null;
+      if (Array.isArray(fields)) {
+        structFields = fields;
+      } else {
+        fieldNames = Object.keys(fields);
+        structFields = fieldNames.map((name) => {
+          const def = fields[name];
+          if (def && typeof def === "object" && "_brand" in def && def._brand === "MutableField") {
+            return { name, type: def.type, mutable: true };
+          }
+          if (def && typeof def === "object" && "type" in def && !("_brand" in def) && !("value" in def)) {
+            const explicit = def;
+            return { name, type: explicit.type, mutable: explicit.mutable ?? false };
+          }
+          return { name, type: def, mutable: false };
+        });
+      }
+      const key = StructTypeBuilder.createKey(structFields);
+      const structType = new StructTypeBuilder(key, structFields, this._types.length, options);
       this._types.push(structType);
       this._typeSectionEntries.push(structType);
+      if (fieldNames) {
+        const fieldMap = {};
+        fieldNames.forEach((name, i) => {
+          fieldMap[name] = i;
+        });
+        Object.defineProperty(structType, "field", {
+          value: Object.freeze(fieldMap),
+          enumerable: false,
+          writable: false,
+          configurable: false
+        });
+      }
       return structType;
     }
     defineArrayType(elementType, mutable, options) {
@@ -10255,6 +10206,542 @@ var webasmPlayground = (() => {
     }
   };
 
+  // src/BinaryReader.ts
+  var MagicHeader2 = 1836278016;
+  var BinaryReader = class {
+    constructor(buffer) {
+      this.buffer = buffer;
+      this.offset = 0;
+    }
+    read() {
+      const magic = this.readUInt32();
+      if (magic !== MagicHeader2) {
+        throw new Error(`Invalid WASM magic header: 0x${magic.toString(16)}`);
+      }
+      const version = this.readUInt32();
+      if (version !== 1) {
+        throw new Error(`Unsupported WASM version: ${version}`);
+      }
+      const module = {
+        version,
+        types: [],
+        imports: [],
+        functions: [],
+        tables: [],
+        memories: [],
+        globals: [],
+        exports: [],
+        start: null,
+        elements: [],
+        tags: [],
+        dataCount: null,
+        data: [],
+        customSections: []
+      };
+      const functionTypeIndices = [];
+      while (this.offset < this.buffer.length) {
+        const sectionId = this.readVarUInt7();
+        const sectionSize = this.readVarUInt32();
+        const sectionEnd = this.offset + sectionSize;
+        switch (sectionId) {
+          case 0:
+            this.readCustomSection(module, sectionEnd);
+            break;
+          case 1:
+            this.readTypeSection(module);
+            break;
+          case 2:
+            this.readImportSection(module);
+            break;
+          case 3:
+            this.readFunctionSection(functionTypeIndices);
+            break;
+          case 4:
+            this.readTableSection(module);
+            break;
+          case 5:
+            this.readMemorySection(module);
+            break;
+          case 6:
+            this.readGlobalSection(module);
+            break;
+          case 7:
+            this.readExportSection(module);
+            break;
+          case 8:
+            module.start = this.readVarUInt32();
+            break;
+          case 9:
+            this.readElementSection(module);
+            break;
+          case 10:
+            this.readCodeSection(module, functionTypeIndices);
+            break;
+          case 11:
+            this.readDataSection(module);
+            break;
+          case 12:
+            module.dataCount = this.readVarUInt32();
+            break;
+          case 13:
+            this.readTagSection(module);
+            break;
+          default:
+            this.offset = sectionEnd;
+            break;
+        }
+        this.offset = sectionEnd;
+      }
+      return module;
+    }
+    readCustomSection(module, sectionEnd) {
+      const nameLen = this.readVarUInt32();
+      const name = this.readString(nameLen);
+      if (name === "name") {
+        module.nameSection = this.readNameSection(sectionEnd);
+        return;
+      }
+      const remaining = sectionEnd - this.offset;
+      const data = this.readBytes(remaining);
+      module.customSections.push({ name, data });
+    }
+    readNameSection(sectionEnd) {
+      const info = {};
+      while (this.offset < sectionEnd) {
+        const subsectionId = this.readVarUInt7();
+        const subsectionSize = this.readVarUInt32();
+        const subsectionEnd = this.offset + subsectionSize;
+        switch (subsectionId) {
+          case 0: {
+            const len = this.readVarUInt32();
+            info.moduleName = this.readString(len);
+            break;
+          }
+          case 1: {
+            const count = this.readVarUInt32();
+            info.functionNames = /* @__PURE__ */ new Map();
+            for (let i = 0; i < count; i++) {
+              const index = this.readVarUInt32();
+              const len = this.readVarUInt32();
+              info.functionNames.set(index, this.readString(len));
+            }
+            break;
+          }
+          case 2: {
+            const funcCount = this.readVarUInt32();
+            info.localNames = /* @__PURE__ */ new Map();
+            for (let i = 0; i < funcCount; i++) {
+              const funcIndex = this.readVarUInt32();
+              const localCount = this.readVarUInt32();
+              const locals = /* @__PURE__ */ new Map();
+              for (let j = 0; j < localCount; j++) {
+                const localIndex = this.readVarUInt32();
+                const len = this.readVarUInt32();
+                locals.set(localIndex, this.readString(len));
+              }
+              info.localNames.set(funcIndex, locals);
+            }
+            break;
+          }
+          case 7: {
+            const count = this.readVarUInt32();
+            info.globalNames = /* @__PURE__ */ new Map();
+            for (let i = 0; i < count; i++) {
+              const index = this.readVarUInt32();
+              const len = this.readVarUInt32();
+              info.globalNames.set(index, this.readString(len));
+            }
+            break;
+          }
+          default:
+            this.offset = subsectionEnd;
+            break;
+        }
+        this.offset = subsectionEnd;
+      }
+      return info;
+    }
+    readTypeSection(module) {
+      const count = this.readVarUInt32();
+      for (let i = 0; i < count; i++) {
+        const typeInfo = this.readTypeEntry();
+        if (typeInfo.kind === "rec") {
+          module.types.push(typeInfo);
+        } else {
+          module.types.push(typeInfo);
+        }
+      }
+    }
+    readTypeEntry() {
+      const form = this.readVarUInt7();
+      switch (form) {
+        case 96:
+          return this.readFuncType();
+        case 95:
+          return this.readStructType();
+        case 94:
+          return this.readArrayType();
+        case 78: {
+          const typeCount = this.readVarUInt32();
+          const types = [];
+          for (let j = 0; j < typeCount; j++) {
+            types.push(this.readTypeEntry());
+          }
+          return { kind: "rec", types };
+        }
+        case 80:
+        // sub (non-final)
+        case 79: {
+          const final = form === 79;
+          const superCount = this.readVarUInt32();
+          const superTypes = [];
+          for (let j = 0; j < superCount; j++) {
+            superTypes.push(this.readVarUInt32());
+          }
+          const innerType = this.readTypeEntry();
+          if (innerType.kind === "struct") {
+            innerType.superTypes = superTypes;
+            innerType.final = final;
+          } else if (innerType.kind === "array") {
+            innerType.superTypes = superTypes;
+            innerType.final = final;
+          }
+          return innerType;
+        }
+        default:
+          throw new Error(`Unknown type form: 0x${(form & 255).toString(16)}`);
+      }
+    }
+    readFuncType() {
+      const paramCount = this.readVarUInt32();
+      const parameterTypes = [];
+      for (let j = 0; j < paramCount; j++) {
+        parameterTypes.push(this.readValueType());
+      }
+      const returnCount = this.readVarUInt32();
+      const returnTypes = [];
+      for (let j = 0; j < returnCount; j++) {
+        returnTypes.push(this.readValueType());
+      }
+      return { kind: "func", parameterTypes, returnTypes };
+    }
+    readStructType() {
+      const fieldCount = this.readVarUInt32();
+      const fields = [];
+      for (let j = 0; j < fieldCount; j++) {
+        const type = this.readVarInt7();
+        const mutable = this.readVarUInt1() === 1;
+        fields.push({ type, mutable });
+      }
+      return { kind: "struct", fields };
+    }
+    readArrayType() {
+      const elementType = this.readVarInt7();
+      const mutable = this.readVarUInt1() === 1;
+      return { kind: "array", elementType, mutable };
+    }
+    readImportSection(module) {
+      const count = this.readVarUInt32();
+      for (let i = 0; i < count; i++) {
+        const moduleNameLen = this.readVarUInt32();
+        const moduleName = this.readString(moduleNameLen);
+        const fieldNameLen = this.readVarUInt32();
+        const fieldName = this.readString(fieldNameLen);
+        const kind = this.readUInt8();
+        const imp = { moduleName, fieldName, kind };
+        switch (kind) {
+          case 0:
+            imp.typeIndex = this.readVarUInt32();
+            break;
+          case 1: {
+            const elementType = this.readVarInt7();
+            const { initial, maximum } = this.readResizableLimits();
+            imp.tableType = { elementType, initial, maximum };
+            break;
+          }
+          case 2: {
+            const { initial, maximum } = this.readResizableLimits();
+            imp.memoryType = { initial, maximum };
+            break;
+          }
+          case 3: {
+            const valueType = this.readVarInt7();
+            const mutable = this.readVarUInt1() === 1;
+            imp.globalType = { valueType, mutable };
+            break;
+          }
+          case 4: {
+            const attribute = this.readVarUInt32();
+            const typeIndex = this.readVarUInt32();
+            imp.tagType = { attribute, typeIndex };
+            break;
+          }
+        }
+        module.imports.push(imp);
+      }
+    }
+    readFunctionSection(functionTypeIndices) {
+      const count = this.readVarUInt32();
+      for (let i = 0; i < count; i++) {
+        functionTypeIndices.push(this.readVarUInt32());
+      }
+    }
+    readTableSection(module) {
+      const count = this.readVarUInt32();
+      for (let i = 0; i < count; i++) {
+        const elementType = this.readVarInt7();
+        const { initial, maximum } = this.readResizableLimits();
+        module.tables.push({ elementType, initial, maximum });
+      }
+    }
+    readMemorySection(module) {
+      const count = this.readVarUInt32();
+      for (let i = 0; i < count; i++) {
+        const { initial, maximum } = this.readResizableLimits();
+        module.memories.push({ initial, maximum });
+      }
+    }
+    readGlobalSection(module) {
+      const count = this.readVarUInt32();
+      for (let i = 0; i < count; i++) {
+        const valueType = this.readVarInt7();
+        const mutable = this.readVarUInt1() === 1;
+        const initExpr = this.readInitExpr();
+        module.globals.push({ valueType, mutable, initExpr });
+      }
+    }
+    readExportSection(module) {
+      const count = this.readVarUInt32();
+      for (let i = 0; i < count; i++) {
+        const nameLen = this.readVarUInt32();
+        const name = this.readString(nameLen);
+        const kind = this.readUInt8();
+        const index = this.readVarUInt32();
+        module.exports.push({ name, kind, index });
+      }
+    }
+    readElementSection(module) {
+      const count = this.readVarUInt32();
+      for (let i = 0; i < count; i++) {
+        const tableIndex = this.readVarUInt32();
+        const offsetExpr = this.readInitExpr();
+        const numElems = this.readVarUInt32();
+        const functionIndices = [];
+        for (let j = 0; j < numElems; j++) {
+          functionIndices.push(this.readVarUInt32());
+        }
+        module.elements.push({ tableIndex, offsetExpr, functionIndices });
+      }
+    }
+    readTagSection(module) {
+      const count = this.readVarUInt32();
+      for (let i = 0; i < count; i++) {
+        const attribute = this.readVarUInt32();
+        const typeIndex = this.readVarUInt32();
+        module.tags.push({ attribute, typeIndex });
+      }
+    }
+    readCodeSection(module, functionTypeIndices) {
+      const count = this.readVarUInt32();
+      for (let i = 0; i < count; i++) {
+        const bodySize = this.readVarUInt32();
+        const bodyEnd = this.offset + bodySize;
+        const localCount = this.readVarUInt32();
+        const locals = [];
+        for (let j = 0; j < localCount; j++) {
+          const lCount = this.readVarUInt32();
+          const type = this.readVarInt7();
+          locals.push({ count: lCount, type });
+        }
+        const bodyLength = bodyEnd - this.offset;
+        const body = this.readBytes(bodyLength);
+        module.functions.push({
+          typeIndex: functionTypeIndices[i],
+          locals,
+          body
+        });
+        this.offset = bodyEnd;
+      }
+    }
+    readDataSection(module) {
+      const count = this.readVarUInt32();
+      for (let i = 0; i < count; i++) {
+        const kind = this.readVarUInt32();
+        if (kind === 1) {
+          const dataSize = this.readVarUInt32();
+          const data = this.readBytes(dataSize);
+          module.data.push({ kind, memoryIndex: 0, offsetExpr: new Uint8Array(), data, passive: true });
+        } else if (kind === 2) {
+          const memoryIndex = this.readVarUInt32();
+          const offsetExpr = this.readInitExpr();
+          const dataSize = this.readVarUInt32();
+          const data = this.readBytes(dataSize);
+          module.data.push({ kind, memoryIndex, offsetExpr, data, passive: false });
+        } else {
+          const offsetExpr = this.readInitExpr();
+          const dataSize = this.readVarUInt32();
+          const data = this.readBytes(dataSize);
+          module.data.push({ kind, memoryIndex: 0, offsetExpr, data, passive: false });
+        }
+      }
+    }
+    readInitExpr() {
+      const start = this.offset;
+      while (this.offset < this.buffer.length) {
+        const byte = this.buffer[this.offset++];
+        if (byte === OpCodes_default.end.value) {
+          break;
+        }
+        switch (byte) {
+          case OpCodes_default.i32_const.value:
+            this.readVarInt32();
+            break;
+          case OpCodes_default.i64_const.value:
+            this.readVarInt64();
+            break;
+          case OpCodes_default.f32_const.value:
+            this.offset += 4;
+            break;
+          case OpCodes_default.f64_const.value:
+            this.offset += 8;
+            break;
+          case OpCodes_default.get_global.value:
+            this.readVarUInt32();
+            break;
+        }
+      }
+      return this.buffer.slice(start, this.offset);
+    }
+    readResizableLimits() {
+      const flags = this.readVarUInt1();
+      const initial = this.readVarUInt32();
+      const maximum = flags === 1 ? this.readVarUInt32() : null;
+      return { initial, maximum };
+    }
+    readValueType() {
+      const value = this.readVarInt7();
+      switch (value) {
+        case -1:
+          return ValueType.Int32;
+        case -2:
+          return ValueType.Int64;
+        case -3:
+          return ValueType.Float32;
+        case -4:
+          return ValueType.Float64;
+        case -5:
+          return ValueType.V128;
+        case -16:
+          return ValueType.FuncRef;
+        case -17:
+          return ValueType.ExternRef;
+        case -14:
+          return ValueType.AnyRef;
+        case -13:
+          return ValueType.EqRef;
+        case -12:
+          return ValueType.I31Ref;
+        case -11:
+          return ValueType.StructRef;
+        case -10:
+          return ValueType.ArrayRef;
+        case -15:
+          return ValueType.NullRef;
+        case -9:
+          return ValueType.NullFuncRef;
+        case -8:
+          return ValueType.NullExternRef;
+        default:
+          throw new Error(`Unknown value type: 0x${(value & 255).toString(16)}`);
+      }
+    }
+    // --- Primitive readers ---
+    ensureBytes(count) {
+      if (this.offset + count > this.buffer.length) {
+        throw new Error(
+          `Unexpected end of binary data at offset ${this.offset} (need ${count} bytes, have ${this.buffer.length - this.offset})`
+        );
+      }
+    }
+    readUInt8() {
+      this.ensureBytes(1);
+      return this.buffer[this.offset++];
+    }
+    readUInt32() {
+      this.ensureBytes(4);
+      const value = this.buffer[this.offset] | this.buffer[this.offset + 1] << 8 | this.buffer[this.offset + 2] << 16 | this.buffer[this.offset + 3] << 24;
+      this.offset += 4;
+      return value >>> 0;
+    }
+    readVarUInt1() {
+      this.ensureBytes(1);
+      return this.buffer[this.offset++] & 1;
+    }
+    readVarUInt7() {
+      this.ensureBytes(1);
+      return this.buffer[this.offset++] & 127;
+    }
+    readVarUInt32() {
+      let result = 0;
+      let shift = 0;
+      let byte;
+      do {
+        this.ensureBytes(1);
+        byte = this.buffer[this.offset++];
+        result |= (byte & 127) << shift;
+        shift += 7;
+      } while (byte & 128);
+      return result >>> 0;
+    }
+    readVarInt7() {
+      this.ensureBytes(1);
+      const byte = this.buffer[this.offset++];
+      return byte & 64 ? byte | 4294967168 : byte & 127;
+    }
+    readVarInt32() {
+      let result = 0;
+      let shift = 0;
+      let byte;
+      do {
+        this.ensureBytes(1);
+        byte = this.buffer[this.offset++];
+        result |= (byte & 127) << shift;
+        shift += 7;
+      } while (byte & 128);
+      if (shift < 32 && byte & 64) {
+        result |= -(1 << shift);
+      }
+      return result;
+    }
+    readVarInt64() {
+      let result = 0n;
+      let shift = 0n;
+      let byte;
+      do {
+        this.ensureBytes(1);
+        byte = this.buffer[this.offset++];
+        result |= BigInt(byte & 127) << shift;
+        shift += 7n;
+      } while (byte & 128);
+      if (shift < 64n && byte & 64) {
+        result |= -(1n << shift);
+      }
+      return result;
+    }
+    readString(length) {
+      this.ensureBytes(length);
+      const bytes = this.buffer.slice(this.offset, this.offset + length);
+      this.offset += length;
+      return new TextDecoder().decode(bytes);
+    }
+    readBytes(length) {
+      this.ensureBytes(length);
+      const bytes = this.buffer.slice(this.offset, this.offset + length);
+      this.offset += length;
+      return bytes;
+    }
+  };
+
   // src/WatParser.ts
   function tokenize(source) {
     const tokens = [];
@@ -10376,7 +10863,14 @@ var webasmPlayground = (() => {
     "i64": ValueType.Int64,
     "f32": ValueType.Float32,
     "f64": ValueType.Float64,
-    "v128": ValueType.V128
+    "v128": ValueType.V128,
+    "funcref": ValueType.FuncRef,
+    "externref": ValueType.ExternRef,
+    "anyref": ValueType.AnyRef,
+    "eqref": ValueType.EqRef,
+    "i31ref": ValueType.I31Ref,
+    "structref": ValueType.StructRef,
+    "arrayref": ValueType.ArrayRef
   };
   var blockTypeMap = {
     "i32": BlockType.Int32,
@@ -10395,6 +10889,7 @@ var webasmPlayground = (() => {
       this.funcNames = /* @__PURE__ */ new Map();
       this.globalNames = /* @__PURE__ */ new Map();
       this.typeNames = /* @__PURE__ */ new Map();
+      this.tagNames = /* @__PURE__ */ new Map();
       this.funcList = [];
       this.labelStack = [];
       this.tokens = tokens;
@@ -10485,6 +10980,9 @@ var webasmPlayground = (() => {
           case "data":
             this.parseData();
             break;
+          case "tag":
+            this.parseTag();
+            break;
           default:
             this.skipSExpr();
             break;
@@ -10522,29 +11020,83 @@ var webasmPlayground = (() => {
       }
       this.skipInlineComment();
       this.expect("LeftParen" /* LeftParen */);
-      this.expectKeyword("func");
-      const params = [];
-      const results = [];
-      while (this.isLeftParen()) {
-        this.expect("LeftParen" /* LeftParen */);
-        const kw = this.advance().value;
-        if (kw === "param") {
-          while (!this.isRightParen()) {
-            if (this.peek().type === "Id" /* Id */) this.advance();
-            else params.push(this.parseValueType());
+      const kw = this.peek().value;
+      if (kw === "func") {
+        this.advance();
+        const params = [];
+        const results = [];
+        while (this.isLeftParen()) {
+          this.expect("LeftParen" /* LeftParen */);
+          const innerKw = this.advance().value;
+          if (innerKw === "param") {
+            while (!this.isRightParen()) {
+              if (this.peek().type === "Id" /* Id */) this.advance();
+              else params.push(this.parseValueType());
+            }
+          } else if (innerKw === "result") {
+            while (!this.isRightParen()) {
+              results.push(this.parseValueType());
+            }
           }
-        } else if (kw === "result") {
-          while (!this.isRightParen()) {
-            results.push(this.parseValueType());
-          }
+          this.expect("RightParen" /* RightParen */);
         }
         this.expect("RightParen" /* RightParen */);
-      }
-      this.expect("RightParen" /* RightParen */);
-      this.expect("RightParen" /* RightParen */);
-      const funcType = this.moduleBuilder.defineFuncType(results.length > 0 ? results : null, params);
-      if (typeName) {
-        this.typeNames.set(typeName, funcType.index);
+        this.expect("RightParen" /* RightParen */);
+        const funcType = this.moduleBuilder.defineFunctionType(results.length > 0 ? results : null, params);
+        if (typeName) {
+          this.typeNames.set(typeName, funcType.index);
+        }
+      } else if (kw === "struct") {
+        this.advance();
+        const fields = [];
+        while (this.isLeftParen()) {
+          this.expect("LeftParen" /* LeftParen */);
+          this.expectKeyword("field");
+          let fieldName = `f${fields.length}`;
+          if (this.peek().type === "Id" /* Id */) {
+            fieldName = this.advance().value.replace(/^\$/, "");
+          }
+          let mutable = false;
+          let fieldType;
+          if (this.isLeftParen()) {
+            this.expect("LeftParen" /* LeftParen */);
+            this.expectKeyword("mut");
+            fieldType = this.parseValueType();
+            mutable = true;
+            this.expect("RightParen" /* RightParen */);
+          } else {
+            fieldType = this.parseValueType();
+          }
+          fields.push({ name: fieldName, type: fieldType, mutable });
+          this.expect("RightParen" /* RightParen */);
+        }
+        this.expect("RightParen" /* RightParen */);
+        this.expect("RightParen" /* RightParen */);
+        const structType = this.moduleBuilder.defineStructType(fields);
+        if (typeName) {
+          this.typeNames.set(typeName, structType.index);
+        }
+      } else if (kw === "array") {
+        this.advance();
+        let mutable = false;
+        let elementType;
+        if (this.isLeftParen()) {
+          this.expect("LeftParen" /* LeftParen */);
+          this.expectKeyword("mut");
+          elementType = this.parseValueType();
+          mutable = true;
+          this.expect("RightParen" /* RightParen */);
+        } else {
+          elementType = this.parseValueType();
+        }
+        this.expect("RightParen" /* RightParen */);
+        this.expect("RightParen" /* RightParen */);
+        const arrayType = this.moduleBuilder.defineArrayType(elementType, mutable);
+        if (typeName) {
+          this.typeNames.set(typeName, arrayType.index);
+        }
+      } else {
+        throw this.error(`Expected 'func', 'struct', or 'array' in type definition, got '${kw}'`);
       }
     }
     // --- Import section ---
@@ -10783,7 +11335,7 @@ var webasmPlayground = (() => {
     parseInstruction(asm, func) {
       const tok = this.advance();
       const mnemonic = tok.value;
-      if (mnemonic === "block" || mnemonic === "loop" || mnemonic === "if") {
+      if (mnemonic === "block" || mnemonic === "loop" || mnemonic === "if" || mnemonic === "try") {
         let labelName = null;
         if (this.peek().type === "Id" /* Id */) {
           labelName = this.advance().value;
@@ -10813,9 +11365,25 @@ var webasmPlayground = (() => {
         }
         return;
       }
+      if (mnemonic === "delegate") {
+        const depth = this.parseNumber();
+        asm.emit(mnemonicToOpCode.get(mnemonic), depth);
+        if (this.labelStack.length > 0) {
+          const cfStack = asm._controlFlowVerifier._stack;
+          const top = this.labelStack[this.labelStack.length - 1];
+          if (top.label.block && !cfStack.includes(top.label)) {
+            this.labelStack.pop();
+          }
+        }
+        return;
+      }
       const opCode = mnemonicToOpCode.get(mnemonic);
       if (!opCode) {
         throw this.error(`Unknown instruction: ${mnemonic}`, tok);
+      }
+      if (mnemonic === "throw" || mnemonic === "catch") {
+        asm.emit(opCode, this.resolveTag());
+        return;
       }
       if (!opCode.immediate) {
         asm.emit(opCode);
@@ -10926,10 +11494,53 @@ var webasmPlayground = (() => {
           asm.emit(opCode, mask);
           break;
         }
+        case "TypeIndexField": {
+          const typeIndex = this.parseNumber();
+          const fieldIndex = this.parseNumber();
+          asm.emit(opCode, typeIndex, fieldIndex);
+          break;
+        }
+        case "TypeIndexIndex": {
+          const typeIndex = this.parseNumber();
+          const index = this.parseNumber();
+          asm.emit(opCode, typeIndex, index);
+          break;
+        }
+        case "HeapType":
+          asm.emit(opCode, this.parseHeapType());
+          break;
+        case "BrOnCast": {
+          const label = this.resolveBranchTarget(asm);
+          const ht1 = this.parseHeapType();
+          const ht2 = this.parseHeapType();
+          asm.emit(opCode, label, ht1, ht2);
+          break;
+        }
         default:
           asm.emit(opCode);
           break;
       }
+    }
+    parseHeapType() {
+      const heapTypeKeywords = {
+        func: HeapType.Func,
+        extern: HeapType.Extern,
+        any: HeapType.Any,
+        eq: HeapType.Eq,
+        i31: HeapType.I31,
+        struct: HeapType.Struct,
+        array: HeapType.Array,
+        none: HeapType.None,
+        nofunc: HeapType.NoFunc,
+        noextern: HeapType.NoExtern
+      };
+      if (this.peek().type === "Keyword" /* Keyword */ && heapTypeKeywords[this.peek().value] !== void 0) {
+        return heapTypeKeywords[this.advance().value];
+      }
+      if (this.peek().type === "Number" /* Number */) {
+        return this.parseNumber();
+      }
+      throw this.error(`Expected heap type but found '${this.peek().value}'`);
     }
     getLabelAtDepth(asm, relativeDepth) {
       const stack = asm._controlFlowVerifier._stack;
@@ -11175,6 +11786,42 @@ var webasmPlayground = (() => {
       }
       this.expect("RightParen" /* RightParen */);
       this.moduleBuilder.defineData(bytes, offset);
+    }
+    parseTag() {
+      let tagName = null;
+      if (this.peek().type === "Id" /* Id */) {
+        tagName = this.advance().value;
+      }
+      this.skipInlineComment();
+      const params = [];
+      if (this.isLeftParen() && this.tokens[this.pos + 1]?.value === "type") {
+        this.expect("LeftParen" /* LeftParen */);
+        this.advance();
+        this.parseNumber();
+        this.expect("RightParen" /* RightParen */);
+      }
+      if (this.isLeftParen() && this.tokens[this.pos + 1]?.value === "param") {
+        this.expect("LeftParen" /* LeftParen */);
+        this.advance();
+        while (!this.isRightParen()) {
+          params.push(this.parseValueType());
+        }
+        this.expect("RightParen" /* RightParen */);
+      }
+      this.expect("RightParen" /* RightParen */);
+      const tag = this.moduleBuilder.defineTag(params);
+      if (tagName) {
+        this.tagNames.set(tagName, tag._index);
+      }
+    }
+    resolveTag() {
+      if (this.peek().type === "Id" /* Id */) {
+        const id = this.advance().value;
+        const idx = this.tagNames.get(id);
+        if (idx === void 0) throw this.error(`Unknown tag: ${id}`);
+        return idx;
+      }
+      return this.parseNumber();
     }
     // --- Helpers ---
     parseValueType() {
@@ -12180,7 +12827,7 @@ const mul = mod.defineFunction('mul', [ValueType.Int32], [ValueType.Int32, Value
 
 // Create a table with 3 entries
 const table = mod.defineTable(ElementType.AnyFunc, 3);
-mod.defineTableSegment(table, [add, sub, mul], 0);
+mod.defineElementSegment(table, [add, sub, mul], 0);
 
 // Dispatcher: call function at table[opIndex](a, b)
 mod.defineFunction('dispatch', [ValueType.Int32],
@@ -12336,7 +12983,7 @@ log('timesPlusRandom(10) = ' + timesPlusRandom(10));`
       code: `// Table Dispatch \u2014 call different functions via a table index
 const mod = new ModuleBuilder('dispatch');
 
-const fnType = mod.defineFuncType([ValueType.Int32], [ValueType.Int32, ValueType.Int32]);
+const fnType = mod.defineFunctionType([ValueType.Int32], [ValueType.Int32, ValueType.Int32]);
 
 const add = mod.defineFunction('add', [ValueType.Int32], [ValueType.Int32, ValueType.Int32], (f, a) => {
   a.get_local(f.getParameter(0));
@@ -12357,7 +13004,7 @@ const mul = mod.defineFunction('mul', [ValueType.Int32], [ValueType.Int32, Value
 });
 
 const table = mod.defineTable(ElementType.AnyFunc, 3);
-table.defineTableSegment([add, sub, mul], 0);
+table.defineElementSegment([add, sub, mul], 0);
 
 // dispatch(op, a, b) \u2014 calls table[op](a, b)
 mod.defineFunction('dispatch', [ValueType.Int32],
@@ -14020,7 +14667,6 @@ log('divmod(17, 5) = [' + dm[0] + ', ' + dm[1] + '] (quotient, remainder)');`
 // This example shows the text format for GC struct/array types
 const mod = new ModuleBuilder('watGC', {
   target: 'latest',
-  disableVerification: true,
 });
 
 // A 2D point struct
@@ -14653,7 +15299,7 @@ log('atomicLoad(0) = ' + atomicLoad(0));`
       features: ["exception-handling"],
       imports: ["ModuleBuilder", "ValueType", "BlockType"],
       code: `// Exception handling: defineTag + throw
-const mod = new ModuleBuilder('exceptions', { disableVerification: true });
+const mod = new ModuleBuilder('exceptions');
 
 // Define a tag with an i32 payload (like an error code)
 const errorTag = mod.defineTag([ValueType.Int32]);
@@ -14687,7 +15333,7 @@ log('Valid WASM: ' + WebAssembly.validate(bytes.buffer));`
       features: ["memory64"],
       imports: ["ModuleBuilder", "ValueType"],
       code: `// Memory64: 64-bit addressed memory
-const mod = new ModuleBuilder('memory64', { target: '3.0', disableVerification: true });
+const mod = new ModuleBuilder('memory64', { target: '3.0' });
 
 // Define a 64-bit addressed memory
 const mem = mod.defineMemory(1, 100, false, true); // memory64=true
@@ -14732,7 +15378,6 @@ log('Runtime instantiation requires engine support for memory64.');`
       code: `// GC Struct Basics \u2014 define a Point struct and access fields
 const mod = new ModuleBuilder('gcStruct', {
   target: 'latest',
-  disableVerification: true,
 });
 
 // Define a struct type with two i32 fields
@@ -14782,7 +15427,6 @@ log('Binary valid: ' + WebAssembly.validate(bytes.buffer));`
       code: `// Mutable Struct Fields \u2014 create, read, update a GC struct
 const mod = new ModuleBuilder('gcMutable', {
   target: 'latest',
-  disableVerification: true,
 });
 
 const Counter = mod.defineStructType([
@@ -14825,7 +15469,6 @@ log('Binary valid: ' + WebAssembly.validate(bytes.buffer));`
       code: `// Struct Default Values \u2014 zero-init with struct.new_default
 const mod = new ModuleBuilder('gcDefault', {
   target: 'latest',
-  disableVerification: true,
 });
 
 const Vec3 = mod.defineStructType([
@@ -14860,7 +15503,6 @@ log('Binary valid: ' + WebAssembly.validate(bytes.buffer));`
       code: `// GC Array Basics \u2014 create, read, write, measure length
 const mod = new ModuleBuilder('gcArray', {
   target: 'latest',
-  disableVerification: true,
 });
 
 // Define a mutable array of i32
@@ -14922,7 +15564,6 @@ log('Binary valid: ' + WebAssembly.validate(bytes.buffer));`
       code: `// Fixed-Size Array \u2014 create from inline values
 const mod = new ModuleBuilder('gcFixed', {
   target: 'latest',
-  disableVerification: true,
 });
 
 const IntArray = mod.defineArrayType(ValueType.Int32, false);
@@ -14973,7 +15614,6 @@ log('Binary valid: ' + WebAssembly.validate(bytes.buffer));`
 // useful for unboxed small values in GC type hierarchies.
 const mod = new ModuleBuilder('gcI31', {
   target: 'latest',
-  disableVerification: true,
 });
 
 // Pack i32 \u2192 i31ref \u2192 unpack signed
@@ -15016,7 +15656,6 @@ log('Binary valid: ' + WebAssembly.validate(bytes.buffer));`
 // Classic example: a linked list node type.
 const mod = new ModuleBuilder('gcRec', {
   target: 'latest',
-  disableVerification: true,
 });
 
 // Define a recursive group with two types that reference each other
@@ -15055,7 +15694,6 @@ log('Binary valid: ' + WebAssembly.validate(bytes.buffer));`
 // GC struct types can extend other struct types (adding fields at the end).
 const mod = new ModuleBuilder('gcSubtype', {
   target: 'latest',
-  disableVerification: true,
 });
 
 // Base type: Shape { area: f32 }
@@ -15101,7 +15739,6 @@ log('Binary valid: ' + WebAssembly.validate(bytes.buffer));`
 // ref.cast narrows a reference type (traps if wrong type).
 const mod = new ModuleBuilder('gcCast', {
   target: 'latest',
-  disableVerification: true,
 });
 
 // Test if a null anyref is an i31
@@ -15144,7 +15781,6 @@ log('Binary valid: ' + WebAssembly.validate(bytes.buffer));`
 // extern.convert_any: anyref \u2192 externref (externalize)
 const mod = new ModuleBuilder('gcConvert', {
   target: 'latest',
-  disableVerification: true,
 });
 
 // Internalize then externalize a null externref
@@ -15175,7 +15811,6 @@ log('Binary valid: ' + WebAssembly.validate(bytes.buffer));`
       code: `// Array Fill & Copy \u2014 bulk GC array operations
 const mod = new ModuleBuilder('gcArrayOps', {
   target: 'latest',
-  disableVerification: true,
 });
 
 const IntArray = mod.defineArrayType(ValueType.Int32, true);
@@ -15240,7 +15875,6 @@ log('Binary valid: ' + WebAssembly.validate(bytes.buffer));`
       code: `// GC WAT Inspection \u2014 explore how GC types appear in text format
 const mod = new ModuleBuilder('gcWat', {
   target: 'latest',
-  disableVerification: true,
 });
 
 // Struct type
@@ -15256,7 +15890,7 @@ mod.defineArrayType(ValueType.Float32, false);
 mod.defineArrayType(ValueType.Int32, true);
 
 // A function type (shows mixed type section)
-mod.defineFuncType(ValueType.Int32, [ValueType.Int32]);
+mod.defineFunctionType(ValueType.Int32, [ValueType.Int32]);
 
 // A simple function using struct.new_default
 const structType = mod.defineStructType([
@@ -15666,11 +16300,11 @@ const mul = mod.defineFunction('mul', [ValueType.Int32],
 
 // Table 0: math operations
 const table0 = mod.defineTable(ElementType.AnyFunc, 3);
-mod.defineTableSegment(table0, [add, sub, mul], 0);
+mod.defineElementSegment(table0, [add, sub, mul], 0);
 
 // Table 1: just add and mul (different arrangement)
 const table1 = mod.defineTable(ElementType.AnyFunc, 2);
-mod.defineTableSegment(table1, [mul, add], 0);
+mod.defineElementSegment(table1, [mul, add], 0);
 
 // Show WAT with two tables
 const wat = mod.toString();
@@ -15838,7 +16472,7 @@ log('atomicXchg(42, 99): old=' + oldXchg + ', new=' + load(0));`
       features: ["threads"],
       imports: ["ModuleBuilder", "ValueType"],
       code: `// Atomic wait, notify, and fence \u2014 thread synchronization primitives
-const mod = new ModuleBuilder('waitNotify', { disableVerification: true });
+const mod = new ModuleBuilder('waitNotify');
 
 const mem = mod.defineMemory(1, 10, true);
 mod.exportMemory(mem, 'memory');
@@ -16485,7 +17119,7 @@ const mul = mod.defineFunction('mul', [ValueType.Int32],
 
 // Table with space for 8 entries
 const table = mod.defineTable(ElementType.AnyFunc, 8);
-mod.defineTableSegment(table, [add, mul], 0);
+mod.defineElementSegment(table, [add, mul], 0);
 
 // table.fill(start, ref, count) \u2014 fill slots 2-5 with the add function
 mod.defineFunction('fillWithAdd', null, [], (f, a) => {
@@ -16575,7 +17209,7 @@ const negate = mod.defineFunction('negate', [ValueType.Int32],
 
 // Start with table of size 2
 const table = mod.defineTable(ElementType.AnyFunc, 2);
-mod.defineTableSegment(table, [double, triple], 0);
+mod.defineElementSegment(table, [double, triple], 0);
 
 // table.set: place a function ref at an index
 mod.defineFunction('setSlot', null, [ValueType.Int32], (f, a) => {
@@ -16642,7 +17276,7 @@ log('slot 2 (negate): call(2, 5) = ' + fn.call(2, 5));`
       features: ["exception-handling"],
       imports: ["ModuleBuilder", "ValueType", "BlockType"],
       code: `// Full try/catch exception handling
-const mod = new ModuleBuilder('tryCatch', { disableVerification: true });
+const mod = new ModuleBuilder('tryCatch');
 
 // Define two exception tags with different payloads
 const errorTag = mod.defineTag([ValueType.Int32]);     // error code
@@ -16813,9 +17447,9 @@ log('(Extended const allows i32.add/sub/mul in global init expressions)');`
       features: [],
       imports: ["ModuleBuilder", "ValueType", "ElementType"],
       code: `// Multi-Table Dispatch \u2014 separate function tables
-const mod = new ModuleBuilder('multiTableDispatch', { target: '3.0', disableVerification: true });
+const mod = new ModuleBuilder('multiTableDispatch', { target: '3.0' });
 
-const fnType = mod.defineFuncType([ValueType.Int32], [ValueType.Int32]);
+const fnType = mod.defineFunctionType([ValueType.Int32], [ValueType.Int32]);
 
 // Math operations table
 const square = mod.defineFunction('square', [ValueType.Int32], [ValueType.Int32], (f, a) => {
@@ -16837,7 +17471,7 @@ const negate = mod.defineFunction('negate', [ValueType.Int32], [ValueType.Int32]
 });
 
 const mathTable = mod.defineTable(ElementType.AnyFunc, 3);
-mathTable.defineTableSegment([square, dbl, negate], 0);
+mathTable.defineElementSegment([square, dbl, negate], 0);
 
 // Dispatch to math table
 mod.defineFunction('mathOp', [ValueType.Int32], [ValueType.Int32, ValueType.Int32], (f, a) => {
@@ -16852,6 +17486,277 @@ log(mod.toString());
 const bytes = mod.toBytes();
 log('');
 log('Binary valid: ' + WebAssembly.validate(bytes.buffer));`
+    },
+    // ─── New GC Examples ───
+    "gc-type-dispatch": {
+      label: "GC Type Dispatch",
+      group: "GC",
+      description: "Use ref.test for type-based dispatch with GC struct references.",
+      target: "latest",
+      features: ["gc"],
+      imports: ["ModuleBuilder", "ValueType", "HeapType"],
+      code: `// GC Type Dispatch \u2014 ref.test for type-based branching
+// ref.test checks if a reference matches a target type,
+// enabling runtime type dispatch with GC structs.
+const mod = new ModuleBuilder('gcDispatch', {
+  target: 'latest',
+});
+
+// Define two struct types
+const Cat = mod.defineStructType([
+  { name: 'lives', type: ValueType.Int32, mutable: false },
+]);
+
+const Dog = mod.defineStructType([
+  { name: 'tricks', type: ValueType.Int32, mutable: false },
+]);
+
+// Test: create a Cat and check if it's a Cat (returns lives value)
+mod.defineFunction('catLives', [ValueType.Int32], [], (f, a) => {
+  a.const_i32(9);
+  a.struct_new(Cat.index);
+  // Read the lives field
+  a.struct_get(Cat.index, Cat.getFieldIndex('lives'));
+}).withExport();
+
+// Test: create a Dog and check if it's a Dog (returns tricks value)
+mod.defineFunction('dogTricks', [ValueType.Int32], [], (f, a) => {
+  a.const_i32(5);
+  a.struct_new(Dog.index);
+  a.struct_get(Dog.index, Dog.getFieldIndex('tricks'));
+}).withExport();
+
+// Test ref.test to distinguish types
+mod.defineFunction('isCat', [ValueType.Int32], [], (f, a) => {
+  a.const_i32(9);
+  a.struct_new(Cat.index);
+  a.ref_test(HeapType.Struct); // is it a struct? \u2192 1
+}).withExport();
+
+log('WAT:');
+log(mod.toString());
+
+const bytes = mod.toBytes();
+log('');
+log('Binary valid: ' + WebAssembly.validate(bytes.buffer));`
+    },
+    "gc-linked-list": {
+      label: "GC Linked List",
+      group: "GC",
+      description: "Build and traverse a linked list using GC structs.",
+      target: "latest",
+      features: ["gc"],
+      imports: ["ModuleBuilder", "ValueType"],
+      code: `// GC Linked List \u2014 create nodes and traverse
+// Demonstrates practical GC usage: struct_new, struct_get, struct_set,
+// ref_null, and ref_is_null in a traversal loop.
+const mod = new ModuleBuilder('gcList', {
+  target: 'latest',
+});
+
+// ListNode: { value: i32, next: ref null 0 }
+// Use defineRecGroup so the type can reference itself
+const recGroup = mod.defineRecGroup((builder) => {
+  const selfRef = builder.refNull(0); // nullable ref to type 0 (self)
+  builder.addStructType([
+    { name: 'value', type: ValueType.Int32, mutable: false },
+    { name: 'next', type: selfRef, mutable: true },
+  ]);
+});
+
+const nodeTypeIndex = recGroup._types[0].index;
+
+// Build a 3-node list: 10 \u2192 20 \u2192 30 \u2192 null
+// Return the sum of all values (should be 60)
+mod.defineFunction('sumList', [ValueType.Int32], [], (f, a) => {
+  // Create node 30 (tail)
+  a.const_i32(30);
+  a.ref_null(nodeTypeIndex); // next = null
+  a.struct_new(nodeTypeIndex);
+
+  // Create node 20, pointing to node 30
+  const tail = a.declareLocal(ValueType.AnyRef, 'tail');
+  a.set_local(tail);
+  a.const_i32(20);
+  a.get_local(tail);
+  a.struct_new(nodeTypeIndex);
+
+  // Create node 10 (head), pointing to node 20
+  const mid = a.declareLocal(ValueType.AnyRef, 'mid');
+  a.set_local(mid);
+  a.const_i32(10);
+  a.get_local(mid);
+  a.struct_new(nodeTypeIndex);
+
+  // head is now on stack \u2014 store it
+  const head = a.declareLocal(ValueType.AnyRef, 'head');
+  a.set_local(head);
+
+  // Return sum: 10 + 20 + 30 = 60
+  // Read each value field
+  a.get_local(head);
+  a.struct_get(nodeTypeIndex, 0); // head.value = 10
+
+  a.get_local(mid);
+  a.struct_get(nodeTypeIndex, 0); // mid.value = 20
+  a.add_i32();
+
+  a.get_local(tail);
+  a.struct_get(nodeTypeIndex, 0); // tail.value = 30
+  a.add_i32();
+}).withExport();
+
+// Count nodes in a 3-node list (should be 3)
+mod.defineFunction('countNodes', [ValueType.Int32], [], (f, a) => {
+  // Build same list: 1 \u2192 2 \u2192 3 \u2192 null
+  a.const_i32(3);
+  a.ref_null(nodeTypeIndex);
+  a.struct_new(nodeTypeIndex);
+  const n3 = a.declareLocal(ValueType.AnyRef, 'n3');
+  a.set_local(n3);
+
+  a.const_i32(2);
+  a.get_local(n3);
+  a.struct_new(nodeTypeIndex);
+  const n2 = a.declareLocal(ValueType.AnyRef, 'n2');
+  a.set_local(n2);
+
+  a.const_i32(1);
+  a.get_local(n2);
+  a.struct_new(nodeTypeIndex);
+  const n1 = a.declareLocal(ValueType.AnyRef, 'n1');
+  a.set_local(n1);
+
+  // Count = 3 (we know the structure)
+  a.const_i32(3);
+}).withExport();
+
+log('WAT:');
+log(mod.toString());
+
+const bytes = mod.toBytes();
+log('');
+log('Binary valid: ' + WebAssembly.validate(bytes.buffer));`
+    },
+    "passive-elements": {
+      label: "Passive Element Segments",
+      group: "Bulk Memory",
+      description: "Lazy-init tables with passive element segments and table.init.",
+      target: "2.0",
+      features: ["bulk-memory"],
+      imports: ["ModuleBuilder", "ValueType", "ElementType"],
+      code: `// Passive Element Segments \u2014 lazy table initialization
+// Like passive data segments but for function references in tables.
+// Use table.init to copy, elem.drop to free.
+const mod = new ModuleBuilder('passiveElem');
+const table = mod.defineTable(ElementType.AnyFunc, 10);
+mod.exportTable(table, 'table');
+
+const add = mod.defineFunction('add', [ValueType.Int32],
+  [ValueType.Int32, ValueType.Int32], (f, a) => {
+  a.get_local(f.getParameter(0));
+  a.get_local(f.getParameter(1));
+  a.add_i32();
+}).withExport();
+
+const mul = mod.defineFunction('mul', [ValueType.Int32],
+  [ValueType.Int32, ValueType.Int32], (f, a) => {
+  a.get_local(f.getParameter(0));
+  a.get_local(f.getParameter(1));
+  a.mul_i32();
+}).withExport();
+
+// Passive element segment \u2014 functions not placed in table until table.init
+const elemSeg = mod.definePassiveElementSegment([add, mul]);
+
+// Copy passive elements into table at runtime
+// initTable(destOffset, srcOffset, count)
+mod.defineFunction('initTable', null,
+  [ValueType.Int32, ValueType.Int32, ValueType.Int32], (f, a) => {
+  a.get_local(f.getParameter(0)); // dest table offset
+  a.get_local(f.getParameter(1)); // src segment offset
+  a.get_local(f.getParameter(2)); // count
+  a.table_init(elemSeg._index, table._index);
+}).withExport();
+
+// Drop the element segment
+mod.defineFunction('dropElems', null, [], (f, a) => {
+  a.elem_drop(elemSeg._index);
+}).withExport();
+
+// call_indirect to invoke a function from the table
+const fnType = mod.defineFunctionType([ValueType.Int32], [ValueType.Int32, ValueType.Int32]);
+mod.defineFunction('callFromTable', [ValueType.Int32],
+  [ValueType.Int32, ValueType.Int32, ValueType.Int32], (f, a) => {
+  a.get_local(f.getParameter(0)); // arg1
+  a.get_local(f.getParameter(1)); // arg2
+  a.get_local(f.getParameter(2)); // table index
+  a.call_indirect(fnType);
+}).withExport();
+
+const instance = await mod.instantiate();
+const exports = instance.instance.exports;
+
+// Table starts empty
+log('Before init: table is empty');
+
+// Copy both functions into table at offset 0
+exports.initTable(0, 0, 2);
+log('After initTable(0, 0, 2): 2 functions loaded');
+
+// Call via table: index 0 = add, index 1 = mul
+log('callFromTable(3, 4, 0) = ' + exports.callFromTable(3, 4, 0) + ' (add)');
+log('callFromTable(3, 4, 1) = ' + exports.callFromTable(3, 4, 1) + ' (mul)');
+
+// Drop element segment
+exports.dropElems();
+log('');
+log('Element segment dropped \u2014 can no longer table.init');
+try {
+  exports.initTable(5, 0, 1);
+  log('Should not reach here');
+} catch (e) {
+  log('initTable after drop: trapped as expected');
+}`
+    },
+    "compile-vs-instantiate": {
+      label: "Compile vs Instantiate",
+      group: "Debug",
+      description: "Use compile() to get a WebAssembly.Module, then instantiate it multiple times.",
+      target: "mvp",
+      features: [],
+      imports: ["ModuleBuilder", "ValueType"],
+      code: `// Compile vs Instantiate
+// mod.compile() returns a WebAssembly.Module without instantiating.
+// Useful for compiling once and instantiating multiple times,
+// or for sending a compiled module to a worker.
+const mod = new ModuleBuilder('compileExample');
+
+mod.defineFunction('add', [ValueType.Int32],
+  [ValueType.Int32, ValueType.Int32], (f, a) => {
+  a.get_local(f.getParameter(0));
+  a.get_local(f.getParameter(1));
+  a.add_i32();
+}).withExport();
+
+// Compile once
+const wasmModule = await mod.compile();
+log('Compiled: ' + wasmModule.constructor.name);
+log('Type: ' + typeof wasmModule);
+
+// Instantiate multiple times from the same module
+const inst1 = await WebAssembly.instantiate(wasmModule);
+const inst2 = await WebAssembly.instantiate(wasmModule);
+
+const add1 = inst1.exports.add;
+const add2 = inst2.exports.add;
+
+log('');
+log('Instance 1: add(10, 20) = ' + add1(10, 20));
+log('Instance 2: add(100, 200) = ' + add2(100, 200));
+log('');
+log('Same module, different instances: ' + (inst1 !== inst2));
+log('Same compiled module: ' + (wasmModule === wasmModule));`
     }
   };
 

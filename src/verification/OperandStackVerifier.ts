@@ -12,16 +12,58 @@ import GlobalBuilder from '../GlobalBuilder';
 import FunctionParameterBuilder from '../FunctionParameterBuilder';
 import FuncTypeSignature from '../FuncTypeSignature';
 import VerificationError from './VerificationError';
+import type StructTypeBuilder from '../StructTypeBuilder';
+import type ArrayTypeBuilder from '../ArrayTypeBuilder';
+
+/**
+ * Provides access to module type definitions for GC opcode verification.
+ * The verifier uses this to look up struct field types and array element types.
+ */
+export interface TypeResolver {
+  getStructType(typeIndex: number): StructTypeBuilder | null;
+  getArrayType(typeIndex: number): ArrayTypeBuilder | null;
+}
+
+// Map heap type encoding values to their corresponding ValueType descriptors
+const heapTypeToValueType: Record<number, ValueTypeDescriptor> = {
+  0x70: ValueType.FuncRef,
+  0x6f: ValueType.ExternRef,
+  0x6e: ValueType.AnyRef,
+  0x6d: ValueType.EqRef,
+  0x6c: ValueType.I31Ref,
+  0x6b: ValueType.StructRef,
+  0x6a: ValueType.ArrayRef,
+  0x71: ValueType.NullRef,
+  0x73: ValueType.NullFuncRef,
+  0x72: ValueType.NullExternRef,
+};
+
+const _refTypes = new Set<ValueTypeDescriptor>([
+  ValueType.FuncRef, ValueType.ExternRef, ValueType.AnyRef,
+  ValueType.EqRef, ValueType.I31Ref, ValueType.StructRef,
+  ValueType.ArrayRef, ValueType.NullRef, ValueType.NullFuncRef,
+  ValueType.NullExternRef,
+]);
+
+function _isRefType(vt: ValueTypeDescriptor): boolean {
+  return _refTypes.has(vt);
+}
 
 export default class OperandStackVerifier {
   _operandStack: OperandStack;
   _instructionCount: number;
   _funcType: FuncTypeSignature;
+  _unreachable: boolean;
+  _typeResolver: TypeResolver | null;
+  _memory64: boolean;
 
-  constructor(funcType: FuncTypeSignature) {
+  constructor(funcType: FuncTypeSignature, typeResolver?: TypeResolver, memory64?: boolean) {
     this._operandStack = OperandStack.Empty;
     this._instructionCount = 0;
     this._funcType = funcType;
+    this._unreachable = false;
+    this._typeResolver = typeResolver || null;
+    this._memory64 = memory64 || false;
   }
 
   get stack(): OperandStack {
@@ -33,6 +75,23 @@ export default class OperandStackVerifier {
     opCode: OpCodeDef,
     immediate: Immediate | null
   ): void {
+    // After unreachable code (throw, br, return, unreachable), skip verification
+    // until the next control flow boundary (end, else, catch, catch_all)
+    if (this._unreachable) {
+      if (opCode.controlFlow === ControlFlowType.Pop) {
+        // Reset unreachable on end — restore stack to block entry
+        this._unreachable = false;
+        this._operandStack = controlBlock.stack;
+        if (controlBlock.blockType !== BlockType.Void) {
+          // Non-void block produces its result type even when body is unreachable
+          const resultType = controlBlock.blockType as ValueTypeDescriptor;
+          this._operandStack = this._operandStack.push(resultType);
+        }
+      }
+      this._instructionCount++;
+      return;
+    }
+
     let modifiedStack = this._operandStack;
     if (opCode.stackBehavior !== OperandStackBehavior.None) {
       modifiedStack = this._verifyStack(controlBlock, opCode, immediate);
@@ -40,12 +99,28 @@ export default class OperandStackVerifier {
 
     if (opCode.controlFlow === ControlFlowType.Pop) {
       this._verifyControlFlowPop(controlBlock, modifiedStack);
-    } else if (opCode === (OpCodes as any).return) {
+    } else if (opCode === OpCodes["return"]) {
       modifiedStack = this._verifyReturnValues(modifiedStack, true);
+      this._unreachable = true;
     }
 
     if (immediate && immediate.type === ImmediateType.RelativeDepth) {
       this._verifyBranch(modifiedStack, immediate);
+    }
+    // Note: BrOnCast branch verification is skipped — br_on_cast carries the
+    // narrowed ref type to the target, which requires full GC subtype checking
+    // against the block's expected type. The control flow label reference is
+    // still tracked by the ControlFlowVerifier.
+
+    // Mark as unreachable after unconditional control transfer
+    if (
+      opCode === OpCodes["throw"] ||
+      opCode === OpCodes.rethrow ||
+      opCode === OpCodes.unreachable ||
+      opCode === OpCodes.br ||
+      opCode === OpCodes.br_table
+    ) {
+      this._unreachable = true;
     }
 
     this._operandStack = modifiedStack;
@@ -53,6 +128,12 @@ export default class OperandStackVerifier {
   }
 
   verifyElse(controlBlock: ControlFlowBlock): void {
+    // If the if-branch ended in unreachable code, skip stack checks and reset
+    if (this._unreachable) {
+      this._unreachable = false;
+      this._operandStack = controlBlock.stack;
+      return;
+    }
     if (controlBlock.blockType !== BlockType.Void) {
       // Non-void if block: the true branch must have the result on stack
       if (this._operandStack.isEmpty) {
@@ -61,7 +142,7 @@ export default class OperandStackVerifier {
         );
       }
       const expectedType = controlBlock.blockType as ValueTypeDescriptor;
-      if (this._operandStack.valueType !== expectedType) {
+      if (!this._isAssignableTo(this._operandStack.valueType, expectedType)) {
         throw new VerificationError(
           `else: expected ${expectedType.name} on the stack but found ${this._operandStack.valueType.name}.`
         );
@@ -106,7 +187,7 @@ export default class OperandStackVerifier {
         );
       }
       const expectedType = targetBlock.blockType as ValueTypeDescriptor;
-      if (stack.valueType !== expectedType) {
+      if (!this._isAssignableTo(stack.valueType, expectedType)) {
         throw new VerificationError(
           `Branch expects ${expectedType.name} but found ${stack.valueType.name} on the stack.`
         );
@@ -145,7 +226,7 @@ export default class OperandStackVerifier {
 
     let errorMessage = '';
     for (let index = 0; index < remaining.length; index++) {
-      if (remaining[index] !== this._funcType.returnTypes[index]) {
+      if (!this._isAssignableTo(remaining[index], this._funcType.returnTypes[index])) {
         errorMessage =
           `A ${this._funcType.returnTypes[index].name} was expected at ${remaining.length - index} ` +
           `but a ${remaining[index].name} was found. `;
@@ -184,6 +265,50 @@ export default class OperandStackVerifier {
   ): OperandStack {
     let modifiedStack = this._operandStack;
     const funcType = this._getFuncType(opCode, immediate);
+
+    // Handle ref_null: metadata says Int32 but should push the appropriate ref type
+    if (opCode === OpCodes.ref_null && immediate) {
+      const heapType = immediate.values[0];
+      const refVt = (typeof heapType === 'number' && heapTypeToValueType[heapType])
+        ? heapTypeToValueType[heapType]
+        : ValueType.AnyRef;
+      return modifiedStack.push(refVt);
+    }
+
+    // Handle ref_is_null: pops any reference type and pushes Int32
+    if (opCode === OpCodes.ref_is_null) {
+      return modifiedStack.pop().push(ValueType.Int32);
+    }
+
+    // Handle ref_func: pushes funcref (metadata says Int32)
+    if (opCode === OpCodes.ref_func) {
+      return modifiedStack.push(ValueType.FuncRef);
+    }
+
+    // Handle struct_new: pop N field values (metadata says Push-only, but it actually pops)
+    if (opCode === OpCodes.struct_new && this._typeResolver && immediate) {
+      const typeIndex = immediate.values[0];
+      const structType = this._typeResolver.getStructType(typeIndex);
+      if (structType) {
+        // Pop field values in reverse order (last field is on top of stack)
+        for (let i = structType.fields.length - 1; i >= 0; i--) {
+          modifiedStack = modifiedStack.pop();
+        }
+      }
+      // Then push the struct reference
+      modifiedStack = modifiedStack.push(ValueType.AnyRef);
+      return modifiedStack;
+    }
+
+    // Handle array_new_fixed: pop N element values (metadata says Push-only)
+    if (opCode === OpCodes.array_new_fixed && immediate) {
+      const fixedLength = immediate.values[1];
+      for (let i = 0; i < fixedLength; i++) {
+        modifiedStack = modifiedStack.pop();
+      }
+      modifiedStack = modifiedStack.push(ValueType.AnyRef);
+      return modifiedStack;
+    }
 
     if (
       opCode.stackBehavior === OperandStackBehavior.Pop ||
@@ -225,7 +350,7 @@ export default class OperandStackVerifier {
       }
 
       const valueType = (ValueType as any)[x] as ValueTypeDescriptor;
-      if (valueType !== stack.valueType) {
+      if (!this._isAssignableTo(stack.valueType, valueType)) {
         throw new VerificationError(
           `Unexpected type found on stack at offset ${this._instructionCount + 1}. ` +
             `A ${valueType.name} was expected but a ${stack.valueType.name} was found.`
@@ -285,7 +410,7 @@ export default class OperandStackVerifier {
   _getFuncType(opCode: OpCodeDef, immediate: Immediate | null): FuncTypeBuilder | null {
     let funcType: FuncTypeBuilder | null = null;
 
-    if (opCode === (OpCodes as any).call || opCode === (OpCodes as any).return_call) {
+    if (opCode === OpCodes.call || opCode === OpCodes.return_call) {
       if (immediate!.values[0] instanceof ImportBuilder) {
         funcType = immediate!.values[0].data as FuncTypeBuilder;
       } else if (immediate!.values[0] && 'funcTypeBuilder' in immediate!.values[0]) {
@@ -293,7 +418,7 @@ export default class OperandStackVerifier {
       } else {
         throw new VerificationError('Error getting funcType for call, invalid immediate.');
       }
-    } else if (opCode === (OpCodes as any).call_indirect || opCode === (OpCodes as any).return_call_indirect) {
+    } else if (opCode === OpCodes.call_indirect || opCode === OpCodes.return_call_indirect) {
       if (immediate!.values[0] instanceof FuncTypeBuilder) {
         funcType = immediate!.values[0];
       } else {
@@ -312,8 +437,8 @@ export default class OperandStackVerifier {
     argCount: number
   ): ValueTypeDescriptor {
     if (
-      opCode === (OpCodes as any).get_global ||
-      opCode === (OpCodes as any).set_global
+      opCode === OpCodes.get_global ||
+      opCode === OpCodes.set_global
     ) {
       if (immediate!.values[0] instanceof GlobalBuilder) {
         return immediate!.values[0].valueType;
@@ -322,9 +447,9 @@ export default class OperandStackVerifier {
       }
       throw new VerificationError('Invalid operand for global instruction.');
     } else if (
-      opCode === (OpCodes as any).get_local ||
-      opCode === (OpCodes as any).set_local ||
-      opCode === (OpCodes as any).tee_local
+      opCode === OpCodes.get_local ||
+      opCode === OpCodes.set_local ||
+      opCode === OpCodes.tee_local
     ) {
       if (
         !(immediate!.values[0] instanceof LocalBuilder) &&
@@ -335,8 +460,113 @@ export default class OperandStackVerifier {
       return immediate!.values[0].valueType;
     }
 
+    // ─── GC opcode push type resolution ───
+
+    // struct.get: push the field's value type
+    if (opCode === OpCodes.struct_get && this._typeResolver && immediate) {
+      const typeIndex = immediate.values[0];
+      const fieldIndex = immediate.values[1];
+      const structType = this._typeResolver.getStructType(typeIndex);
+      if (structType && fieldIndex < structType.fields.length) {
+        return structType.fields[fieldIndex].type;
+      }
+    }
+
+    // struct.new_default: push a ref type (no field pops needed)
+    if (opCode === OpCodes.struct_new_default) {
+      return ValueType.AnyRef;
+    }
+
+    // array.new, array.new_default, array.new_data, array.new_elem: push array ref
+    if (
+      opCode === OpCodes.array_new ||
+      opCode === OpCodes.array_new_default ||
+      opCode === OpCodes.array_new_data ||
+      opCode === OpCodes.array_new_elem
+    ) {
+      return ValueType.AnyRef;
+    }
+
+    // array.get: push the array's element type
+    if (opCode === OpCodes.array_get && this._typeResolver && immediate) {
+      const typeIndex = immediate.values[0];
+      const arrayType = this._typeResolver.getArrayType(typeIndex);
+      if (arrayType) {
+        return arrayType.elementType;
+      }
+    }
+
+    // ref.cast, ref.cast_null: push a ref type
+    if (opCode === OpCodes.ref_cast || opCode === OpCodes.ref_cast_null) {
+      return ValueType.AnyRef;
+    }
+
+    // ref.i31: push i31ref
+    if (opCode === OpCodes.ref_i31) {
+      return ValueType.I31Ref;
+    }
+
+    // any.convert_extern: push anyref
+    if (opCode === OpCodes.any_convert_extern) {
+      return ValueType.AnyRef;
+    }
+
+    // extern.convert_any: push externref
+    if (opCode === OpCodes.extern_convert_any) {
+      return ValueType.ExternRef;
+    }
+
+    // br_on_cast, br_on_cast_fail: push a ref type (the narrowed or original type)
+    if (opCode === OpCodes.br_on_cast || opCode === OpCodes.br_on_cast_fail) {
+      return ValueType.AnyRef;
+    }
+
+    // ref.null: push the corresponding ref type based on heap type immediate
+    if (opCode === OpCodes.ref_null && immediate) {
+      const heapType = immediate.values[0];
+      if (typeof heapType === 'number' && heapTypeToValueType[heapType]) {
+        return heapTypeToValueType[heapType];
+      }
+      return ValueType.AnyRef;
+    }
+
     const stackArgTypes = this._getStackValueTypes(this._operandStack, argCount);
     return stackArgTypes[0];
+  }
+
+  /**
+   * Check if `actual` is assignable to `expected` considering GC reference subtyping.
+   * Subtype hierarchy: anyref ← eqref ← {i31ref, structref, arrayref}
+   * Bottom types: nullref → any, nullfuncref → funcref, nullexternref → externref
+   */
+  _isAssignableTo(actual: ValueTypeDescriptor, expected: ValueTypeDescriptor): boolean {
+    if (actual === expected) return true;
+    // GC reference type subtyping: anyref ← eqref ← {i31ref, structref, arrayref}
+    if (expected === ValueType.AnyRef) {
+      return actual === ValueType.EqRef || actual === ValueType.I31Ref ||
+        actual === ValueType.StructRef || actual === ValueType.ArrayRef ||
+        actual === ValueType.NullRef;
+    }
+    if (expected === ValueType.EqRef) {
+      return actual === ValueType.I31Ref || actual === ValueType.StructRef ||
+        actual === ValueType.ArrayRef || actual === ValueType.NullRef;
+    }
+    if (expected === ValueType.FuncRef) {
+      return actual === ValueType.NullFuncRef;
+    }
+    if (expected === ValueType.ExternRef) {
+      return actual === ValueType.NullExternRef;
+    }
+    // Legacy compatibility: many opcodes (table.set, etc.) use Int32 in metadata
+    // as a placeholder for reference types. Allow ref types where Int32 is expected.
+    if (expected === ValueType.Int32 && _isRefType(actual)) {
+      return true;
+    }
+    // Memory64: load/store address operands are i64 instead of i32
+    if (expected === ValueType.Int32 && actual === ValueType.Int64 && this._memory64) {
+      return true;
+    }
+    return false;
   }
 
   _getStackValueTypes(stack: OperandStack, count: number): ValueTypeDescriptor[] {

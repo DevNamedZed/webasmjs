@@ -1,6 +1,6 @@
 import { ModuleBuilder } from '../src/index';
 
-const latestOpts = { generateNameSection: true, disableVerification: true, target: 'latest' as const };
+const latestOpts = { generateNameSection: true, target: 'latest' as const };
 
 describe('SIMD v128 load/store operations', () => {
   test('load_v128 and store_v128', () => {

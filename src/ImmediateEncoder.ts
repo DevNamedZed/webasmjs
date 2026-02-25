@@ -6,15 +6,16 @@ import FunctionParameterBuilder from './FunctionParameterBuilder';
 import FuncTypeBuilder from './FuncTypeBuilder';
 import GlobalBuilder from './GlobalBuilder';
 import ImportBuilder from './ImportBuilder';
-import { ExternalKind, BlockTypeDescriptor } from './types';
+import type LabelBuilder from './LabelBuilder';
+import { ExternalKind, BlockTypeDescriptor, HeapTypeRef } from './types';
 
 export default class ImmediateEncoder {
   static encodeBlockSignature(writer: BinaryWriter, blockType: BlockTypeDescriptor): void {
     writer.writeVarInt7(blockType.value);
   }
 
-  static encodeRelativeDepth(writer: BinaryWriter, label: any, depth: number): void {
-    const relativeDepth = depth - label.block.depth;
+  static encodeRelativeDepth(writer: BinaryWriter, label: LabelBuilder, depth: number): void {
+    const relativeDepth = depth - label.block!.depth;
     writer.writeVarInt7(relativeDepth);
   }
 
@@ -158,15 +159,14 @@ export default class ImmediateEncoder {
     writer.writeVarUInt32(index);
   }
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  static encodeHeapType(writer: BinaryWriter, heapType: any): void {
+  static encodeHeapType(writer: BinaryWriter, heapType: HeapTypeRef): void {
     if (typeof heapType === 'number') {
       // Concrete type index
       writer.writeVarInt32(heapType);
-    } else if (heapType && typeof heapType.value === 'number') {
-      // Abstract heap type descriptor (from HeapType constant) or type builder
+    } else if (typeof heapType === 'object' && 'value' in heapType && typeof heapType.value === 'number') {
+      // Abstract heap type descriptor (from HeapType constant)
       writer.writeVarInt7(heapType.value);
-    } else if (heapType && typeof heapType.index === 'number') {
+    } else if (typeof heapType === 'object' && 'index' in heapType && typeof heapType.index === 'number') {
       // TypeEntry (StructTypeBuilder, ArrayTypeBuilder, FuncTypeBuilder)
       writer.writeVarInt32(heapType.index);
     } else {
@@ -174,11 +174,10 @@ export default class ImmediateEncoder {
     }
   }
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  static encodeBrOnCast(writer: BinaryWriter, flags: number, labelBuilder: any, heapType1: any, heapType2: any): void {
+  static encodeBrOnCast(writer: BinaryWriter, flags: number, label: LabelBuilder, heapType1: HeapTypeRef, heapType2: HeapTypeRef, depth: number): void {
     writer.writeByte(flags);
-    const relativeDepth = labelBuilder;
-    writer.writeVarUInt32(typeof relativeDepth === 'number' ? relativeDepth : 0);
+    const relativeDepth = depth - label.block!.depth;
+    writer.writeVarUInt32(relativeDepth);
     ImmediateEncoder.encodeHeapType(writer, heapType1);
     ImmediateEncoder.encodeHeapType(writer, heapType2);
   }

@@ -70,6 +70,12 @@ export const HeapType = {
 export type HeapTypeDescriptor = typeof HeapType[keyof typeof HeapType];
 
 /**
+ * A heap type reference: abstract heap types (HeapType.Func, etc.),
+ * concrete type indices (number), or type builders ({ index: number }).
+ */
+export type HeapTypeRef = HeapTypeDescriptor | number | { index: number };
+
+/**
  * Prefix bytes for concrete reference types: (ref $type) and (ref null $type).
  */
 export const RefTypePrefix = {
@@ -173,6 +179,7 @@ export const ExternalKind = {
   Table: { name: 'Table', value: 1 } as const,
   Memory: { name: 'Memory', value: 2 } as const,
   Global: { name: 'Global', value: 3 } as const,
+  Tag: { name: 'Tag', value: 4 } as const,
 } as const;
 
 export type ExternalKindType = typeof ExternalKind[keyof typeof ExternalKind];
@@ -323,3 +330,58 @@ export function writeValueType(writer: import('./BinaryWriter').default, vt: Val
     writer.writeVarInt7(vt.value);
   }
 }
+
+// ─── Shorthand type aliases ───
+
+/** Shorthand for ValueType.Int32 */
+export const i32 = ValueType.Int32;
+/** Shorthand for ValueType.Int64 */
+export const i64 = ValueType.Int64;
+/** Shorthand for ValueType.Float32 */
+export const f32 = ValueType.Float32;
+/** Shorthand for ValueType.Float64 */
+export const f64 = ValueType.Float64;
+/** Shorthand for ValueType.V128 */
+export const v128 = ValueType.V128;
+/** Shorthand for ValueType.FuncRef */
+export const funcref = ValueType.FuncRef;
+/** Shorthand for ValueType.ExternRef */
+export const externref = ValueType.ExternRef;
+/** Shorthand for ValueType.AnyRef */
+export const anyref = ValueType.AnyRef;
+/** Shorthand for ValueType.EqRef */
+export const eqref = ValueType.EqRef;
+/** Shorthand for ValueType.I31Ref */
+export const i31ref = ValueType.I31Ref;
+/** Shorthand for ValueType.StructRef */
+export const structref = ValueType.StructRef;
+/** Shorthand for ValueType.ArrayRef */
+export const arrayref = ValueType.ArrayRef;
+
+// ─── Struct field DSL ───
+
+/**
+ * Wraps a ValueType to mark it as mutable in struct field definitions.
+ * Use with the object syntax of defineStructType:
+ *   mod.defineStructType({ x: mut(f64), y: f64 })
+ */
+export interface MutableFieldDescriptor {
+  readonly type: ValueTypeDescriptor;
+  readonly mutable: true;
+  readonly _brand: 'MutableField';
+}
+
+export function mut(type: ValueTypeDescriptor): MutableFieldDescriptor {
+  return { type, mutable: true, _brand: 'MutableField' } as const;
+}
+
+/**
+ * A struct field definition in object syntax:
+ * - Bare ValueType = immutable field
+ * - mut(ValueType) = mutable field
+ * - { type, mutable } = explicit control
+ */
+export type FieldInput = ValueTypeDescriptor | MutableFieldDescriptor | { type: ValueTypeDescriptor; mutable?: boolean };
+
+/** Object mapping field names to field definitions */
+export type StructFieldsObject = Record<string, FieldInput>;

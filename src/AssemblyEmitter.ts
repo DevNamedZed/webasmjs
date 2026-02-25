@@ -1,6 +1,6 @@
 import Arg from './Arg';
 import BinaryWriter from './BinaryWriter';
-import { BlockTypeDescriptor, ImmediateType, OpCodeDef, WasmFeature } from './types';
+import { BlockTypeDescriptor, ImmediateType, OpCodeDef, ValueTypeDescriptor, WasmFeature } from './types';
 import FunctionParameterBuilder from './FunctionParameterBuilder';
 import type FunctionBuilder from './FunctionBuilder';
 import Immediate from './Immediate';
@@ -12,11 +12,11 @@ import OpCodeEmitter from './OpCodeEmitter';
 import OpCodes from './OpCodes';
 import ControlFlowVerifier from './verification/ControlFlowVerifier';
 import { ControlFlowType } from './verification/types';
-import OperandStackVerifier from './verification/OperandStackVerifier';
+import OperandStackVerifier, { TypeResolver } from './verification/OperandStackVerifier';
 import FuncTypeSignature from './FuncTypeSignature';
 import { BlockType } from './types';
 
-const validateParameters = (immediateType: string, values: any[] | undefined, length: number): void => {
+const validateParameters = (immediateType: string, values: unknown[] | undefined, length: number): void => {
   if (!values || values.length !== length) {
     throw new Error(`Unexpected number of values for ${immediateType}.`);
   }
@@ -37,7 +37,9 @@ export default class AssemblyEmitter extends OpCodeEmitter {
 
   constructor(
     funcSignature: FuncTypeSignature,
-    options: AssemblyEmitterOptions = { disableVerification: false }
+    options: AssemblyEmitterOptions = { disableVerification: false },
+    typeResolver?: TypeResolver,
+    memory64?: boolean
   ) {
     super();
 
@@ -45,7 +47,7 @@ export default class AssemblyEmitter extends OpCodeEmitter {
     this._instructions = [];
     this._locals = [];
     this._controlFlowVerifier = new ControlFlowVerifier(options.disableVerification);
-    this._operandStackVerifier = new OperandStackVerifier(funcSignature);
+    this._operandStackVerifier = new OperandStackVerifier(funcSignature, typeResolver, memory64);
     this._entryLabel = this._controlFlowVerifier.push(
       this._operandStackVerifier.stack,
       BlockType.Void
@@ -53,7 +55,7 @@ export default class AssemblyEmitter extends OpCodeEmitter {
     this._options = options;
   }
 
-  get returnValues(): any {
+  get returnValues(): ValueTypeDescriptor[] | this {
     return this;
   }
 
@@ -74,7 +76,7 @@ export default class AssemblyEmitter extends OpCodeEmitter {
   }
 
   declareLocal(
-    type: any,
+    type: ValueTypeDescriptor,
     name: string | null = null,
     count: number = 1
   ): LocalBuilder {
@@ -95,10 +97,10 @@ export default class AssemblyEmitter extends OpCodeEmitter {
   emit(opCode: OpCodeDef, ...args: any[]): any {
     Arg.notNull('opCode', opCode);
     const depth = this._controlFlowVerifier.size - 1;
-    let result: any = null;
+    let result: LabelBuilder | null = null;
     let immediate: Immediate | null = null;
     let pushLabel: LabelBuilder | null = null;
-    let labelCallback: ((label: any) => void) | null = null;
+    let labelCallback: ((label: LabelBuilder) => void) | null = null;
 
     if (depth < 0) {
       throw new Error(
@@ -115,8 +117,8 @@ export default class AssemblyEmitter extends OpCodeEmitter {
         if (args[1] instanceof LabelBuilder) {
           pushLabel = args[1];
         } else if (typeof args[1] === 'function') {
-          const userFunction = args[1];
-          labelCallback = (x: any) => {
+          const userFunction = args[1] as (label: LabelBuilder) => void;
+          labelCallback = (x: LabelBuilder) => {
             userFunction(x);
           };
         } else {
@@ -147,17 +149,52 @@ export default class AssemblyEmitter extends OpCodeEmitter {
     }
 
     if (!this.disableVerification) {
+      // throw: pop tag parameter values before verification marks code unreachable
+      if (opCode === OpCodes["throw"] && immediate) {
+        const tagParamTypes = this._getTagParameterTypes(immediate.values[0]);
+        if (tagParamTypes) {
+          for (let i = tagParamTypes.length - 1; i >= 0; i--) {
+            this._operandStackVerifier._operandStack =
+              this._operandStackVerifier._operandStack.pop();
+          }
+        }
+      }
+
       this._operandStackVerifier.verifyInstruction(
         this._controlFlowVerifier.peek()!.block!,
         opCode,
         immediate
       );
 
-      if (opCode === (OpCodes as any).else) {
+      if (opCode === OpCodes["else"]) {
         this._operandStackVerifier.verifyElse(
           this._controlFlowVerifier.peek()!.block!
         );
       }
+
+      if (opCode === OpCodes["catch"] || opCode === OpCodes.catch_all) {
+        const block = this._controlFlowVerifier.peek()!.block!;
+        // Reset operand stack to block entry (like else) and clear unreachable
+        this._operandStackVerifier._operandStack = block.stack;
+        this._operandStackVerifier._unreachable = false;
+        block.inCatchHandler = true;
+
+        // For catch (not catch_all), push the tag's parameter types onto the stack
+        if (opCode === OpCodes["catch"] && immediate) {
+          const tagParamTypes = this._getTagParameterTypes(immediate.values[0]);
+          if (tagParamTypes) {
+            for (const paramType of tagParamTypes) {
+              this._operandStackVerifier._operandStack =
+                this._operandStackVerifier._operandStack.push(paramType);
+            }
+          }
+        }
+      }
+    }
+
+    // Handle delegate: pops the try block (like end)
+    if (opCode === OpCodes.delegate) {
+      this._controlFlowVerifier.pop();
     }
 
     if (opCode.controlFlow) {
@@ -166,7 +203,7 @@ export default class AssemblyEmitter extends OpCodeEmitter {
 
     this._instructions.push(new Instruction(opCode, immediate));
     if (labelCallback) {
-      labelCallback(result);
+      labelCallback(result!);
       this.end();
     }
 
@@ -177,22 +214,29 @@ export default class AssemblyEmitter extends OpCodeEmitter {
     opCode: OpCodeDef,
     immediate: Immediate | null,
     label: LabelBuilder | null
-  ): any {
-    let result: any = null;
+  ): LabelBuilder | null {
+    let result: LabelBuilder | null = null;
     if (opCode.controlFlow === ControlFlowType.Push) {
       const blockType = immediate!.values[0] as BlockTypeDescriptor;
-      const isLoop = opCode === (OpCodes as any).loop;
+      const isLoop = opCode === OpCodes.loop;
+      const isTry = opCode === OpCodes["try"];
       result = this._controlFlowVerifier.push(
         this._operandStackVerifier.stack,
         blockType,
         label,
-        isLoop
+        isLoop,
+        isTry
       );
     } else if (opCode.controlFlow === ControlFlowType.Pop) {
       this._controlFlowVerifier.pop();
     }
 
     return result;
+  }
+
+  _getTagParameterTypes(_tagIndex: number): ValueTypeDescriptor[] | null {
+    // Override in FunctionEmitter to provide actual tag parameter types
+    return null;
   }
 
   write(writer: BinaryWriter): void {
@@ -314,7 +358,7 @@ export default class AssemblyEmitter extends OpCodeEmitter {
 
       case ImmediateType.BrOnCast:
         validateParameters(immediateType, values, 4);
-        return Immediate.createBrOnCast(values[0], values[1], values[2], values[3]);
+        return Immediate.createBrOnCast(values[0], values[1], values[2], values[3], depth);
 
       default:
         throw new Error('Unknown operand type.');

@@ -1,6 +1,6 @@
 import { ModuleBuilder, ValueType } from '../src/index';
 
-const latestOpts = { generateNameSection: true, disableVerification: true, target: 'latest' as const };
+const latestOpts = { generateNameSection: true, target: 'latest' as const };
 
 describe('extract_lane', () => {
   test('extract_lane_i32x4 for each lane', async () => {

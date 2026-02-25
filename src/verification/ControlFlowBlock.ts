@@ -9,6 +9,8 @@ export default class ControlFlowBlock {
   depth: number;
   childrenCount: number;
   isLoop: boolean;
+  isTry: boolean;
+  inCatchHandler: boolean;
 
   constructor(
     stack: OperandStack,
@@ -17,7 +19,8 @@ export default class ControlFlowBlock {
     index: number,
     depth: number,
     childrenCount: number,
-    isLoop: boolean = false
+    isLoop: boolean = false,
+    isTry: boolean = false
   ) {
     this.stack = stack;
     this.blockType = blockType;
@@ -26,6 +29,8 @@ export default class ControlFlowBlock {
     this.depth = depth;
     this.childrenCount = childrenCount;
     this.isLoop = isLoop;
+    this.isTry = isTry;
+    this.inCatchHandler = false;
   }
 
   canReference(block: ControlFlowBlock): boolean {

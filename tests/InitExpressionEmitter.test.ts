@@ -29,7 +29,7 @@ describe('InitExpressionEmitter', () => {
   });
 
   test('get_global in element init expression throws', () => {
-    const mod = new ModuleBuilder('test', { disableVerification: true });
+    const mod = new ModuleBuilder('test');
     const g = mod.defineGlobal(ValueType.Int32, false, 0);
     const emitter = new InitExpressionEmitter(InitExpressionType.Element, ValueType.Int32);
     expect(() => emitter.emit(OpCodes.get_global, g)).toThrow('global not supported');
@@ -41,7 +41,7 @@ describe('InitExpressionEmitter', () => {
   });
 
   test('get_global with mutable global throws', () => {
-    const mod = new ModuleBuilder('test', { disableVerification: true });
+    const mod = new ModuleBuilder('test');
     const g = mod.defineGlobal(ValueType.Int32, true, 0);
     const emitter = new InitExpressionEmitter(InitExpressionType.Global, ValueType.Int32);
     expect(() => emitter.emit(OpCodes.get_global, g)).toThrow('mutable global');

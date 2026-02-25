@@ -145,7 +145,7 @@ test('Example - Fibonacci', async () => {
 
 describe('Integration', () => {
   test('Fibonacci iterative', async () => {
-    const mod = new ModuleBuilder('test', { disableVerification: true });
+    const mod = new ModuleBuilder('test');
 
     const fib = mod.defineFunction(
       'fib',
@@ -226,7 +226,7 @@ describe('Integration', () => {
   });
 
   test('Mutual recursion - is_even / is_odd', async () => {
-    const mod = new ModuleBuilder('test', { disableVerification: true });
+    const mod = new ModuleBuilder('test');
 
     // Define both functions first (forward declarations)
     const isEven = mod.defineFunction(

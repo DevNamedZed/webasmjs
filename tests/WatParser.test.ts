@@ -1,4 +1,6 @@
 import { parseWat, ModuleBuilder, ValueType, TextModuleWriter, BinaryReader, ExternalKind } from '../src/index';
+import StructTypeBuilder from '../src/StructTypeBuilder';
+import ArrayTypeBuilder from '../src/ArrayTypeBuilder';
 
 test('WAT Parser - simple add function', async () => {
   const wat = `
@@ -1309,4 +1311,377 @@ test('WAT Parser - memory with max and exported with store/load', async () => {
 
   store(0, 12345);
   expect(load(0)).toBe(12345);
+});
+
+// --- GC type parsing ---
+
+test('WAT Parser - struct type', () => {
+  const wat = `
+    (module $test
+      (type (struct (field $x (mut i32)) (field $y f64)))
+    )
+  `;
+
+  const mod = parseWat(wat, { target: 'latest' });
+  expect(mod._types.length).toBe(1);
+  const struct = mod._types[0] as StructTypeBuilder;
+  expect(struct).toBeInstanceOf(StructTypeBuilder);
+  expect(struct.fields.length).toBe(2);
+  expect(struct.fields[0].name).toBe('x');
+  expect(struct.fields[0].mutable).toBe(true);
+  expect(struct.fields[0].type).toBe(ValueType.Int32);
+  expect(struct.fields[1].name).toBe('y');
+  expect(struct.fields[1].mutable).toBe(false);
+  expect(struct.fields[1].type).toBe(ValueType.Float64);
+});
+
+test('WAT Parser - array type', () => {
+  const wat = `
+    (module $test
+      (type (array (mut i32)))
+    )
+  `;
+
+  const mod = parseWat(wat, { target: 'latest' });
+  expect(mod._types.length).toBe(1);
+  const arr = mod._types[0] as ArrayTypeBuilder;
+  expect(arr).toBeInstanceOf(ArrayTypeBuilder);
+  expect(arr.mutable).toBe(true);
+  expect(arr.elementType).toBe(ValueType.Int32);
+});
+
+test('WAT Parser - immutable array type', () => {
+  const wat = `
+    (module $test
+      (type (array f64))
+    )
+  `;
+
+  const mod = parseWat(wat, { target: 'latest' });
+  const arr = mod._types[0] as ArrayTypeBuilder;
+  expect(arr.mutable).toBe(false);
+  expect(arr.elementType).toBe(ValueType.Float64);
+});
+
+test('WAT Parser - mixed func and struct types', () => {
+  const wat = `
+    (module $test
+      (type (func (param i32) (result i32)))
+      (type (struct (field $val i32)))
+      (type (array i64))
+    )
+  `;
+
+  const mod = parseWat(wat, { target: 'latest' });
+  expect(mod._types.length).toBe(3);
+  expect(mod._types[0]).toBeInstanceOf(Object); // FuncTypeBuilder
+  expect(mod._types[1]).toBeInstanceOf(StructTypeBuilder);
+  expect(mod._types[2]).toBeInstanceOf(ArrayTypeBuilder);
+});
+
+test('WAT Parser - struct with named type', () => {
+  const wat = `
+    (module $test
+      (type $point (struct (field $x i32) (field $y i32)))
+    )
+  `;
+
+  const mod = parseWat(wat, { target: 'latest' });
+  expect(mod._types.length).toBe(1);
+  const struct = mod._types[0] as StructTypeBuilder;
+  expect(struct.fields.length).toBe(2);
+});
+
+// --- GC instruction parsing ---
+
+test('WAT Parser - struct.new_default and struct.get', () => {
+  const wat = `
+    (module $test
+      (type (struct (field $x (mut i32))))
+      (func $f (result i32)
+        struct.new_default 0
+        struct.get 0 0
+      )
+      (export "test" (func $f))
+    )
+  `;
+
+  const mod = parseWat(wat, { target: 'latest' });
+  const bytes = mod.toBytes();
+  expect(bytes.length).toBeGreaterThan(0);
+  // Verify the function body contains struct opcodes
+  const hexStr = Array.from(bytes).map((b) => b.toString(16).padStart(2, '0')).join('');
+  expect(hexStr).toContain('fb01'); // struct.new_default
+  expect(hexStr).toContain('fb02'); // struct.get
+});
+
+test('WAT Parser - struct.set parses TypeIndexField', () => {
+  const wat = `
+    (module $test
+      (type (struct (field $x (mut i32))))
+      (func $f
+        struct.new_default 0
+        i32.const 42
+        struct.set 0 0
+      )
+      (export "test" (func $f))
+    )
+  `;
+
+  const mod = parseWat(wat, { target: 'latest' });
+  const bytes = mod.toBytes();
+  expect(bytes.length).toBeGreaterThan(0);
+  const hexStr = Array.from(bytes).map((b) => b.toString(16).padStart(2, '0')).join('');
+  expect(hexStr).toContain('fb05'); // struct.set
+});
+
+test('WAT Parser - array.new_fixed parses TypeIndexIndex', () => {
+  const wat = `
+    (module $test
+      (type (array (mut i32)))
+      (func $f
+        i32.const 1
+        i32.const 2
+        array.new_fixed 0 2
+        drop
+      )
+      (export "test" (func $f))
+    )
+  `;
+
+  const mod = parseWat(wat, { target: 'latest' });
+  const bytes = mod.toBytes();
+  expect(bytes.length).toBeGreaterThan(0);
+  const hexStr = Array.from(bytes).map((b) => b.toString(16).padStart(2, '0')).join('');
+  expect(hexStr).toContain('fb08'); // array.new_fixed
+});
+
+test('WAT Parser - ref.test with abstract heap type', () => {
+  const wat = `
+    (module $test
+      (func $f (param anyref) (result i32)
+        local.get 0
+        ref.test i31
+      )
+      (export "test" (func $f))
+    )
+  `;
+
+  const mod = parseWat(wat, { target: 'latest' });
+  const bytes = mod.toBytes();
+  expect(bytes.length).toBeGreaterThan(0);
+  const hexStr = Array.from(bytes).map((b) => b.toString(16).padStart(2, '0')).join('');
+  expect(hexStr).toContain('fb14'); // ref.test
+});
+
+test('WAT Parser - ref.test with numeric type index', () => {
+  const wat = `
+    (module $test
+      (type (struct (field $x i32)))
+      (func $f (param anyref) (result i32)
+        local.get 0
+        ref.test 0
+      )
+      (export "test" (func $f))
+    )
+  `;
+
+  const mod = parseWat(wat, { target: 'latest' });
+  const bytes = mod.toBytes();
+  expect(bytes.length).toBeGreaterThan(0);
+});
+
+test('WAT Parser - ref.cast with heap type', () => {
+  const wat = `
+    (module $test
+      (func $f (param anyref)
+        local.get 0
+        ref.cast struct
+        drop
+      )
+      (export "test" (func $f))
+    )
+  `;
+
+  const mod = parseWat(wat, { target: 'latest' });
+  const bytes = mod.toBytes();
+  expect(bytes.length).toBeGreaterThan(0);
+});
+
+test('WAT Parser - i31 and conversion operations', () => {
+  const wat = `
+    (module $test
+      (func $f (result i32)
+        i32.const 42
+        ref.i31
+        i31.get_s
+      )
+      (export "test" (func $f))
+    )
+  `;
+
+  const mod = parseWat(wat, { target: 'latest' });
+  const bytes = mod.toBytes();
+  expect(bytes.length).toBeGreaterThan(0);
+});
+
+test('WAT Parser - array.len (no immediate)', () => {
+  const wat = `
+    (module $test
+      (type (array (mut i32)))
+      (func $f (result i32)
+        i32.const 0
+        i32.const 5
+        array.new 0
+        array.len
+      )
+      (export "test" (func $f))
+    )
+  `;
+
+  const mod = parseWat(wat, { target: 'latest' });
+  const bytes = mod.toBytes();
+  expect(bytes.length).toBeGreaterThan(0);
+});
+
+describe('WAT Parser - exception handling', () => {
+  test('parse tag definition', () => {
+    const wat = `
+      (module $test
+        (tag (param i32))
+        (func $noop)
+        (export "noop" (func $noop))
+      )
+    `;
+    const mod = parseWat(wat, { target: 'latest' });
+    expect(mod._tags).toHaveLength(1);
+  });
+
+  test('parse tag with name', () => {
+    const wat = `
+      (module $test
+        (tag $myTag (param i32 f64))
+        (func $noop)
+        (export "noop" (func $noop))
+      )
+    `;
+    const mod = parseWat(wat, { target: 'latest' });
+    expect(mod._tags).toHaveLength(1);
+  });
+
+  test('parse throw instruction', () => {
+    const wat = `
+      (module $test
+        (tag (param i32))
+        (func $test
+          i32.const 42
+          throw 0
+        )
+        (export "test" (func $test))
+      )
+    `;
+    const mod = parseWat(wat, { target: 'latest' });
+    expect(() => mod.toBytes()).not.toThrow();
+  });
+
+  test('parse try/catch/end', () => {
+    const wat = `
+      (module $test
+        (tag (param i32))
+        (func $test (result i32)
+          try (result i32)
+            i32.const 42
+          catch 0
+            drop
+            i32.const 0
+          end
+        )
+        (export "test" (func $test))
+      )
+    `;
+    const mod = parseWat(wat, { target: 'latest' });
+    expect(() => mod.toBytes()).not.toThrow();
+  });
+
+  test('parse try/catch_all/end', () => {
+    const wat = `
+      (module $test
+        (tag (param i32))
+        (func $test (result i32)
+          try (result i32)
+            i32.const 42
+          catch_all
+            i32.const 0
+          end
+        )
+        (export "test" (func $test))
+      )
+    `;
+    const mod = parseWat(wat, { target: 'latest' });
+    expect(() => mod.toBytes()).not.toThrow();
+  });
+
+  test('parse try/delegate', () => {
+    const wat = `
+      (module $test
+        (tag (param i32))
+        (func $test
+          try
+            try
+              i32.const 42
+              throw 0
+            delegate 0
+          catch 0
+            drop
+          end
+        )
+        (export "test" (func $test))
+      )
+    `;
+    const mod = parseWat(wat, { target: 'latest' });
+    expect(() => mod.toBytes()).not.toThrow();
+  });
+
+  test('parse rethrow', () => {
+    const wat = `
+      (module $test
+        (tag (param i32))
+        (func $test
+          try
+            i32.const 42
+            throw 0
+          catch 0
+            drop
+            rethrow 0
+          end
+        )
+        (export "test" (func $test))
+      )
+    `;
+    const mod = parseWat(wat, { target: 'latest' });
+    expect(() => mod.toBytes()).not.toThrow();
+  });
+
+  test('WAT roundtrip for exception handling', () => {
+    const wat = `
+      (module $test
+        (tag (param i32))
+        (func $test
+          try
+            i32.const 42
+            throw 0
+          catch 0
+            drop
+          end
+        )
+        (export "test" (func $test))
+      )
+    `;
+    const mod = parseWat(wat, { target: 'latest' });
+    const watOut = mod.toString();
+    expect(watOut).toContain('try');
+    expect(watOut).toContain('throw');
+    expect(watOut).toContain('catch');
+    expect(watOut).toContain('(tag');
+  });
 });

@@ -25,8 +25,10 @@ import TextModuleWriter from './TextModuleWriter';
 import TagBuilder from './TagBuilder';
 import CustomSectionBuilder from './CustomSectionBuilder';
 import FunctionEmitter from './FunctionEmitter';
+import type InitExpressionEmitter from './InitExpressionEmitter';
 import VerificationError from './verification/VerificationError';
-import StructTypeBuilder, { StructField, StructTypeOptions } from './StructTypeBuilder';
+import StructTypeBuilder, { StructField, StructTypeOptions, TypedStructBuilder } from './StructTypeBuilder';
+import { FieldInput, MutableFieldDescriptor, StructFieldsObject } from './types';
 import ArrayTypeBuilder, { ArrayTypeOptions } from './ArrayTypeBuilder';
 import RecGroupBuilder, { TypeEntry } from './RecGroupBuilder';
 
@@ -65,6 +67,7 @@ export default class ModuleBuilder {
     table: 0,
     memory: 0,
     global: 0,
+    tag: 0,
   };
   _options: ModuleBuilderOptions;
   _resolvedFeatures: Set<WasmFeature>;
@@ -98,7 +101,7 @@ export default class ModuleBuilder {
     return this._options && this._options.disableVerification === true;
   }
 
-  defineFuncType(
+  defineFunctionType(
     returnTypes: ValueTypeDescriptor[] | ValueTypeDescriptor | null,
     parameters: ValueTypeDescriptor[]
   ): FuncTypeBuilder {
@@ -131,13 +134,21 @@ export default class ModuleBuilder {
     return funcType;
   }
 
+  /** @deprecated Use defineFunctionType instead */
+  defineFuncType(
+    returnTypes: ValueTypeDescriptor[] | ValueTypeDescriptor | null,
+    parameters: ValueTypeDescriptor[]
+  ): FuncTypeBuilder {
+    return this.defineFunctionType(returnTypes, parameters);
+  }
+
   importFunction(
     moduleName: string,
     name: string,
     returnTypes: ValueTypeDescriptor[] | ValueTypeDescriptor | null,
     parameters: ValueTypeDescriptor[]
   ): ImportBuilder {
-    const funcType = this.defineFuncType(returnTypes, parameters);
+    const funcType = this.defineFunctionType(returnTypes, parameters);
     if (
       this._imports.some(
         (x) =>
@@ -273,6 +284,40 @@ export default class ModuleBuilder {
     return importBuilder;
   }
 
+  importTag(
+    moduleName: string,
+    name: string,
+    parameters: ValueTypeDescriptor[]
+  ): ImportBuilder {
+    if (
+      this._imports.some(
+        (x) =>
+          x.externalKind === ExternalKind.Tag &&
+          x.moduleName === moduleName &&
+          x.fieldName === name
+      )
+    ) {
+      throw new Error(`An import already exists for ${moduleName}.${name}`);
+    }
+
+    // Tags use the same function type as the tag definition (no return types)
+    const funcType = this.defineFunctionType(null, parameters);
+    const importBuilder = new ImportBuilder(
+      moduleName,
+      name,
+      ExternalKind.Tag,
+      funcType,
+      this._importsIndexSpace.tag++
+    );
+    this._imports.push(importBuilder);
+    // Adjust locally-defined tag indices
+    this._tags.forEach((x) => {
+      x._index++;
+    });
+
+    return importBuilder;
+  }
+
   defineFunction(
     name: string,
     returnTypes: ValueTypeDescriptor[] | ValueTypeDescriptor | null,
@@ -284,7 +329,7 @@ export default class ModuleBuilder {
       throw new Error(`Function has already been defined with the name ${name}`);
     }
 
-    const funcType = this.defineFuncType(returnTypes, parameters);
+    const funcType = this.defineFunctionType(returnTypes, parameters);
     const functionBuilder = new FunctionBuilder(
       this,
       name,
@@ -340,7 +385,7 @@ export default class ModuleBuilder {
   defineGlobal(
     valueType: ValueTypeDescriptor,
     mutable: boolean,
-    value?: number | GlobalBuilder | ((asm: any) => void)
+    value?: number | GlobalBuilder | ((asm: InitExpressionEmitter) => void)
   ): GlobalBuilder {
     const globalBuilder = new GlobalBuilder(
       this,
@@ -360,11 +405,11 @@ export default class ModuleBuilder {
     parameters: ValueTypeDescriptor[]
   ): TagBuilder {
     // Tags have no return types — they describe the exception payload
-    const funcType = this.defineFuncType(null, parameters);
+    const funcType = this.defineFunctionType(null, parameters);
     const tagBuilder = new TagBuilder(
       this,
       funcType,
-      this._tags.length
+      this._tags.length + this._importsIndexSpace.tag
     );
     this._tags.push(tagBuilder);
     return tagBuilder;
@@ -452,18 +497,43 @@ export default class ModuleBuilder {
     return exportBuilder;
   }
 
-  defineTableSegment(
+  exportTag(tagBuilder: TagBuilder, name: string): ExportBuilder {
+    Arg.notEmptyString('name', name);
+
+    if (
+      this._exports.find(
+        (x) => x.externalKind === ExternalKind.Tag && x.name === name
+      )
+    ) {
+      throw new Error(`An export already exists for a tag named ${name}.`);
+    }
+
+    const exportBuilder = new ExportBuilder(name, ExternalKind.Tag, tagBuilder);
+    this._exports.push(exportBuilder);
+    return exportBuilder;
+  }
+
+  defineElementSegment(
     table: TableBuilder,
     elements: (FunctionBuilder | ImportBuilder)[],
-    offset?: number | GlobalBuilder | ((asm: any) => void)
+    offset?: number | GlobalBuilder | ((asm: InitExpressionEmitter) => void)
   ): ElementSegmentBuilder {
     const segment = new ElementSegmentBuilder(table, elements, this._resolvedFeatures, this.disableVerification);
     if (offset !== undefined) {
-      segment.offset(offset as any);
+      segment.offset(offset);
     }
 
     this._elements.push(segment);
     return segment;
+  }
+
+  /** @deprecated Use defineElementSegment instead */
+  defineTableSegment(
+    table: TableBuilder,
+    elements: (FunctionBuilder | ImportBuilder)[],
+    offset?: number | GlobalBuilder | ((asm: InitExpressionEmitter) => void)
+  ): ElementSegmentBuilder {
+    return this.defineElementSegment(table, elements, offset);
   }
 
   definePassiveElementSegment(
@@ -477,14 +547,14 @@ export default class ModuleBuilder {
 
   defineData(
     data: Uint8Array,
-    offset?: number | bigint | GlobalBuilder | ((asm: any) => void)
+    offset?: number | bigint | GlobalBuilder | ((asm: InitExpressionEmitter) => void)
   ): DataSegmentBuilder {
     Arg.instanceOf('data', data, Uint8Array);
 
     const hasMemory64 = this._memories.some((m) => m.isMemory64);
     const dataSegmentBuilder = new DataSegmentBuilder(data, this._resolvedFeatures, hasMemory64, this.disableVerification);
     if (offset !== undefined) {
-      dataSegmentBuilder.offset(offset as any);
+      dataSegmentBuilder.offset(offset);
     }
 
     this._data.push(dataSegmentBuilder);
@@ -507,15 +577,52 @@ export default class ModuleBuilder {
     return customSectionBuilder;
   }
 
+  defineStructType(fields: StructField[], options?: StructTypeOptions): StructTypeBuilder;
+  defineStructType<T extends StructFieldsObject>(fields: T, options?: StructTypeOptions): TypedStructBuilder<T>;
   defineStructType(
-    fields: StructField[],
+    fields: StructField[] | StructFieldsObject,
     options?: StructTypeOptions
   ): StructTypeBuilder {
     this._requireFeature('gc');
-    const key = StructTypeBuilder.createKey(fields);
-    const structType = new StructTypeBuilder(key, fields, this._types.length, options);
+
+    let structFields: StructField[];
+    let fieldNames: string[] | null = null;
+
+    if (Array.isArray(fields)) {
+      structFields = fields;
+    } else {
+      fieldNames = Object.keys(fields);
+      structFields = fieldNames.map((name) => {
+        const def: FieldInput = fields[name];
+        if (def && typeof def === 'object' && '_brand' in def && (def as MutableFieldDescriptor)._brand === 'MutableField') {
+          return { name, type: (def as MutableFieldDescriptor).type, mutable: true };
+        }
+        if (def && typeof def === 'object' && 'type' in def && !('_brand' in def) && !('value' in def)) {
+          const explicit = def as { type: ValueTypeDescriptor; mutable?: boolean };
+          return { name, type: explicit.type, mutable: explicit.mutable ?? false };
+        }
+        // Bare ValueType = immutable
+        return { name, type: def as ValueTypeDescriptor, mutable: false };
+      });
+    }
+
+    const key = StructTypeBuilder.createKey(structFields);
+    const structType = new StructTypeBuilder(key, structFields, this._types.length, options);
     this._types.push(structType);
     this._typeSectionEntries.push(structType);
+
+    // Attach typed field index map for object syntax
+    if (fieldNames) {
+      const fieldMap: Record<string, number> = {};
+      fieldNames.forEach((name, i) => { fieldMap[name] = i; });
+      Object.defineProperty(structType, 'field', {
+        value: Object.freeze(fieldMap),
+        enumerable: false,
+        writable: false,
+        configurable: false,
+      });
+    }
+
     return structType;
   }
 
