@@ -48,19 +48,19 @@ function getOperandInfo(operand: string | null): OperandInfo | null {
     case 'MemoryImmediate':
       return { param: 'alignment: number, offset: number | bigint', call: 'alignment, offset' };
     case 'IndirectFunction':
-      return { param: 'funcTypeBuilder: any, tableIndex?: number', call: 'funcTypeBuilder, tableIndex' };
+      return { param: 'funcTypeBuilder: number | { index: number }, tableIndex?: number', call: 'funcTypeBuilder, tableIndex' };
     case 'BlockSignature':
-      return { param: 'blockType: any, label?: any', call: 'blockType, label' };
+      return { param: 'blockType: number | { value: number }, label?: unknown', call: 'blockType, label' };
     case 'Function':
-      return { param: 'functionBuilder: any', call: 'functionBuilder' };
+      return { param: 'functionBuilder: number | { _index: number } | { index: number }', call: 'functionBuilder' };
     case 'RelativeDepth':
-      return { param: 'labelBuilder: any', call: 'labelBuilder' };
+      return { param: 'labelBuilder: unknown', call: 'labelBuilder' };
     case 'BranchTable':
-      return { param: 'defaultLabelBuilder: any, ...labelBuilders: any[]', call: 'defaultLabelBuilder, labelBuilders' };
+      return { param: 'defaultLabelBuilder: unknown, ...labelBuilders: unknown[]', call: 'defaultLabelBuilder, labelBuilders' };
     case 'Global':
-      return { param: 'global: any', call: 'global' };
+      return { param: 'global: number | { _index: number } | { index: number }', call: 'global' };
     case 'Local':
-      return { param: 'local: any', call: 'local' };
+      return { param: 'local: number | { index: number }', call: 'local' };
     case 'Float32':
       return { param: 'float32: number', call: 'float32' };
     case 'Float64':
@@ -82,9 +82,9 @@ function getOperandInfo(operand: string | null): OperandInfo | null {
     case 'TypeIndexIndex':
       return { param: 'typeIndex: number | { index: number }, index: number', call: 'typeIndex, index' };
     case 'HeapType':
-      return { param: 'heapType: any', call: 'heapType' };
+      return { param: 'heapType: HeapTypeRef', call: 'heapType' };
     case 'BrOnCast':
-      return { param: 'flags: number, labelBuilder: any, heapType1: any, heapType2: any', call: 'flags, labelBuilder, heapType1, heapType2' };
+      return { param: 'flags: number, labelBuilder: unknown, heapType1: HeapTypeRef, heapType2: HeapTypeRef', call: 'flags, labelBuilder, heapType1, heapType2' };
     default:
       return null;
   }
@@ -169,7 +169,8 @@ function generateOpCodes(opCodes: OpCode[]): string {
 }
 
 function generateOpCodeEmitter(opCodes: OpCode[]): string {
-  let out = "import OpCodes from './OpCodes';\n\n";
+  let out = "import OpCodes from './OpCodes';\n";
+  out += "import type { HeapTypeRef } from './types';\n\n";
   out += 'export default abstract class OpCodeEmitter {\n';
 
   for (const op of opCodes) {
@@ -188,7 +189,8 @@ function generateOpCodeEmitter(opCodes: OpCode[]): string {
     out += '  }\n\n';
   }
 
-  out += '  abstract emit(opCode: any, ...args: any[]): any;\n';
+  out += '  // eslint-disable-next-line @typescript-eslint/no-explicit-any\n';
+  out += '  abstract emit(opCode: unknown, ...args: any[]): any;\n';
   out += '}\n';
   return out;
 }

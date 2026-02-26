@@ -166,3 +166,49 @@ describe('GlobalBuilder types', () => {
     expect((exports.g64 as WebAssembly.Global).value).toBe(100n);
   });
 });
+
+describe('Reference-typed globals', () => {
+  test('externref global with null init', async () => {
+    const mod = new ModuleBuilder('test', { target: '2.0' });
+    mod.defineGlobal(ValueType.ExternRef, true).value((asm) => {
+      asm.ref_null(0x6f); // externref heap type
+    }).withExport('g');
+
+    // Need a dummy export for instantiation
+    mod.defineFunction('noop', null, [], () => {}).withExport();
+
+    const instance = await mod.instantiate();
+    const g = instance.instance.exports.g as WebAssembly.Global;
+    expect(g.value).toBe(null);
+  });
+
+  test('mutable externref global set from JS', async () => {
+    const mod = new ModuleBuilder('test', { target: '2.0' });
+    mod.defineGlobal(ValueType.ExternRef, true).value((asm) => {
+      asm.ref_null(0x6f);
+    }).withExport('g');
+    mod.defineFunction('noop', null, [], () => {}).withExport();
+
+    const instance = await mod.instantiate();
+    const g = instance.instance.exports.g as WebAssembly.Global;
+    expect(g.value).toBe(null);
+    g.value = 'hello';
+    expect(g.value).toBe('hello');
+    g.value = 42;
+    expect(g.value).toBe(42);
+  });
+
+  test('funcref global with ref.func init', async () => {
+    const mod = new ModuleBuilder('test', { target: '2.0' });
+    const fn = mod.defineFunction('myFunc', [ValueType.Int32], [], (f, asm) => {
+      asm.const_i32(42);
+    }).withExport();
+
+    mod.defineGlobal(ValueType.FuncRef, false).value((asm) => {
+      asm.ref_func(fn);
+    }).withExport('g');
+
+    const bytes = mod.toBytes();
+    expect(WebAssembly.validate(bytes.buffer as ArrayBuffer)).toBe(true);
+  });
+});

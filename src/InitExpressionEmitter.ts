@@ -24,6 +24,7 @@ export default class InitExpressionEmitter extends AssemblyEmitter {
     throw new Error('An initialization expression cannot have locals.');
   }
 
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   emit(opCode: OpCodeDef, ...args: any[]): any {
     this._isValidateOp(opCode, args);
     return super.emit(opCode, ...args);

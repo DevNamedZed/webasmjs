@@ -1,4 +1,4 @@
-import { ModuleBuilder } from '../src/index';
+import { ModuleBuilder, ValueType } from '../src/index';
 
 const latestOpts = { generateNameSection: true, target: 'latest' as const };
 
@@ -145,5 +145,57 @@ describe('SIMD extract/replace lane operations', () => {
     }).withExport();
 
     expect(WebAssembly.validate(mod.toBytes().buffer as ArrayBuffer)).toBe(true);
+  });
+});
+
+describe('SIMD runtime value verification', () => {
+  test('splat_i32x4 + extract_lane_i32x4 roundtrip', async () => {
+    const mod = new ModuleBuilder('test', latestOpts);
+    mod.defineFunction('test', ValueType.Int32, [ValueType.Int32], (f, asm) => {
+      asm.get_local(f.getParameter(0));
+      asm.splat_i32x4();
+      asm.extract_lane_i32x4(2);
+    }).withExport();
+
+    const instance = await mod.instantiate();
+    const test = instance.instance.exports.test as CallableFunction;
+    expect(test(42)).toBe(42);
+    expect(test(0)).toBe(0);
+    expect(test(-1)).toBe(-1);
+  });
+
+  test('add_i32x4 with known values', async () => {
+    const mod = new ModuleBuilder('test', latestOpts);
+    mod.defineMemory(1).withExport('mem');
+
+    // Store two v128 vectors in memory, add them, extract a lane
+    mod.defineFunction('test', ValueType.Int32, [], (f, asm) => {
+      // Load vector at offset 0
+      asm.const_i32(0);
+      asm.load_v128(0, 0);
+      // Load vector at offset 16
+      asm.const_i32(16);
+      asm.load_v128(0, 0);
+      // Add them
+      asm.add_i32x4();
+      // Extract lane 0
+      asm.extract_lane_i32x4(0);
+    }).withExport();
+
+    const instance = await mod.instantiate();
+    const mem = new DataView((instance.instance.exports.mem as WebAssembly.Memory).buffer);
+    // Vector 1: [10, 20, 30, 40]
+    mem.setInt32(0, 10, true);
+    mem.setInt32(4, 20, true);
+    mem.setInt32(8, 30, true);
+    mem.setInt32(12, 40, true);
+    // Vector 2: [1, 2, 3, 4]
+    mem.setInt32(16, 1, true);
+    mem.setInt32(20, 2, true);
+    mem.setInt32(24, 3, true);
+    mem.setInt32(28, 4, true);
+
+    const test = instance.instance.exports.test as CallableFunction;
+    expect(test()).toBe(11); // 10 + 1
   });
 });

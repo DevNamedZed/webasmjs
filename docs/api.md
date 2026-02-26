@@ -34,6 +34,7 @@ defineFunction(
 
 // Define a function type signature (for call_indirect)
 defineFunctionType(returnTypes: ValueType[], parameterTypes: ValueType[]): FuncTypeBuilder
+// Deprecated alias: defineFuncType()
 
 // Set the start function (runs on instantiation)
 setStartFunction(func: FunctionBuilder): void
@@ -120,6 +121,7 @@ defineElementSegment(
   elements: (FunctionBuilder | ImportBuilder)[],
   offset?: number | GlobalBuilder | ((asm: InitExpressionEmitter) => void)
 ): ElementSegmentBuilder
+// Deprecated alias: defineTableSegment()
 ```
 
 #### Passive Element Segments
@@ -132,7 +134,7 @@ definePassiveElementSegment(elements: (FunctionBuilder | ImportBuilder)[]): Elem
 #### Globals
 
 ```typescript
-defineGlobal(valueType: ValueType, mutable: boolean, initialValue: number | bigint): GlobalBuilder
+defineGlobal(valueType: ValueType, mutable: boolean, initialValue?: number | bigint | GlobalBuilder | ((asm: InitExpressionEmitter) => void)): GlobalBuilder
 ```
 
 #### Custom Sections
@@ -386,12 +388,12 @@ atomic_wait64(align: number, offset: number): void
 ### Exception Handling
 
 ```typescript
-throw(tagIndex: number): void
+throw(tagIndex: number | { index: number }): void
 try(blockType: BlockType): void
-catch(tagIndex: number): void
+catch(tagIndex: number | { index: number }): void
 catch_all(): void
-rethrow(depth: number): void
-delegate(depth: number): void
+rethrow(depth: number | { index: number }): void
+delegate(depth: number | { index: number }): void
 ```
 
 ### GC Operations (requires `gc` feature)
@@ -498,8 +500,15 @@ table_fill(): void
 Returned by `ModuleBuilder.defineGlobal()`.
 
 ```typescript
-withExport(name: string): GlobalBuilder
-withName(name: string): GlobalBuilder
+// Properties
+get globalType: GlobalType              // The global's type descriptor
+get valueType: ValueTypeDescriptor      // The global's value type
+
+// Methods
+value(v: number | bigint | GlobalBuilder | ((asm: InitExpressionEmitter) => void)): this
+                                        // Set or change the initial value
+withExport(name: string): this          // Export with given name
+withName(name: string): this            // Set debug name
 ```
 
 ---
@@ -509,7 +518,12 @@ withName(name: string): GlobalBuilder
 Returned by `ModuleBuilder.defineMemory()`.
 
 ```typescript
-withExport(name: string): MemoryBuilder
+// Properties
+get isShared: boolean                   // Whether this is a shared memory
+get isMemory64: boolean                 // Whether this uses 64-bit addressing
+
+// Methods
+withExport(name: string): MemoryBuilder // Export with given name
 ```
 
 ---
@@ -615,7 +629,7 @@ Returned by `ModuleBuilder.defineData()`. Configures a data segment for memory i
 // Methods
 passive(): this                        // Mark as passive (not placed until memory.init)
 memoryIndex(index: number): this       // Set target memory index (for multi-memory)
-offset(value: number | bigint | GlobalBuilder | ((asm: InitExpressionEmitter) => void)): void
+offset(value: number | bigint | GlobalBuilder | ((asm: InitExpressionEmitter) => void)): this
                                        // Set the memory offset for an active segment
 ```
 
@@ -637,7 +651,7 @@ Returned by `ModuleBuilder.defineElementSegment()` or `definePassiveElementSegme
 ```typescript
 // Methods
 passive(): this                        // Mark as passive (not placed until table.init)
-offset(value: number | GlobalBuilder | ((asm: InitExpressionEmitter) => void)): void
+offset(value: number | GlobalBuilder | ((asm: InitExpressionEmitter) => void)): this
                                        // Set the table offset for an active segment
 ```
 

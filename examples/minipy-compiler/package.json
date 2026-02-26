@@ -1,0 +1,16 @@
+{
+  "name": "minipy-compiler",
+  "version": "1.0.0",
+  "description": "A tiny Python-like language that compiles to WebAssembly using webasmjs",
+  "private": true,
+  "scripts": {
+    "start": "npx tsx src/main.ts"
+  },
+  "dependencies": {
+    "webasmjs": "file:../../"
+  },
+  "devDependencies": {
+    "tsx": "^4.19.0",
+    "typescript": "^5.5.0"
+  }
+}

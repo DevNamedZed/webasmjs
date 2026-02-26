@@ -74,4 +74,24 @@ describe('Memory64', () => {
     expect(memImport!.memoryType!.maximum).toBe(256);
     expect(memImport!.memoryType!.memory64).toBe(true);
   });
+
+  test('memory64 store and load with i64 address', async () => {
+    const mod = new ModuleBuilder('test', { target: 'latest', disableVerification: true });
+    const mem = mod.defineMemory(1, undefined, false, true);
+    mem.withExport('mem');
+
+    mod.defineFunction('store', null, [ValueType.Int32], (f, asm) => {
+      asm.const_i64(0n);        // i64 address
+      asm.get_local(f.getParameter(0));
+      asm.store_i32(0, 0);
+    }).withExport();
+
+    mod.defineFunction('load', [ValueType.Int32], [], (f, asm) => {
+      asm.const_i64(0n);        // i64 address
+      asm.load_i32(0, 0);
+    }).withExport();
+
+    const bytes = mod.toBytes();
+    expect(WebAssembly.validate(bytes.buffer as ArrayBuffer)).toBe(true);
+  });
 });

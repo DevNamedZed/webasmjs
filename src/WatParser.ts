@@ -1345,7 +1345,7 @@ class WatParserImpl {
     return funcType.index;
   }
 
-  private parseFoldedImmediates(opCode: any, mnemonic: string, asm: FunctionEmitter, emitArgs: any[]): void {
+  private parseFoldedImmediates(opCode: OpCodeDef, mnemonic: string, asm: FunctionEmitter, emitArgs: any[]): void {
     if (mnemonic === 'throw' || mnemonic === 'catch') {
       emitArgs.push(this.resolveTag());
       return;

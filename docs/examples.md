@@ -1,6 +1,6 @@
 # Examples
 
-> For all 112 interactive examples, see the [playground](https://devnamedzed.github.io/webasmjs/).
+> For all 108 interactive examples, see the [playground](https://devnamedzed.github.io/webasmjs/).
 > The playground includes additional coverage for atomics, memory64, relaxed SIMD, tail calls, imports, and GC struct DSL.
 > This page covers the most important patterns in detail.
 

@@ -25,12 +25,11 @@ const validateParameters = (immediateType: string, values: unknown[] | undefined
 
 // Resolve builder objects (StructTypeBuilder, ArrayTypeBuilder, etc.) to their numeric index.
 // Allows GC opcodes to accept either a raw number or a builder with .index.
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-function resolveIndex(value: any): number {
+function resolveIndex(value: number | { index: number }): number {
   if (typeof value === 'object' && value !== null && typeof value.index === 'number') {
     return value.index;
   }
-  return value;
+  return value as number;
 }
 
 export interface AssemblyEmitterOptions {
@@ -109,6 +108,7 @@ export default class AssemblyEmitter extends OpCodeEmitter {
     return this._controlFlowVerifier.defineLabel();
   }
 
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   emit(opCode: OpCodeDef, ...args: any[]): any {
     Arg.notNull('opCode', opCode);
     const depth = this._controlFlowVerifier.size - 1;

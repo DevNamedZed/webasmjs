@@ -8420,6 +8420,7 @@ var webasmPlayground = (() => {
     defineLabel() {
       return this._controlFlowVerifier.defineLabel();
     }
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     emit(opCode, ...args) {
       Arg.notNull("opCode", opCode);
       const depth = this._controlFlowVerifier.size - 1;
@@ -8659,6 +8660,7 @@ var webasmPlayground = (() => {
     declareLocal() {
       throw new Error("An initialization expression cannot have locals.");
     }
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     emit(opCode, ...args) {
       this._isValidateOp(opCode, args);
       return super.emit(opCode, ...args);

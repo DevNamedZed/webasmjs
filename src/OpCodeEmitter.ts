@@ -1,4 +1,5 @@
 import OpCodes from './OpCodes';
+import type { HeapTypeRef } from './types';
 
 export default abstract class OpCodeEmitter {
   unreachable(): any {
@@ -9,15 +10,15 @@ export default abstract class OpCodeEmitter {
     return this.emit(OpCodes.nop);
   }
 
-  block(blockType: any, label?: any): any {
+  block(blockType: number | { value: number }, label?: unknown): any {
     return this.emit(OpCodes.block, blockType, label);
   }
 
-  loop(blockType: any, label?: any): any {
+  loop(blockType: number | { value: number }, label?: unknown): any {
     return this.emit(OpCodes.loop, blockType, label);
   }
 
-  if(blockType: any, label?: any): any {
+  if(blockType: number | { value: number }, label?: unknown): any {
     return this.emit(OpCodes.if, blockType, label);
   }
 
@@ -25,7 +26,7 @@ export default abstract class OpCodeEmitter {
     return this.emit(OpCodes.else);
   }
 
-  try(blockType: any, label?: any): any {
+  try(blockType: number | { value: number }, label?: unknown): any {
     return this.emit(OpCodes.try, blockType, label);
   }
 
@@ -45,15 +46,15 @@ export default abstract class OpCodeEmitter {
     return this.emit(OpCodes.end);
   }
 
-  br(labelBuilder: any): any {
+  br(labelBuilder: unknown): any {
     return this.emit(OpCodes.br, labelBuilder);
   }
 
-  br_if(labelBuilder: any): any {
+  br_if(labelBuilder: unknown): any {
     return this.emit(OpCodes.br_if, labelBuilder);
   }
 
-  br_table(defaultLabelBuilder: any, ...labelBuilders: any[]): any {
+  br_table(defaultLabelBuilder: unknown, ...labelBuilders: unknown[]): any {
     return this.emit(OpCodes.br_table, defaultLabelBuilder, labelBuilders);
   }
 
@@ -61,19 +62,19 @@ export default abstract class OpCodeEmitter {
     return this.emit(OpCodes.return);
   }
 
-  call(functionBuilder: any): any {
+  call(functionBuilder: number | { _index: number } | { index: number }): any {
     return this.emit(OpCodes.call, functionBuilder);
   }
 
-  call_indirect(funcTypeBuilder: any, tableIndex?: number): any {
+  call_indirect(funcTypeBuilder: number | { index: number }, tableIndex?: number): any {
     return this.emit(OpCodes.call_indirect, funcTypeBuilder, tableIndex);
   }
 
-  return_call(functionBuilder: any): any {
+  return_call(functionBuilder: number | { _index: number } | { index: number }): any {
     return this.emit(OpCodes.return_call, functionBuilder);
   }
 
-  return_call_indirect(funcTypeBuilder: any, tableIndex?: number): any {
+  return_call_indirect(funcTypeBuilder: number | { index: number }, tableIndex?: number): any {
     return this.emit(OpCodes.return_call_indirect, funcTypeBuilder, tableIndex);
   }
 
@@ -93,23 +94,23 @@ export default abstract class OpCodeEmitter {
     return this.emit(OpCodes.select);
   }
 
-  get_local(local: any): any {
+  get_local(local: number | { index: number }): any {
     return this.emit(OpCodes.get_local, local);
   }
 
-  set_local(local: any): any {
+  set_local(local: number | { index: number }): any {
     return this.emit(OpCodes.set_local, local);
   }
 
-  tee_local(local: any): any {
+  tee_local(local: number | { index: number }): any {
     return this.emit(OpCodes.tee_local, local);
   }
 
-  get_global(global: any): any {
+  get_global(global: number | { _index: number } | { index: number }): any {
     return this.emit(OpCodes.get_global, global);
   }
 
-  set_global(global: any): any {
+  set_global(global: number | { _index: number } | { index: number }): any {
     return this.emit(OpCodes.set_global, global);
   }
 
@@ -821,7 +822,7 @@ export default abstract class OpCodeEmitter {
     return this.emit(OpCodes.ref_is_null);
   }
 
-  ref_func(functionBuilder: any): any {
+  ref_func(functionBuilder: number | { _index: number } | { index: number }): any {
     return this.emit(OpCodes.ref_func, functionBuilder);
   }
 
@@ -2205,27 +2206,27 @@ export default abstract class OpCodeEmitter {
     return this.emit(OpCodes.array_init_elem, typeIndex, index);
   }
 
-  ref_test(heapType: any): any {
+  ref_test(heapType: HeapTypeRef): any {
     return this.emit(OpCodes.ref_test, heapType);
   }
 
-  ref_test_null(heapType: any): any {
+  ref_test_null(heapType: HeapTypeRef): any {
     return this.emit(OpCodes.ref_test_null, heapType);
   }
 
-  ref_cast(heapType: any): any {
+  ref_cast(heapType: HeapTypeRef): any {
     return this.emit(OpCodes.ref_cast, heapType);
   }
 
-  ref_cast_null(heapType: any): any {
+  ref_cast_null(heapType: HeapTypeRef): any {
     return this.emit(OpCodes.ref_cast_null, heapType);
   }
 
-  br_on_cast(flags: number, labelBuilder: any, heapType1: any, heapType2: any): any {
+  br_on_cast(flags: number, labelBuilder: unknown, heapType1: HeapTypeRef, heapType2: HeapTypeRef): any {
     return this.emit(OpCodes.br_on_cast, flags, labelBuilder, heapType1, heapType2);
   }
 
-  br_on_cast_fail(flags: number, labelBuilder: any, heapType1: any, heapType2: any): any {
+  br_on_cast_fail(flags: number, labelBuilder: unknown, heapType1: HeapTypeRef, heapType2: HeapTypeRef): any {
     return this.emit(OpCodes.br_on_cast_fail, flags, labelBuilder, heapType1, heapType2);
   }
 
@@ -2249,5 +2250,6 @@ export default abstract class OpCodeEmitter {
     return this.emit(OpCodes.i31_get_u);
   }
 
-  abstract emit(opCode: any, ...args: any[]): any;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  abstract emit(opCode: unknown, ...args: any[]): any;
 }
