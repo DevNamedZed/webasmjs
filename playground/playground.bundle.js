@@ -26679,14 +26679,19 @@ log(mod.toString());`
       this.parsedSourceMap = parseSourceMap(json);
     }
     getFunctionName(globalIndex) {
+      let name = null;
       if (this.moduleInfo?.nameSection?.functionNames?.has(globalIndex)) {
-        return this.moduleInfo.nameSection.functionNames.get(globalIndex);
+        name = this.moduleInfo.nameSection.functionNames.get(globalIndex);
+      } else {
+        const dwarfMap = this.getDwarfFunctionMap();
+        if (dwarfMap) {
+          name = dwarfMap.get(globalIndex) || null;
+        }
       }
-      const dwarfMap = this.getDwarfFunctionMap();
-      if (dwarfMap) {
-        return dwarfMap.get(globalIndex) || null;
+      if (name && name.startsWith("$")) {
+        name = name.slice(1);
       }
-      return null;
+      return name;
     }
     getDwarfFunctionMap() {
       if (this.dwarfFunctionMap !== null) {
@@ -28165,7 +28170,7 @@ ${funcEntry.body.length} bytes, ${totalLocals} locals`
         { label: "Decompiled", id: "decompiled" },
         { label: "Source", id: "source" }
       ];
-      let activeTab = "decompiled";
+      let activeTab = "wat";
       const renderTabContent = () => {
         tabContent.innerHTML = "";
         tabBar.querySelectorAll(".func-tab-btn").forEach((btn) => {
@@ -28568,7 +28573,7 @@ ${funcEntry.body.length} bytes, ${totalLocals} locals`
         barContainer.appendChild(bar);
         row.appendChild(barContainer);
         const valueElement = document.createElement("span");
-        valueElement.className = "detail-info-value";
+        valueElement.className = "size-value";
         valueElement.textContent = `${this.formatFileSize(sectionRange.length)} (${percentage}%)`;
         row.appendChild(valueElement);
         sectionTable.appendChild(row);
@@ -28586,7 +28591,7 @@ ${funcEntry.body.length} bytes, ${totalLocals} locals`
         globalIndex: importedFuncCount + funcIndex,
         localIndex: funcIndex,
         size: func.body.length,
-        name: this.moduleInfo.nameSection?.functionNames?.get(importedFuncCount + funcIndex) || null
+        name: this.getFunctionName(importedFuncCount + funcIndex)
       }));
       funcSizes.sort((funcA, funcB) => funcB.size - funcA.size);
       const maxFuncSize = funcSizes.length > 0 ? funcSizes[0].size : 1;
@@ -28599,8 +28604,7 @@ ${funcEntry.body.length} bytes, ${totalLocals} locals`
         link.className = "detail-info-link";
         link.textContent = displayName;
         link.href = "#";
-        link.style.minWidth = "120px";
-        link.style.flexShrink = "0";
+        link.style.flex = "0 0 180px";
         link.addEventListener("click", (event) => {
           event.preventDefault();
           this.navigateToItem("function", funcSizeEntry.localIndex);
@@ -28614,7 +28618,7 @@ ${funcEntry.body.length} bytes, ${totalLocals} locals`
         barContainer.appendChild(bar);
         row.appendChild(barContainer);
         const valueElement = document.createElement("span");
-        valueElement.className = "detail-info-value";
+        valueElement.className = "size-value";
         valueElement.textContent = `${funcSizeEntry.size} bytes`;
         row.appendChild(valueElement);
         funcTable.appendChild(row);
@@ -28644,8 +28648,7 @@ ${funcEntry.body.length} bytes, ${totalLocals} locals`
         link.className = "detail-info-link";
         link.textContent = `data ${dataSizeEntry.index} (${passiveLabel})`;
         link.href = "#";
-        link.style.minWidth = "140px";
-        link.style.flexShrink = "0";
+        link.style.flex = "0 0 180px";
         link.addEventListener("click", (event) => {
           event.preventDefault();
           this.navigateToItem("data", dataSizeEntry.index);
@@ -28659,7 +28662,7 @@ ${funcEntry.body.length} bytes, ${totalLocals} locals`
         barContainer.appendChild(bar);
         row.appendChild(barContainer);
         const valueElement = document.createElement("span");
-        valueElement.className = "detail-info-value";
+        valueElement.className = "size-value";
         valueElement.textContent = this.formatFileSize(dataSizeEntry.size);
         row.appendChild(valueElement);
         dataTable.appendChild(row);
@@ -28681,8 +28684,7 @@ ${funcEntry.body.length} bytes, ${totalLocals} locals`
         link.className = "detail-info-link";
         link.textContent = `data ${stringEntry.dataSegmentIndex}+${stringEntry.offset}`;
         link.href = "#";
-        link.style.minWidth = "100px";
-        link.style.flexShrink = "0";
+        link.style.flex = "0 0 120px";
         link.addEventListener("click", (event) => {
           event.preventDefault();
           this.navigateToItem("data", stringEntry.dataSegmentIndex);
@@ -28690,6 +28692,7 @@ ${funcEntry.body.length} bytes, ${totalLocals} locals`
         row.appendChild(link);
         const valueElement = document.createElement("span");
         valueElement.className = "detail-string-value";
+        valueElement.style.flex = "1";
         const displayValue = stringEntry.value.length > 120 ? stringEntry.value.slice(0, 120) + "..." : stringEntry.value;
         valueElement.textContent = displayValue;
         row.appendChild(valueElement);
@@ -29004,7 +29007,7 @@ ${funcEntry.body.length} bytes, ${totalLocals} locals`
         const globalIndex = importedFuncCount + funcIndex;
         const func = this.moduleInfo.functions[funcIndex];
         const instructions = func.instructions || InstructionDecoder.decodeFunctionBody(func.body);
-        const funcName = this.moduleInfo.nameSection?.functionNames?.get(globalIndex) || null;
+        const funcName = this.getFunctionName(globalIndex);
         let instructionCount = 0;
         let branchCount = 0;
         let currentDepth = 0;
@@ -29056,8 +29059,7 @@ ${funcEntry.body.length} bytes, ${totalLocals} locals`
         const link = document.createElement("a");
         link.className = "detail-info-link";
         link.textContent = displayName;
-        link.style.minWidth = "140px";
-        link.style.flexShrink = "0";
+        link.style.flex = "2";
         link.href = "#";
         link.addEventListener("click", (event) => {
           event.preventDefault();
@@ -29066,8 +29068,7 @@ ${funcEntry.body.length} bytes, ${totalLocals} locals`
         row.appendChild(link);
         for (const value of [entry.instructionCount, entry.branchCount, entry.maxNestingDepth, entry.bodySize]) {
           const cell = document.createElement("span");
-          cell.className = "detail-info-value";
-          cell.style.minWidth = "70px";
+          cell.className = "complexity-cell";
           cell.textContent = String(value);
           row.appendChild(cell);
         }
@@ -29119,7 +29120,7 @@ ${funcEntry.body.length} bytes, ${totalLocals} locals`
           deadFunctions.push({
             localIndex: funcIndex,
             globalIndex,
-            name: this.moduleInfo.nameSection?.functionNames?.get(globalIndex) || null,
+            name: this.getFunctionName(globalIndex),
             bodySize: this.moduleInfo.functions[funcIndex].body.length
           });
         }
@@ -29320,7 +29321,7 @@ ${funcEntry.body.length} bytes, ${totalLocals} locals`
         barContainer.appendChild(bar);
         row.appendChild(barContainer);
         const valueElement = document.createElement("span");
-        valueElement.className = "detail-info-value";
+        valueElement.className = "size-value";
         valueElement.textContent = `${categoryCount} (${percentage}%)`;
         row.appendChild(valueElement);
         categoryTable.appendChild(row);
@@ -29347,7 +29348,7 @@ ${funcEntry.body.length} bytes, ${totalLocals} locals`
         barContainer.appendChild(bar);
         row.appendChild(barContainer);
         const valueElement = document.createElement("span");
-        valueElement.className = "detail-info-value";
+        valueElement.className = "size-value";
         valueElement.textContent = `${count} (${percentage}%)`;
         row.appendChild(valueElement);
         opcodeTable.appendChild(row);
@@ -29390,9 +29391,11 @@ ${funcEntry.body.length} bytes, ${totalLocals} locals`
       const labelElement = document.createElement("span");
       labelElement.className = "detail-info-label";
       labelElement.textContent = label;
+      labelElement.title = label;
       row.appendChild(labelElement);
       const link = document.createElement("a");
       link.className = "detail-info-link";
+      link.style.flex = "1";
       link.textContent = value;
       link.href = "#";
       link.addEventListener("click", (event) => {
@@ -29420,7 +29423,7 @@ ${funcEntry.body.length} bytes, ${totalLocals} locals`
         const displayName = funcName || `func_${targetGlobalIndex}`;
         const localFuncIndex = targetGlobalIndex - importedFuncCount;
         const link = document.createElement("a");
-        link.className = "detail-info-link";
+        link.className = "call-graph-link";
         link.textContent = displayName;
         link.href = "#";
         link.addEventListener("click", (event) => {

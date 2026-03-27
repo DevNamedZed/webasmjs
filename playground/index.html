@@ -807,7 +807,7 @@
   }
 
   .tree-chevron-spacer { width: 16px; flex-shrink: 0; }
-  .tree-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+  .tree-label { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 
   /* ─── Detail panel ─── */
 
@@ -876,7 +876,9 @@
     color: #6c7086;
     white-space: nowrap;
     font-size: 12px;
-    flex: 0 0 140px;
+    flex: 0 0 180px;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
 
   .detail-info-value {
@@ -893,13 +895,12 @@
     cursor: pointer;
     text-decoration: none;
     padding: 4px 16px;
-    flex: 0 0 200px;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+    min-width: 0;
   }
 
-  .detail-info-link { color: #89b4fa; cursor: pointer; text-decoration: none; }
   .detail-info-link:hover { text-decoration: underline; }
 
   .complexity-header {
@@ -908,19 +909,28 @@
   }
 
   .complexity-header-cell {
-    padding: 6px 16px;
+    padding: 6px 12px;
     color: #585b70;
     font-weight: 600;
     font-size: 11px;
     text-transform: uppercase;
     white-space: nowrap;
-    flex: 0 0 100px;
+    flex: 1;
     text-align: right;
   }
 
   .complexity-header-cell:first-child {
-    flex: 0 0 200px;
+    flex: 2;
     text-align: left;
+  }
+
+  .complexity-cell {
+    padding: 4px 12px;
+    color: #cdd6f4;
+    font-size: 12px;
+    white-space: nowrap;
+    flex: 1;
+    text-align: right;
   }
 
   /* ─── Call list ─── */
@@ -932,6 +942,14 @@
   }
 
   .detail-call-label { color: #6c7086; font-weight: 600; }
+
+  .call-graph-link {
+    color: #89b4fa;
+    cursor: pointer;
+    text-decoration: none;
+  }
+
+  .call-graph-link:hover { text-decoration: underline; }
 
   /* ─── Code view ─── */
 
@@ -1062,6 +1080,16 @@
     background: #89b4fa;
     border-radius: 3px;
     min-width: 2px;
+  }
+
+  .size-value {
+    flex: 0 0 auto;
+    padding: 4px 16px;
+    color: #cdd6f4;
+    font-size: 12px;
+    white-space: nowrap;
+    text-align: right;
+    min-width: 100px;
   }
 
   /* ─── String/WAT search ─── */
