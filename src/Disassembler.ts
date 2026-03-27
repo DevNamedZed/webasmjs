@@ -141,6 +141,132 @@ export default class Disassembler {
     return this.lines.join('\n');
   }
 
+  disassembleFunction(localIndex: number): string {
+    this.lines = [];
+    this.indent = 0;
+    const mod = this.module;
+    if (localIndex >= 0 && localIndex < mod.functions.length) {
+      const func = mod.functions[localIndex];
+      const globalIndex = this.importedFuncCount + localIndex;
+      const flatTypes = this.flattenTypes();
+      const funcType = localIndex < flatTypes.length ? flatTypes[func.typeIndex] : null;
+      const name = this.getFunctionName(globalIndex);
+      const nameStr = name ? ` $${name}` : '';
+      const typeRef = ` (type ${func.typeIndex})`;
+      this.line(`(func${nameStr}${typeRef}`);
+      this.indent++;
+      if (funcType && funcType.kind === 'func') {
+        for (const param of funcType.parameterTypes) {
+          this.line(`(param ${this.typeStr(param)})`);
+        }
+        for (const ret of funcType.returnTypes) {
+          this.line(`(result ${this.typeStr(ret)})`);
+        }
+      }
+      for (const local of func.locals) {
+        for (let j = 0; j < local.count; j++) {
+          this.line(`(local ${this.typeStr(local.type)})`);
+        }
+      }
+      const instructions = func.instructions || InstructionDecoder.decodeFunctionBody(func.body);
+      this.writeInstructions(instructions, localIndex);
+      this.indent--;
+      this.line(')');
+    }
+    return this.lines.join('\n');
+  }
+
+  disassembleType(index: number): string {
+    this.lines = [];
+    this.indent = 0;
+    const flatTypes = this.flattenTypes();
+    if (index >= 0 && index < flatTypes.length) {
+      this.writeTypeEntry(flatTypes[index], index);
+    }
+    return this.lines.join('\n');
+  }
+
+  disassembleImport(index: number): string {
+    this.lines = [];
+    this.indent = 0;
+    const mod = this.module;
+    if (index >= 0 && index < mod.imports.length) {
+      const imp = mod.imports[index];
+      this.line(`(import "${imp.moduleName}" "${imp.fieldName}" ...)`);
+    }
+    return this.lines.join('\n');
+  }
+
+  disassembleTable(index: number): string {
+    this.lines = [];
+    this.indent = 0;
+    const mod = this.module;
+    if (index >= 0 && index < mod.tables.length) {
+      const table = mod.tables[index];
+      this.line(`(table ${table.initial}${table.maximum !== undefined ? ' ' + table.maximum : ''} ${this.typeStr(table.elementType)})`);
+    }
+    return this.lines.join('\n');
+  }
+
+  disassembleMemory(index: number): string {
+    this.lines = [];
+    this.indent = 0;
+    const mod = this.module;
+    if (index >= 0 && index < mod.memories.length) {
+      const mem = mod.memories[index];
+      this.line(`(memory ${mem.initial}${mem.maximum !== undefined ? ' ' + mem.maximum : ''})`);
+    }
+    return this.lines.join('\n');
+  }
+
+  disassembleGlobal(index: number): string {
+    this.lines = [];
+    this.indent = 0;
+    const mod = this.module;
+    if (index >= 0 && index < mod.globals.length) {
+      const globalEntry = mod.globals[index];
+      const mutStr = globalEntry.mutable ? `(mut ${this.typeStr(globalEntry.valueType)})` : this.typeStr(globalEntry.valueType);
+      this.line(`(global ${mutStr} ...)`);
+    }
+    return this.lines.join('\n');
+  }
+
+  disassembleExport(index: number): string {
+    this.lines = [];
+    this.indent = 0;
+    const mod = this.module;
+    if (index >= 0 && index < mod.exports.length) {
+      const exp = mod.exports[index];
+      const kindNames = ['func', 'table', 'memory', 'global', 'tag'];
+      this.line(`(export "${exp.name}" (${kindNames[exp.kind] || 'unknown'} ${exp.index}))`);
+    }
+    return this.lines.join('\n');
+  }
+
+  disassembleElement(index: number): string {
+    this.lines = [];
+    this.indent = 0;
+    const mod = this.module;
+    if (index >= 0 && index < mod.elements.length) {
+      this.line(`(elem ...)`);
+    }
+    return this.lines.join('\n');
+  }
+
+  disassembleData(index: number): string {
+    this.lines = [];
+    this.indent = 0;
+    const mod = this.module;
+    if (index >= 0 && index < mod.data.length) {
+      const dataEntry = mod.data[index];
+      const preview = Array.from(dataEntry.data.slice(0, 32)).map(b =>
+        b >= 0x20 && b < 0x7f ? String.fromCharCode(b) : `\\${b.toString(16).padStart(2, '0')}`
+      ).join('');
+      this.line(`(data "${preview}${dataEntry.data.length > 32 ? '...' : ''}")`);
+    }
+    return this.lines.join('\n');
+  }
+
   private line(text: string): void {
     this.lines.push('  '.repeat(this.indent) + text);
   }
@@ -157,7 +283,17 @@ export default class Disassembler {
     return this.module.nameSection?.globalNames?.get(index) || null;
   }
 
-  // Flatten types: rec groups expand into individual types
+  private typeStr(valueType: number | { name: string }): string {
+    if (typeof valueType === 'object' && 'name' in valueType) {
+      return valueType.name;
+    }
+    const names: Record<number, string> = {
+      0x7f: 'i32', 0x7e: 'i64', 0x7d: 'f32', 0x7c: 'f64', 0x7b: 'v128',
+      0x70: 'funcref', 0x6f: 'externref',
+    };
+    return names[valueType] || `type_${valueType}`;
+  }
+
   private flattenTypes(): TypeInfo[] {
     const flat: TypeInfo[] = [];
     for (const t of this.module.types) {

@@ -9692,12 +9692,12 @@ ${inner}
     writeGlobals(lines, mod) {
       mod._globals.forEach((g) => {
         const valType = g.globalType.valueType.name;
-        const typeStr = g.globalType.mutable ? `(mut ${valType})` : valType;
+        const typeStr2 = g.globalType.mutable ? `(mut ${valType})` : valType;
         let initExpr = "";
         if (g._initExpressionEmitter) {
           initExpr = this.formatInitExpr(g._initExpressionEmitter._instructions);
         }
-        lines.push(`  (global (;${g._index};) ${typeStr} (${initExpr}))`);
+        lines.push(`  (global (;${g._index};) ${typeStr2} (${initExpr}))`);
       });
     }
     writeTags(lines, mod) {
@@ -10503,6 +10503,49 @@ ${inner}
     static decodeInitExpr(bytes) {
       const decoder = new _InstructionDecoder(bytes);
       return decoder.decode();
+    }
+    static decodeFunctionBody(bytes) {
+      const decoder = new _InstructionDecoder(bytes);
+      return decoder.decodeAll();
+    }
+    decodeAll() {
+      const instructions = [];
+      this.offset = 0;
+      let depth = 0;
+      while (this.offset < this.buffer.length) {
+        const startOffset = this.offset;
+        const byte = this.buffer[this.offset++];
+        let opCode;
+        if (prefixedOpcodes.has(byte)) {
+          const subMap = prefixedOpcodes.get(byte);
+          const subOpcode = this.readVarUInt32();
+          opCode = subMap.get(subOpcode);
+          if (!opCode) {
+            break;
+          }
+        } else {
+          opCode = singleByteOpcodes.get(byte);
+          if (!opCode) {
+            break;
+          }
+        }
+        const immediates = this.decodeImmediates(opCode);
+        instructions.push({
+          opCode,
+          immediates,
+          offset: startOffset,
+          length: this.offset - startOffset
+        });
+        if (opCode === OpCodes_default.block || opCode === OpCodes_default.loop || opCode === OpCodes_default.if || opCode === OpCodes_default.try) {
+          depth++;
+        } else if (opCode === OpCodes_default.end) {
+          if (depth === 0) {
+            break;
+          }
+          depth--;
+        }
+      }
+      return instructions;
     }
     decodeImmediates(opCode) {
       if (!opCode.immediate) {
@@ -11326,6 +11369,561 @@ ${inner}
     ...valueTypeNames,
     64: ""
     // void
+  };
+  var signedBlockTypeNames = {
+    [-1]: "i32",
+    [-2]: "i64",
+    [-3]: "f32",
+    [-4]: "f64",
+    [-5]: "v128",
+    [-16]: "funcref",
+    [-17]: "externref",
+    [-64]: ""
+    // void (0x40)
+  };
+  var heapTypeNames = {
+    112: "func",
+    // -16
+    111: "extern",
+    // -17
+    110: "any",
+    // -18
+    109: "eq",
+    // -19
+    108: "i31",
+    // -20
+    107: "struct",
+    // -21
+    106: "array",
+    // -22
+    113: "none",
+    // -15
+    115: "nofunc",
+    // -13
+    114: "noextern",
+    // -14
+    // Signed keys (from readVarInt32 in InstructionDecoder)
+    [-16]: "func",
+    [-17]: "extern",
+    [-18]: "any",
+    [-19]: "eq",
+    [-20]: "i31",
+    [-21]: "struct",
+    [-22]: "array",
+    [-15]: "none",
+    [-13]: "nofunc",
+    [-14]: "noextern"
+  };
+  var signedToTypeName = {
+    [-1]: "i32",
+    [-2]: "i64",
+    [-3]: "f32",
+    [-4]: "f64",
+    [-5]: "v128",
+    [-16]: "funcref",
+    [-17]: "externref",
+    [-18]: "anyref",
+    [-19]: "eqref",
+    [-20]: "i31ref",
+    [-21]: "structref",
+    [-22]: "arrayref",
+    [-15]: "nullref",
+    [-13]: "nullfuncref",
+    [-14]: "nullexternref"
+  };
+  function getValueTypeName(vtNum) {
+    if (typeof vtNum === "object" && "name" in vtNum) return vtNum.name;
+    if (vtNum < 0 && signedToTypeName[vtNum]) {
+      return signedToTypeName[vtNum];
+    }
+    if (valueTypeNames[vtNum]) return valueTypeNames[vtNum];
+    return `type_${vtNum}`;
+  }
+  function getHeapTypeName(ht) {
+    if (ht >= 0) return `${ht}`;
+    return heapTypeNames[ht] || `${ht}`;
+  }
+  var Disassembler = class {
+    constructor(module) {
+      this.module = module;
+      this.indent = 0;
+      this.lines = [];
+      this.importedFuncCount = module.imports.filter((i) => i.kind === 0).length;
+      this.importedGlobalCount = module.imports.filter((i) => i.kind === 3).length;
+      this.importedMemoryCount = module.imports.filter((i) => i.kind === 2).length;
+      this.importedTableCount = module.imports.filter((i) => i.kind === 1).length;
+    }
+    disassemble() {
+      const mod = this.module;
+      const moduleName = mod.nameSection?.moduleName;
+      this.lines = [];
+      this.line(`(module${moduleName ? " $" + moduleName : ""}`);
+      this.indent++;
+      this.writeTypes();
+      this.writeImports();
+      this.writeFunctions();
+      this.writeTables();
+      this.writeMemories();
+      this.writeGlobals();
+      this.writeExports();
+      this.writeStart();
+      this.writeElements();
+      this.writeData();
+      this.indent--;
+      this.line(")");
+      return this.lines.join("\n");
+    }
+    disassembleFunction(localIndex) {
+      this.lines = [];
+      this.indent = 0;
+      const mod = this.module;
+      if (localIndex >= 0 && localIndex < mod.functions.length) {
+        const func = mod.functions[localIndex];
+        const globalIndex = this.importedFuncCount + localIndex;
+        const flatTypes = this.flattenTypes();
+        const funcType = localIndex < flatTypes.length ? flatTypes[func.typeIndex] : null;
+        const name = this.getFunctionName(globalIndex);
+        const nameStr = name ? ` $${name}` : "";
+        const typeRef = ` (type ${func.typeIndex})`;
+        this.line(`(func${nameStr}${typeRef}`);
+        this.indent++;
+        if (funcType && funcType.kind === "func") {
+          for (const param of funcType.parameterTypes) {
+            this.line(`(param ${this.typeStr(param)})`);
+          }
+          for (const ret of funcType.returnTypes) {
+            this.line(`(result ${this.typeStr(ret)})`);
+          }
+        }
+        for (const local of func.locals) {
+          for (let j = 0; j < local.count; j++) {
+            this.line(`(local ${this.typeStr(local.type)})`);
+          }
+        }
+        const instructions = func.instructions || InstructionDecoder.decodeFunctionBody(func.body);
+        this.writeInstructions(instructions, localIndex);
+        this.indent--;
+        this.line(")");
+      }
+      return this.lines.join("\n");
+    }
+    disassembleType(index) {
+      this.lines = [];
+      this.indent = 0;
+      const flatTypes = this.flattenTypes();
+      if (index >= 0 && index < flatTypes.length) {
+        this.writeTypeEntry(flatTypes[index], index);
+      }
+      return this.lines.join("\n");
+    }
+    disassembleImport(index) {
+      this.lines = [];
+      this.indent = 0;
+      const mod = this.module;
+      if (index >= 0 && index < mod.imports.length) {
+        const imp = mod.imports[index];
+        this.line(`(import "${imp.moduleName}" "${imp.fieldName}" ...)`);
+      }
+      return this.lines.join("\n");
+    }
+    disassembleTable(index) {
+      this.lines = [];
+      this.indent = 0;
+      const mod = this.module;
+      if (index >= 0 && index < mod.tables.length) {
+        const table = mod.tables[index];
+        this.line(`(table ${table.initial}${table.maximum !== void 0 ? " " + table.maximum : ""} ${this.typeStr(table.elementType)})`);
+      }
+      return this.lines.join("\n");
+    }
+    disassembleMemory(index) {
+      this.lines = [];
+      this.indent = 0;
+      const mod = this.module;
+      if (index >= 0 && index < mod.memories.length) {
+        const mem = mod.memories[index];
+        this.line(`(memory ${mem.initial}${mem.maximum !== void 0 ? " " + mem.maximum : ""})`);
+      }
+      return this.lines.join("\n");
+    }
+    disassembleGlobal(index) {
+      this.lines = [];
+      this.indent = 0;
+      const mod = this.module;
+      if (index >= 0 && index < mod.globals.length) {
+        const globalEntry = mod.globals[index];
+        const mutStr = globalEntry.mutable ? `(mut ${this.typeStr(globalEntry.valueType)})` : this.typeStr(globalEntry.valueType);
+        this.line(`(global ${mutStr} ...)`);
+      }
+      return this.lines.join("\n");
+    }
+    disassembleExport(index) {
+      this.lines = [];
+      this.indent = 0;
+      const mod = this.module;
+      if (index >= 0 && index < mod.exports.length) {
+        const exp = mod.exports[index];
+        const kindNames = ["func", "table", "memory", "global", "tag"];
+        this.line(`(export "${exp.name}" (${kindNames[exp.kind] || "unknown"} ${exp.index}))`);
+      }
+      return this.lines.join("\n");
+    }
+    disassembleElement(index) {
+      this.lines = [];
+      this.indent = 0;
+      const mod = this.module;
+      if (index >= 0 && index < mod.elements.length) {
+        this.line(`(elem ...)`);
+      }
+      return this.lines.join("\n");
+    }
+    disassembleData(index) {
+      this.lines = [];
+      this.indent = 0;
+      const mod = this.module;
+      if (index >= 0 && index < mod.data.length) {
+        const dataEntry = mod.data[index];
+        const preview = Array.from(dataEntry.data.slice(0, 32)).map(
+          (b) => b >= 32 && b < 127 ? String.fromCharCode(b) : `\\${b.toString(16).padStart(2, "0")}`
+        ).join("");
+        this.line(`(data "${preview}${dataEntry.data.length > 32 ? "..." : ""}")`);
+      }
+      return this.lines.join("\n");
+    }
+    line(text) {
+      this.lines.push("  ".repeat(this.indent) + text);
+    }
+    getFunctionName(index) {
+      return this.module.nameSection?.functionNames?.get(index) || null;
+    }
+    getLocalName(funcIndex, localIndex) {
+      return this.module.nameSection?.localNames?.get(funcIndex)?.get(localIndex) || null;
+    }
+    getGlobalName(index) {
+      return this.module.nameSection?.globalNames?.get(index) || null;
+    }
+    typeStr(valueType) {
+      if (typeof valueType === "object" && "name" in valueType) {
+        return valueType.name;
+      }
+      const names = {
+        127: "i32",
+        126: "i64",
+        125: "f32",
+        124: "f64",
+        123: "v128",
+        112: "funcref",
+        111: "externref"
+      };
+      return names[valueType] || `type_${valueType}`;
+    }
+    flattenTypes() {
+      const flat = [];
+      for (const t of this.module.types) {
+        if (t.kind === "rec") {
+          for (const inner of t.types) {
+            flat.push(inner);
+          }
+        } else {
+          flat.push(t);
+        }
+      }
+      return flat;
+    }
+    writeTypes() {
+      let typeIndex = 0;
+      for (const t of this.module.types) {
+        if (t.kind === "rec") {
+          this.line(`(type (;${typeIndex};) (rec`);
+          this.indent++;
+          for (const inner of t.types) {
+            this.writeTypeEntry(inner, typeIndex);
+            typeIndex++;
+          }
+          this.indent--;
+          this.line("))");
+        } else {
+          this.writeTypeEntry(t, typeIndex);
+          typeIndex++;
+        }
+      }
+    }
+    writeTypeEntry(t, index) {
+      if (t.kind === "func") {
+        const ft = t;
+        const params = ft.parameterTypes.map((p) => getValueTypeName(p)).join(" ");
+        const results = ft.returnTypes.map((r) => getValueTypeName(r)).join(" ");
+        let sig = "(func";
+        if (params) sig += ` (param ${params})`;
+        if (results) sig += ` (result ${results})`;
+        sig += ")";
+        this.line(`(type (;${index};) ${sig})`);
+      } else if (t.kind === "struct") {
+        const st = t;
+        const fields = st.fields.map((f) => {
+          const typeName = getValueTypeName(f.type);
+          return f.mutable ? `(field (mut ${typeName}))` : `(field ${typeName})`;
+        }).join(" ");
+        let prefix = "";
+        if (st.superTypes && st.superTypes.length > 0) {
+          const final = st.final !== false ? "sub_final" : "sub";
+          prefix = `(${final} ${st.superTypes.join(" ")} `;
+        }
+        this.line(`(type (;${index};) ${prefix}(struct ${fields})${prefix ? ")" : ""})`);
+      } else if (t.kind === "array") {
+        const at = t;
+        const elemType = getValueTypeName(at.elementType);
+        const elem = at.mutable ? `(mut ${elemType})` : elemType;
+        this.line(`(type (;${index};) (array ${elem}))`);
+      }
+    }
+    writeImports() {
+      for (const imp of this.module.imports) {
+        const mod = JSON.stringify(imp.moduleName);
+        const field = JSON.stringify(imp.fieldName);
+        switch (imp.kind) {
+          case 0: {
+            const typeIdx = imp.typeIndex;
+            this.line(`(import ${mod} ${field} (func (type ${typeIdx})))`);
+            break;
+          }
+          case 1: {
+            const tt = imp.tableType;
+            const elemType = valueTypeNames[tt.elementType & 255] || "anyfunc";
+            const max = tt.maximum !== null ? ` ${tt.maximum}` : "";
+            this.line(`(import ${mod} ${field} (table ${tt.initial}${max} ${elemType}))`);
+            break;
+          }
+          case 2: {
+            const mt = imp.memoryType;
+            const mem64 = mt.memory64 ? "i64 " : "";
+            const max = mt.maximum !== null ? ` ${mt.maximum}` : "";
+            const shared = mt.shared ? " shared" : "";
+            this.line(`(import ${mod} ${field} (memory ${mem64}${mt.initial}${max}${shared}))`);
+            break;
+          }
+          case 3: {
+            const gt = imp.globalType;
+            const vtName = getValueTypeName(gt.valueType);
+            const globalType = gt.mutable ? `(mut ${vtName})` : vtName;
+            this.line(`(import ${mod} ${field} (global ${globalType}))`);
+            break;
+          }
+          case 4: {
+            const tt = imp.tagType;
+            this.line(`(import ${mod} ${field} (tag (type ${tt.typeIndex})))`);
+            break;
+          }
+        }
+      }
+    }
+    writeFunctions() {
+      const flatTypes = this.flattenTypes();
+      for (let i = 0; i < this.module.functions.length; i++) {
+        const func = this.module.functions[i];
+        const globalFuncIndex = this.importedFuncCount + i;
+        const name = this.getFunctionName(globalFuncIndex);
+        const nameStr = name ? ` $${name}` : "";
+        const funcType = flatTypes[func.typeIndex];
+        let sig = `(type ${func.typeIndex})`;
+        if (funcType && funcType.kind === "func") {
+          const ft = funcType;
+          if (ft.parameterTypes.length > 0) {
+            sig += " (param " + ft.parameterTypes.map((p) => getValueTypeName(p)).join(" ") + ")";
+          }
+          if (ft.returnTypes.length > 0) {
+            sig += " (result " + ft.returnTypes.map((r) => getValueTypeName(r)).join(" ") + ")";
+          }
+        }
+        this.line(`(func${nameStr} ${sig}`);
+        this.indent++;
+        for (const local of func.locals) {
+          for (let j = 0; j < local.count; j++) {
+            this.line(`(local ${getValueTypeName(local.type)})`);
+          }
+        }
+        const instructions = func.instructions || InstructionDecoder.decodeInitExpr(func.body);
+        this.writeInstructions(instructions, globalFuncIndex);
+        this.indent--;
+        this.line(")");
+      }
+    }
+    writeInstructions(instructions, funcIndex) {
+      for (const instr of instructions) {
+        if (instr.opCode === OpCodes_default.end) {
+          continue;
+        }
+        const formatted = this.formatInstruction(instr);
+        this.line(formatted);
+      }
+    }
+    formatInstruction(instr) {
+      const mnemonic = instr.opCode.mnemonic;
+      const imm = instr.immediates;
+      if (imm.values.length === 0) return mnemonic;
+      switch (imm.type) {
+        case "BlockSignature": {
+          const bt = imm.values[0];
+          const btSigned = signedBlockTypeNames[bt];
+          if (btSigned !== void 0) {
+            if (btSigned === "") return mnemonic;
+            return `${mnemonic} (result ${btSigned})`;
+          }
+          const btUnsigned = blockTypeNames[bt];
+          if (btUnsigned !== void 0) {
+            if (btUnsigned === "") return mnemonic;
+            return `${mnemonic} (result ${btUnsigned})`;
+          }
+          if (bt >= 0) return `${mnemonic} (type ${bt})`;
+          return mnemonic;
+        }
+        case "VarInt32":
+        case "VarInt64":
+        case "VarUInt1":
+        case "VarUInt32":
+        case "RelativeDepth":
+        case "Function":
+        case "Local":
+        case "Global":
+        case "LaneIndex":
+          return `${mnemonic} ${imm.values[0]}`;
+        case "Float32":
+        case "Float64": {
+          const val = imm.values[0];
+          if (Number.isNaN(val)) return `${mnemonic} nan`;
+          if (val === Infinity) return `${mnemonic} inf`;
+          if (val === -Infinity) return `${mnemonic} -inf`;
+          return `${mnemonic} ${val}`;
+        }
+        case "MemoryImmediate": {
+          const alignment = imm.values[0];
+          const offset = imm.values[1];
+          const parts = [mnemonic];
+          if (offset !== 0) parts.push(`offset=${offset}`);
+          if (alignment !== 0) parts.push(`align=${1 << alignment}`);
+          return parts.join(" ");
+        }
+        case "IndirectFunction": {
+          const typeIdx = imm.values[0];
+          const tableIdx = imm.values[1];
+          if (tableIdx > 0) return `${mnemonic} ${tableIdx} (type ${typeIdx})`;
+          return `${mnemonic} (type ${typeIdx})`;
+        }
+        case "BranchTable": {
+          const targets = imm.values[0];
+          const defaultTarget = imm.values[1];
+          return `${mnemonic} ${targets.join(" ")} ${defaultTarget}`;
+        }
+        case "TypeIndexField": {
+          const typeIdx = imm.values[0];
+          const fieldIdx = imm.values[1];
+          return `${mnemonic} ${typeIdx} ${fieldIdx}`;
+        }
+        case "TypeIndexIndex": {
+          const typeIdx = imm.values[0];
+          const idx = imm.values[1];
+          return `${mnemonic} ${typeIdx} ${idx}`;
+        }
+        case "HeapType": {
+          const ht = imm.values[0];
+          return `${mnemonic} ${getHeapTypeName(ht)}`;
+        }
+        case "BrOnCast": {
+          const [flags, depth, ht1, ht2] = imm.values;
+          return `${mnemonic} ${depth} ${getHeapTypeName(ht1)} ${getHeapTypeName(ht2)}`;
+        }
+        case "V128Const": {
+          const bytes = imm.values[0];
+          return `${mnemonic} i8x16 ${Array.from(bytes).join(" ")}`;
+        }
+        case "ShuffleMask": {
+          const mask = imm.values[0];
+          return `${mnemonic} ${Array.from(mask).join(" ")}`;
+        }
+        default:
+          return mnemonic;
+      }
+    }
+    writeTables() {
+      for (let i = 0; i < this.module.tables.length; i++) {
+        const t = this.module.tables[i];
+        const elemType = valueTypeNames[t.elementType & 255] || "anyfunc";
+        const max = t.maximum !== null ? ` ${t.maximum}` : "";
+        this.line(`(table (;${this.importedTableCount + i};) ${t.initial}${max} ${elemType})`);
+      }
+    }
+    writeMemories() {
+      for (let i = 0; i < this.module.memories.length; i++) {
+        const m = this.module.memories[i];
+        const mem64 = m.memory64 ? "i64 " : "";
+        const max = m.maximum !== null ? ` ${m.maximum}` : "";
+        const shared = m.shared ? " shared" : "";
+        this.line(`(memory (;${this.importedMemoryCount + i};) ${mem64}${m.initial}${max}${shared})`);
+      }
+    }
+    writeGlobals() {
+      for (let i = 0; i < this.module.globals.length; i++) {
+        const g = this.module.globals[i];
+        const globalIdx = this.importedGlobalCount + i;
+        const name = this.getGlobalName(globalIdx);
+        const nameStr = name ? ` $${name}` : "";
+        const vtName = getValueTypeName(g.valueType);
+        const globalType = g.mutable ? `(mut ${vtName})` : vtName;
+        const initInstrs = g.initInstructions || InstructionDecoder.decodeInitExpr(g.initExpr);
+        const initStr = initInstrs.filter((ins) => ins.opCode !== OpCodes_default.end).map((ins) => this.formatInstruction(ins)).join(" ");
+        this.line(`(global${nameStr} (;${globalIdx};) ${globalType} (${initStr}))`);
+      }
+    }
+    writeExports() {
+      const kindNames = ["func", "table", "memory", "global", "tag"];
+      for (const exp of this.module.exports) {
+        const kind = kindNames[exp.kind] || `kind_${exp.kind}`;
+        this.line(`(export ${JSON.stringify(exp.name)} (${kind} ${exp.index}))`);
+      }
+    }
+    writeStart() {
+      if (this.module.start !== null) {
+        this.line(`(start ${this.module.start})`);
+      }
+    }
+    writeElements() {
+      for (const elem of this.module.elements) {
+        if (elem.passive) {
+          const indices = elem.functionIndices.join(" ");
+          this.line(`(elem func ${indices})`);
+        } else {
+          const offsetInstrs = elem.offsetInstructions || InstructionDecoder.decodeInitExpr(elem.offsetExpr);
+          const offsetStr = offsetInstrs.filter((ins) => ins.opCode !== OpCodes_default.end).map((ins) => this.formatInstruction(ins)).join(" ");
+          const indices = elem.functionIndices.join(" ");
+          this.line(`(elem (${offsetStr}) func ${indices})`);
+        }
+      }
+    }
+    writeData() {
+      for (const data of this.module.data) {
+        if (data.passive) {
+          const str = this.escapeDataString(data.data);
+          this.line(`(data ${str})`);
+        } else {
+          const offsetInstrs = data.offsetInstructions || InstructionDecoder.decodeInitExpr(data.offsetExpr);
+          const offsetStr = offsetInstrs.filter((ins) => ins.opCode !== OpCodes_default.end).map((ins) => this.formatInstruction(ins)).join(" ");
+          const str = this.escapeDataString(data.data);
+          this.line(`(data (${offsetStr}) ${str})`);
+        }
+      }
+    }
+    escapeDataString(data) {
+      let result = '"';
+      for (const b of data) {
+        if (b >= 32 && b < 127 && b !== 34 && b !== 92) {
+          result += String.fromCharCode(b);
+        } else {
+          result += "\\" + b.toString(16).padStart(2, "0");
+        }
+      }
+      result += '"';
+      return result;
+    }
   };
 
   // src/WatParser.ts
@@ -19174,6 +19772,9753 @@ log(mod.toString());`
     }
   };
 
+  // src/DwarfParser.ts
+  function parseDwarfDebugInfo(customSections) {
+    const debugLineSection = customSections.find((section) => section.name === ".debug_line");
+    const debugStrSection = customSections.find((section) => section.name === ".debug_str");
+    const debugLineStrSection = customSections.find((section) => section.name === ".debug_line_str");
+    const debugInfoSection = customSections.find((section) => section.name === ".debug_info");
+    const debugAbbrevSection = customSections.find((section) => section.name === ".debug_abbrev");
+    let lineInfo = null;
+    if (debugLineSection) {
+      lineInfo = parseDebugLine(debugLineSection.data, debugStrSection?.data, debugLineStrSection?.data);
+    }
+    const sourceFiles = [];
+    if (lineInfo) {
+      for (const fileEntry of lineInfo.files) {
+        let path = fileEntry.name;
+        if (fileEntry.directoryIndex > 0 && fileEntry.directoryIndex <= lineInfo.directories.length) {
+          const directory = lineInfo.directories[fileEntry.directoryIndex - 1];
+          if (directory && !path.startsWith("/")) {
+            path = directory + "/" + path;
+          }
+        }
+        sourceFiles.push(path);
+      }
+    }
+    let compilationUnits = [];
+    let allFunctions = [];
+    let allTypes = /* @__PURE__ */ new Map();
+    if (debugInfoSection && debugAbbrevSection) {
+      try {
+        const parseResult = parseDebugInfo(
+          debugInfoSection.data,
+          debugAbbrevSection.data,
+          debugStrSection?.data,
+          debugLineStrSection?.data
+        );
+        compilationUnits = parseResult.units;
+        allTypes = parseResult.types;
+        for (const compilationUnit of compilationUnits) {
+          allFunctions = allFunctions.concat(compilationUnit.functions);
+        }
+      } catch (parseError) {
+      }
+    }
+    return { lineInfo, sourceFiles, compilationUnits, functions: allFunctions, types: allTypes };
+  }
+  function parseDebugLine(data, debugStr, debugLineStr) {
+    const reader = new DwarfReader(data);
+    const allFiles = [];
+    const allDirectories = [];
+    const allEntries = [];
+    while (reader.offset < data.length) {
+      const unitStart = reader.offset;
+      const unitLength = reader.readUint32();
+      if (unitLength === 0) {
+        break;
+      }
+      const unitEnd = reader.offset + unitLength;
+      const version = reader.readUint16();
+      if (version === 5) {
+        parseDwarf5LineUnit(reader, unitEnd, allFiles, allDirectories, allEntries, debugStr, debugLineStr);
+      } else if (version >= 2 && version <= 4) {
+        parseDwarf4LineUnit(reader, unitEnd, version, allFiles, allDirectories, allEntries);
+      } else {
+        reader.offset = unitEnd;
+      }
+    }
+    return { files: allFiles, directories: allDirectories, lineEntries: allEntries };
+  }
+  function parseDwarf4LineUnit(reader, unitEnd, version, files, directories, entries) {
+    const headerLength = reader.readUint32();
+    const headerEnd = reader.offset + headerLength;
+    const minimumInstructionLength = reader.readUint8();
+    let maximumOpsPerInstruction = 1;
+    if (version >= 4) {
+      maximumOpsPerInstruction = reader.readUint8();
+    }
+    const defaultIsStatement = reader.readUint8() !== 0;
+    const lineBase = reader.readInt8();
+    const lineRange = reader.readUint8();
+    const opcodeBase = reader.readUint8();
+    const standardOpcodeLengths = [];
+    for (let index = 1; index < opcodeBase; index++) {
+      standardOpcodeLengths.push(reader.readULEB128());
+    }
+    const dirStart = directories.length;
+    while (reader.offset < headerEnd) {
+      const dirName = reader.readNullTerminatedString();
+      if (dirName.length === 0) {
+        break;
+      }
+      directories.push(dirName);
+    }
+    const fileStart = files.length;
+    while (reader.offset < headerEnd) {
+      const fileName = reader.readNullTerminatedString();
+      if (fileName.length === 0) {
+        break;
+      }
+      const directoryIndex = reader.readULEB128();
+      reader.readULEB128();
+      reader.readULEB128();
+      files.push({ name: fileName, directoryIndex: dirStart + directoryIndex });
+    }
+    reader.offset = headerEnd;
+    executeLineProgram(
+      reader,
+      unitEnd,
+      minimumInstructionLength,
+      maximumOpsPerInstruction,
+      defaultIsStatement,
+      lineBase,
+      lineRange,
+      opcodeBase,
+      standardOpcodeLengths,
+      fileStart,
+      entries
+    );
+  }
+  function parseDwarf5LineUnit(reader, unitEnd, files, directories, entries, debugStr, debugLineStr) {
+    const addressSize = reader.readUint8();
+    const segmentSelectorSize = reader.readUint8();
+    const headerLength = reader.readUint32();
+    const headerEnd = reader.offset + headerLength;
+    const minimumInstructionLength = reader.readUint8();
+    const maximumOpsPerInstruction = reader.readUint8();
+    const defaultIsStatement = reader.readUint8() !== 0;
+    const lineBase = reader.readInt8();
+    const lineRange = reader.readUint8();
+    const opcodeBase = reader.readUint8();
+    const standardOpcodeLengths = [];
+    for (let index = 1; index < opcodeBase; index++) {
+      standardOpcodeLengths.push(reader.readULEB128());
+    }
+    const directoryEntryFormatCount = reader.readUint8();
+    const directoryEntryFormat = [];
+    for (let index = 0; index < directoryEntryFormatCount; index++) {
+      const contentType = reader.readULEB128();
+      const form = reader.readULEB128();
+      directoryEntryFormat.push([contentType, form]);
+    }
+    const dirStart = directories.length;
+    const directoryCount = reader.readULEB128();
+    for (let index = 0; index < directoryCount; index++) {
+      let dirName = "";
+      for (const [contentType, form] of directoryEntryFormat) {
+        const value = readFormValue(reader, form, debugStr, debugLineStr);
+        if (contentType === 1) {
+          dirName = value;
+        }
+      }
+      directories.push(dirName);
+    }
+    const fileEntryFormatCount = reader.readUint8();
+    const fileEntryFormat = [];
+    for (let index = 0; index < fileEntryFormatCount; index++) {
+      const contentType = reader.readULEB128();
+      const form = reader.readULEB128();
+      fileEntryFormat.push([contentType, form]);
+    }
+    const fileStart = files.length;
+    const fileCount = reader.readULEB128();
+    for (let index = 0; index < fileCount; index++) {
+      let fileName = "";
+      let directoryIndex = 0;
+      for (const [contentType, form] of fileEntryFormat) {
+        const value = readFormValue(reader, form, debugStr, debugLineStr);
+        if (contentType === 1) {
+          fileName = value;
+        } else if (contentType === 2) {
+          directoryIndex = parseInt(value, 10) || 0;
+        }
+      }
+      files.push({ name: fileName, directoryIndex: dirStart + directoryIndex });
+    }
+    reader.offset = headerEnd;
+    executeLineProgram(
+      reader,
+      unitEnd,
+      minimumInstructionLength,
+      maximumOpsPerInstruction,
+      defaultIsStatement,
+      lineBase,
+      lineRange,
+      opcodeBase,
+      standardOpcodeLengths,
+      fileStart,
+      entries
+    );
+  }
+  function readFormValue(reader, form, debugStr, debugLineStr) {
+    switch (form) {
+      case 8: {
+        const len = reader.readULEB128();
+        const bytes = reader.readBytes(len);
+        return new TextDecoder().decode(bytes);
+      }
+      case 14: {
+        const offset = reader.readUint32();
+        if (debugStr) {
+          return readNullTerminatedStringAt(debugStr, offset);
+        }
+        return `<str@${offset}>`;
+      }
+      case 31: {
+        const offset = reader.readUint32();
+        if (debugLineStr) {
+          return readNullTerminatedStringAt(debugLineStr, offset);
+        }
+        return `<linestr@${offset}>`;
+      }
+      case 11: {
+        return String(reader.readULEB128());
+      }
+      case 5: {
+        return String(reader.readUint16());
+      }
+      case 6: {
+        return String(reader.readUint32());
+      }
+      case 15: {
+        const offset = reader.readULEB128();
+        if (debugStr) {
+          return readNullTerminatedStringAt(debugStr, offset);
+        }
+        return `<strx@${offset}>`;
+      }
+      default: {
+        return `<form_${form}>`;
+      }
+    }
+  }
+  function executeLineProgram(reader, unitEnd, minimumInstructionLength, maximumOpsPerInstruction, defaultIsStatement, lineBase, lineRange, opcodeBase, standardOpcodeLengths, fileStart, entries) {
+    let address = 0;
+    let file = 1;
+    let line = 1;
+    let column = 0;
+    let isStatement = defaultIsStatement;
+    let opIndex = 0;
+    while (reader.offset < unitEnd) {
+      const opcode = reader.readUint8();
+      if (opcode === 0) {
+        const extLength = reader.readULEB128();
+        const extEnd = reader.offset + extLength;
+        const extOpcode = reader.readUint8();
+        switch (extOpcode) {
+          case 1:
+            entries.push({ address, file: fileStart + file, line, column });
+            address = 0;
+            file = 1;
+            line = 1;
+            column = 0;
+            isStatement = defaultIsStatement;
+            opIndex = 0;
+            break;
+          case 2:
+            address = reader.readUint32();
+            opIndex = 0;
+            break;
+          case 4:
+            break;
+          default:
+            break;
+        }
+        reader.offset = extEnd;
+      } else if (opcode < opcodeBase) {
+        switch (opcode) {
+          case 1:
+            entries.push({ address, file: fileStart + file, line, column });
+            break;
+          case 2: {
+            const advance = reader.readULEB128();
+            address += minimumInstructionLength * ((opIndex + advance) / maximumOpsPerInstruction | 0);
+            opIndex = (opIndex + advance) % maximumOpsPerInstruction;
+            break;
+          }
+          case 3:
+            line += reader.readSLEB128();
+            break;
+          case 4:
+            file = reader.readULEB128();
+            break;
+          case 5:
+            column = reader.readULEB128();
+            break;
+          case 6:
+            isStatement = !isStatement;
+            break;
+          case 7:
+            break;
+          case 8:
+            address += minimumInstructionLength * ((255 - opcodeBase) / lineRange | 0);
+            break;
+          case 9: {
+            const fixedAdvance = reader.readUint16();
+            address += fixedAdvance;
+            opIndex = 0;
+            break;
+          }
+          default: {
+            for (let argIndex = 0; argIndex < (standardOpcodeLengths[opcode - 1] || 0); argIndex++) {
+              reader.readULEB128();
+            }
+            break;
+          }
+        }
+      } else {
+        const adjustedOpcode = opcode - opcodeBase;
+        const addressAdvance = minimumInstructionLength * ((opIndex + (adjustedOpcode / lineRange | 0)) / maximumOpsPerInstruction | 0);
+        address += addressAdvance;
+        opIndex = (opIndex + (adjustedOpcode / lineRange | 0)) % maximumOpsPerInstruction;
+        line += lineBase + adjustedOpcode % lineRange;
+        entries.push({ address, file: fileStart + file, line, column });
+      }
+    }
+  }
+  var DW_TAG_formal_parameter = 5;
+  var DW_TAG_pointer_type = 15;
+  var DW_TAG_compile_unit = 17;
+  var DW_TAG_structure_type = 19;
+  var DW_TAG_typedef = 22;
+  var DW_TAG_base_type = 36;
+  var DW_TAG_const_type = 38;
+  var DW_TAG_subprogram = 46;
+  var DW_TAG_variable = 52;
+  var DW_AT_location = 2;
+  var DW_AT_name = 3;
+  var DW_AT_byte_size = 11;
+  var DW_AT_low_pc = 17;
+  var DW_AT_high_pc = 18;
+  var DW_AT_language = 19;
+  var DW_AT_comp_dir = 27;
+  var DW_AT_producer = 37;
+  var DW_AT_decl_file = 58;
+  var DW_AT_decl_line = 59;
+  var DW_AT_external = 63;
+  var DW_AT_type = 73;
+  var DW_AT_linkage_name = 110;
+  var DW_FORM_addr = 1;
+  var DW_FORM_block2 = 3;
+  var DW_FORM_block4 = 4;
+  var DW_FORM_data2 = 5;
+  var DW_FORM_data4 = 6;
+  var DW_FORM_data8 = 7;
+  var DW_FORM_string = 8;
+  var DW_FORM_block = 9;
+  var DW_FORM_block1 = 10;
+  var DW_FORM_data1 = 11;
+  var DW_FORM_flag = 12;
+  var DW_FORM_sdata = 13;
+  var DW_FORM_strp = 14;
+  var DW_FORM_udata = 15;
+  var DW_FORM_ref_addr = 16;
+  var DW_FORM_ref1 = 17;
+  var DW_FORM_ref2 = 18;
+  var DW_FORM_ref4 = 19;
+  var DW_FORM_ref8 = 20;
+  var DW_FORM_ref_udata = 21;
+  var DW_FORM_indirect = 22;
+  var DW_FORM_sec_offset = 23;
+  var DW_FORM_exprloc = 24;
+  var DW_FORM_flag_present = 25;
+  var DW_FORM_strx = 26;
+  var DW_FORM_addrx = 27;
+  var DW_FORM_ref_sup4 = 28;
+  var DW_FORM_strp_sup = 29;
+  var DW_FORM_data16 = 30;
+  var DW_FORM_line_strp = 31;
+  var DW_FORM_ref_sig8 = 32;
+  var DW_FORM_implicit_const = 33;
+  var DW_FORM_loclistx = 34;
+  var DW_FORM_rnglistx = 35;
+  var DW_FORM_ref_sup8 = 36;
+  var DW_FORM_strx1 = 37;
+  var DW_FORM_strx2 = 38;
+  var DW_FORM_strx3 = 39;
+  var DW_FORM_strx4 = 40;
+  var DW_FORM_addrx1 = 41;
+  var DW_FORM_addrx2 = 42;
+  var DW_FORM_addrx3 = 43;
+  var DW_FORM_addrx4 = 44;
+  function parseAbbrevTable(data, tableOffset) {
+    const reader = new DwarfReader(data);
+    reader.offset = tableOffset;
+    const table = /* @__PURE__ */ new Map();
+    while (reader.offset < data.length) {
+      const code = reader.readULEB128();
+      if (code === 0) {
+        break;
+      }
+      const tag = reader.readULEB128();
+      const hasChildren = reader.readUint8() !== 0;
+      const attributes = [];
+      while (true) {
+        const attribute = reader.readULEB128();
+        const form = reader.readULEB128();
+        if (attribute === 0 && form === 0) {
+          break;
+        }
+        let implicitConst = 0;
+        if (form === DW_FORM_implicit_const) {
+          implicitConst = reader.readSLEB128();
+        }
+        attributes.push({ attribute, form, implicitConst });
+      }
+      table.set(code, { tag, hasChildren, attributes });
+    }
+    return table;
+  }
+  function skipFormValue(reader, form, addressSize) {
+    switch (form) {
+      case DW_FORM_addr:
+        reader.offset += addressSize;
+        break;
+      case DW_FORM_data1:
+      case DW_FORM_ref1:
+      case DW_FORM_flag:
+        reader.offset += 1;
+        break;
+      case DW_FORM_data2:
+      case DW_FORM_ref2:
+        reader.offset += 2;
+        break;
+      case DW_FORM_data4:
+      case DW_FORM_ref4:
+      case DW_FORM_strp:
+      case DW_FORM_sec_offset:
+      case DW_FORM_ref_addr:
+      case DW_FORM_line_strp:
+      case DW_FORM_strp_sup:
+      case DW_FORM_ref_sup4:
+        reader.offset += 4;
+        break;
+      case DW_FORM_data8:
+      case DW_FORM_ref8:
+      case DW_FORM_ref_sig8:
+      case DW_FORM_ref_sup8:
+        reader.offset += 8;
+        break;
+      case DW_FORM_data16:
+        reader.offset += 16;
+        break;
+      case DW_FORM_sdata:
+        reader.readSLEB128();
+        break;
+      case DW_FORM_udata:
+      case DW_FORM_ref_udata:
+      case DW_FORM_strx:
+      case DW_FORM_addrx:
+      case DW_FORM_loclistx:
+      case DW_FORM_rnglistx:
+        reader.readULEB128();
+        break;
+      case DW_FORM_string:
+        reader.readNullTerminatedString();
+        break;
+      case DW_FORM_block1: {
+        const len = reader.readUint8();
+        reader.offset += len;
+        break;
+      }
+      case DW_FORM_block2: {
+        const len = reader.readUint16();
+        reader.offset += len;
+        break;
+      }
+      case DW_FORM_block4: {
+        const len = reader.readUint32();
+        reader.offset += len;
+        break;
+      }
+      case DW_FORM_block:
+      case DW_FORM_exprloc: {
+        const len = reader.readULEB128();
+        reader.offset += len;
+        break;
+      }
+      case DW_FORM_flag_present:
+        break;
+      case DW_FORM_implicit_const:
+        break;
+      case DW_FORM_strx1:
+      case DW_FORM_addrx1:
+        reader.offset += 1;
+        break;
+      case DW_FORM_strx2:
+      case DW_FORM_addrx2:
+        reader.offset += 2;
+        break;
+      case DW_FORM_strx3:
+      case DW_FORM_addrx3:
+        reader.offset += 3;
+        break;
+      case DW_FORM_strx4:
+      case DW_FORM_addrx4:
+        reader.offset += 4;
+        break;
+      case DW_FORM_indirect: {
+        const actualForm = reader.readULEB128();
+        skipFormValue(reader, actualForm, addressSize);
+        break;
+      }
+      default:
+        throw new Error(`Unknown DWARF form: 0x${form.toString(16)}`);
+    }
+  }
+  function readAttrValue(reader, form, addressSize, debugStr, debugLineStr, implicitConst) {
+    switch (form) {
+      case DW_FORM_addr: {
+        if (addressSize === 4) {
+          return reader.readUint32();
+        }
+        const low = reader.readUint32();
+        const high = reader.readUint32();
+        return low + high * 4294967296;
+      }
+      case DW_FORM_data1:
+        return reader.readUint8();
+      case DW_FORM_data2:
+        return reader.readUint16();
+      case DW_FORM_data4:
+        return reader.readUint32();
+      case DW_FORM_data8: {
+        const low = reader.readUint32();
+        const high = reader.readUint32();
+        return low + high * 4294967296;
+      }
+      case DW_FORM_sdata:
+        return reader.readSLEB128();
+      case DW_FORM_udata:
+        return reader.readULEB128();
+      case DW_FORM_string:
+        return reader.readNullTerminatedString();
+      case DW_FORM_strp: {
+        const offset = reader.readUint32();
+        if (debugStr) {
+          return readNullTerminatedStringAt(debugStr, offset);
+        }
+        return null;
+      }
+      case DW_FORM_line_strp: {
+        const offset = reader.readUint32();
+        if (debugLineStr) {
+          return readNullTerminatedStringAt(debugLineStr, offset);
+        }
+        return null;
+      }
+      case DW_FORM_flag:
+        return reader.readUint8() !== 0;
+      case DW_FORM_flag_present:
+        return true;
+      case DW_FORM_sec_offset:
+        return reader.readUint32();
+      case DW_FORM_ref1:
+        return reader.readUint8();
+      case DW_FORM_ref2:
+        return reader.readUint16();
+      case DW_FORM_ref4:
+        return reader.readUint32();
+      case DW_FORM_ref_udata:
+        return reader.readULEB128();
+      case DW_FORM_ref_addr:
+        return reader.readUint32();
+      case DW_FORM_implicit_const:
+        return implicitConst;
+      case DW_FORM_strx:
+      case DW_FORM_addrx:
+      case DW_FORM_loclistx:
+      case DW_FORM_rnglistx:
+        return reader.readULEB128();
+      case DW_FORM_strx1:
+      case DW_FORM_addrx1:
+        return reader.readUint8();
+      case DW_FORM_strx2:
+      case DW_FORM_addrx2:
+        return reader.readUint16();
+      case DW_FORM_strx4:
+      case DW_FORM_addrx4:
+        return reader.readUint32();
+      case DW_FORM_exprloc:
+      case DW_FORM_block: {
+        const len = reader.readULEB128();
+        const blockStart = reader.offset;
+        const wasmLocal = parseLocationBlock(reader.data, blockStart, len);
+        reader.offset = blockStart + len;
+        return wasmLocal;
+      }
+      case DW_FORM_block1: {
+        const len = reader.readUint8();
+        const blockStart = reader.offset;
+        const wasmLocal = parseLocationBlock(reader.data, blockStart, len);
+        reader.offset = blockStart + len;
+        return wasmLocal;
+      }
+      case DW_FORM_block2: {
+        const len = reader.readUint16();
+        reader.offset += len;
+        return null;
+      }
+      case DW_FORM_block4: {
+        const len = reader.readUint32();
+        reader.offset += len;
+        return null;
+      }
+      case DW_FORM_ref_sig8:
+      case DW_FORM_ref8: {
+        reader.offset += 8;
+        return null;
+      }
+      case DW_FORM_data16: {
+        reader.offset += 16;
+        return null;
+      }
+      case DW_FORM_strx3:
+      case DW_FORM_addrx3: {
+        const byte0 = reader.readUint8();
+        const byte1 = reader.readUint8();
+        const byte2 = reader.readUint8();
+        return byte0 | byte1 << 8 | byte2 << 16;
+      }
+      case DW_FORM_indirect: {
+        const actualForm = reader.readULEB128();
+        return readAttrValue(reader, actualForm, addressSize, debugStr, debugLineStr, 0);
+      }
+      default:
+        skipFormValue(reader, form, addressSize);
+        return null;
+    }
+  }
+  function parseDebugInfo(debugInfoData, debugAbbrevData, debugStr, debugLineStr) {
+    const reader = new DwarfReader(debugInfoData);
+    const compilationUnits = [];
+    const typeMap = /* @__PURE__ */ new Map();
+    while (reader.offset < debugInfoData.length) {
+      const unitStart = reader.offset;
+      const unitLength = reader.readUint32();
+      if (unitLength === 0 || unitLength === 4294967295) {
+        break;
+      }
+      const unitEnd = reader.offset + unitLength;
+      const version = reader.readUint16();
+      let addressSize;
+      let abbrevOffset;
+      if (version === 5) {
+        const unitType = reader.readUint8();
+        addressSize = reader.readUint8();
+        abbrevOffset = reader.readUint32();
+      } else {
+        abbrevOffset = reader.readUint32();
+        addressSize = reader.readUint8();
+      }
+      const abbrevTable = parseAbbrevTable(debugAbbrevData, abbrevOffset);
+      let unitName = "";
+      let unitProducer = "";
+      let unitLanguage = 0;
+      let unitCompDir = "";
+      const unitFunctions = [];
+      let depth = 0;
+      let currentFunction = null;
+      let functionDepth = -1;
+      while (reader.offset < unitEnd) {
+        const dieOffset = reader.offset;
+        const abbrevCode = reader.readULEB128();
+        if (abbrevCode === 0) {
+          depth--;
+          if (currentFunction && depth <= functionDepth) {
+            currentFunction = null;
+            functionDepth = -1;
+          }
+          continue;
+        }
+        const abbrev = abbrevTable.get(abbrevCode);
+        if (!abbrev) {
+          break;
+        }
+        const attrs = /* @__PURE__ */ new Map();
+        for (const attrDef of abbrev.attributes) {
+          const value = readAttrValue(reader, attrDef.form, addressSize, debugStr, debugLineStr, attrDef.implicitConst);
+          attrs.set(attrDef.attribute, value);
+        }
+        if (abbrev.tag === DW_TAG_compile_unit) {
+          const nameVal = attrs.get(DW_AT_name);
+          if (typeof nameVal === "string") {
+            unitName = nameVal;
+          }
+          const producerVal = attrs.get(DW_AT_producer);
+          if (typeof producerVal === "string") {
+            unitProducer = producerVal;
+          }
+          const langVal = attrs.get(DW_AT_language);
+          if (typeof langVal === "number") {
+            unitLanguage = langVal;
+          }
+          const compDirVal = attrs.get(DW_AT_comp_dir);
+          if (typeof compDirVal === "string") {
+            unitCompDir = compDirVal;
+          }
+        }
+        if (abbrev.tag === DW_TAG_subprogram) {
+          const funcName = attrs.get(DW_AT_name);
+          const linkageName = attrs.get(DW_AT_linkage_name);
+          const lowPc = attrs.get(DW_AT_low_pc);
+          const highPc = attrs.get(DW_AT_high_pc);
+          const declFile = attrs.get(DW_AT_decl_file);
+          const declLine = attrs.get(DW_AT_decl_line);
+          const isExternal = attrs.get(DW_AT_external);
+          if (typeof funcName === "string" || typeof linkageName === "string") {
+            let resolvedHighPc = typeof highPc === "number" ? highPc : 0;
+            const resolvedLowPc = typeof lowPc === "number" ? lowPc : 0;
+            if (resolvedHighPc > 0 && resolvedHighPc < resolvedLowPc) {
+              resolvedHighPc = resolvedLowPc + resolvedHighPc;
+            }
+            const func = {
+              name: typeof funcName === "string" ? funcName : typeof linkageName === "string" ? linkageName : "",
+              linkageName: typeof linkageName === "string" ? linkageName : null,
+              lowPc: resolvedLowPc,
+              highPc: resolvedHighPc,
+              declFile: typeof declFile === "number" ? declFile : 0,
+              declLine: typeof declLine === "number" ? declLine : 0,
+              isExternal: isExternal === true,
+              parameters: [],
+              variables: []
+            };
+            unitFunctions.push(func);
+            currentFunction = func;
+            functionDepth = depth;
+          }
+        }
+        if (currentFunction && depth > functionDepth) {
+          if (abbrev.tag === DW_TAG_formal_parameter) {
+            const paramName = attrs.get(DW_AT_name);
+            const location2 = attrs.get(DW_AT_location);
+            if (typeof paramName === "string") {
+              currentFunction.parameters.push({
+                name: paramName,
+                wasmLocal: extractWasmLocal(location2 ?? null),
+                typeName: null
+              });
+            }
+          }
+          if (abbrev.tag === DW_TAG_variable) {
+            const varName = attrs.get(DW_AT_name);
+            const location2 = attrs.get(DW_AT_location);
+            if (typeof varName === "string") {
+              currentFunction.variables.push({
+                name: varName,
+                wasmLocal: extractWasmLocal(location2 ?? null),
+                typeName: null
+              });
+            }
+          }
+        }
+        const typeTagMap = {
+          [DW_TAG_base_type]: "base",
+          [DW_TAG_pointer_type]: "pointer",
+          [DW_TAG_structure_type]: "struct",
+          [DW_TAG_typedef]: "typedef",
+          [DW_TAG_const_type]: "const"
+        };
+        const typeTag = typeTagMap[abbrev.tag];
+        if (typeTag) {
+          const typeName = attrs.get(DW_AT_name);
+          const byteSize = attrs.get(DW_AT_byte_size);
+          const typeRef = attrs.get(DW_AT_type);
+          typeMap.set(dieOffset, {
+            tag: typeTag,
+            name: typeof typeName === "string" ? typeName : null,
+            byteSize: typeof byteSize === "number" ? byteSize : 0,
+            referencedType: typeof typeRef === "number" ? typeRef : null
+          });
+        }
+        if (abbrev.hasChildren) {
+          depth++;
+        }
+      }
+      compilationUnits.push({
+        name: unitName,
+        producer: unitProducer,
+        language: unitLanguage,
+        compDir: unitCompDir,
+        functions: unitFunctions
+      });
+      reader.offset = unitEnd;
+    }
+    return { units: compilationUnits, types: typeMap };
+  }
+  function parseLocationBlock(data, offset, length) {
+    if (length < 2) {
+      return null;
+    }
+    const opCode = data[offset];
+    if (opCode === 237) {
+      const locationType = data[offset + 1];
+      let index = 0;
+      let shift = 0;
+      let position = offset + 2;
+      while (position < offset + length) {
+        const byte = data[position++];
+        index |= (byte & 127) << shift;
+        shift += 7;
+        if ((byte & 128) === 0) {
+          break;
+        }
+      }
+      if (locationType === 0) {
+        return -(1 + index);
+      }
+      if (locationType === 1) {
+        return -(1e4 + index);
+      }
+    }
+    return null;
+  }
+  function extractWasmLocal(locationValue) {
+    if (typeof locationValue === "number" && locationValue < 0 && locationValue > -1e4) {
+      return -(locationValue + 1);
+    }
+    return null;
+  }
+  function readNullTerminatedStringAt(data, offset) {
+    let end = offset;
+    while (end < data.length && data[end] !== 0) {
+      end++;
+    }
+    return new TextDecoder().decode(data.slice(offset, end));
+  }
+  var DwarfReader = class {
+    constructor(data) {
+      this.data = data;
+      this.offset = 0;
+    }
+    readUint8() {
+      return this.data[this.offset++];
+    }
+    readInt8() {
+      const value = this.data[this.offset++];
+      return value > 127 ? value - 256 : value;
+    }
+    readUint16() {
+      const value = this.data[this.offset] | this.data[this.offset + 1] << 8;
+      this.offset += 2;
+      return value;
+    }
+    readUint32() {
+      const value = this.data[this.offset] | this.data[this.offset + 1] << 8 | this.data[this.offset + 2] << 16 | this.data[this.offset + 3] << 24;
+      this.offset += 4;
+      return value >>> 0;
+    }
+    readULEB128() {
+      let result = 0;
+      let shift = 0;
+      let byte;
+      do {
+        if (this.offset >= this.data.length) {
+          break;
+        }
+        byte = this.data[this.offset++];
+        result |= (byte & 127) << shift;
+        shift += 7;
+      } while (byte & 128);
+      return result >>> 0;
+    }
+    readSLEB128() {
+      let result = 0;
+      let shift = 0;
+      let byte;
+      do {
+        byte = this.data[this.offset++];
+        result |= (byte & 127) << shift;
+        shift += 7;
+      } while (byte & 128);
+      if (shift < 32 && byte & 64) {
+        result |= -(1 << shift);
+      }
+      return result;
+    }
+    readNullTerminatedString() {
+      const start = this.offset;
+      while (this.offset < this.data.length && this.data[this.offset] !== 0) {
+        this.offset++;
+      }
+      const str = new TextDecoder().decode(this.data.slice(start, this.offset));
+      if (this.offset < this.data.length) {
+        this.offset++;
+      }
+      return str;
+    }
+    readBytes(length) {
+      const bytes = this.data.slice(this.offset, this.offset + length);
+      this.offset += length;
+      return bytes;
+    }
+  };
+
+  // src/decompiler/Demangler.ts
+  function demangleName(mangledName) {
+    if (mangledName.startsWith("_R")) {
+      try {
+        return demangleRustV0(mangledName);
+      } catch {
+        return mangledName;
+      }
+    }
+    if (mangledName.startsWith("_Z")) {
+      try {
+        const result = demangleItanium(mangledName, 2);
+        return stripRustHash(decodeRustEscapes(result));
+      } catch {
+        return mangledName;
+      }
+    }
+    if (mangledName.includes("$LT$") || mangledName.includes("$GT$") || mangledName.includes("$u20$")) {
+      return decodeRustEscapes(mangledName);
+    }
+    return mangledName;
+  }
+  function demangleItanium(input, position) {
+    const result = parseName(input, position);
+    return result.name;
+  }
+  function parseName(input, position) {
+    if (position >= input.length) {
+      return { name: input, position };
+    }
+    if (input[position] === "N") {
+      position++;
+      const parts = [];
+      while (position < input.length && input[position] !== "E") {
+        const segment = parseUnqualifiedName(input, position);
+        parts.push(segment.name);
+        position = segment.position;
+      }
+      if (position < input.length) {
+        position++;
+      }
+      return { name: parts.join("::"), position };
+    }
+    return parseUnqualifiedName(input, position);
+  }
+  function parseUnqualifiedName(input, position) {
+    if (position >= input.length) {
+      return { name: "", position };
+    }
+    if (input[position] === "C") {
+      position++;
+      if (position < input.length) {
+        position++;
+      }
+      return { name: "{ctor}", position };
+    }
+    if (input[position] === "D") {
+      position++;
+      if (position < input.length) {
+        position++;
+      }
+      return { name: "{dtor}", position };
+    }
+    if (input[position] >= "0" && input[position] <= "9") {
+      let length = 0;
+      while (position < input.length && input[position] >= "0" && input[position] <= "9") {
+        length = length * 10 + (input.charCodeAt(position) - 48);
+        position++;
+      }
+      const name = input.slice(position, position + length);
+      return { name, position: position + length };
+    }
+    const operatorMap = {
+      "nw": "operator new",
+      "na": "operator new[]",
+      "dl": "operator delete",
+      "da": "operator delete[]",
+      "ps": "operator+",
+      "ng": "operator-",
+      "ad": "operator&",
+      "de": "operator*",
+      "co": "operator~",
+      "pl": "operator+",
+      "mi": "operator-",
+      "ml": "operator*",
+      "dv": "operator/",
+      "rm": "operator%",
+      "an": "operator&",
+      "or": "operator|",
+      "eo": "operator^",
+      "aS": "operator=",
+      "pL": "operator+=",
+      "mI": "operator-=",
+      "mL": "operator*=",
+      "dV": "operator/=",
+      "eq": "operator==",
+      "ne": "operator!=",
+      "lt": "operator<",
+      "gt": "operator>",
+      "le": "operator<=",
+      "ge": "operator>=",
+      "ix": "operator[]",
+      "cl": "operator()",
+      "ls": "operator<<",
+      "rs": "operator>>"
+    };
+    if (position + 1 < input.length) {
+      const opCode = input.slice(position, position + 2);
+      const opName = operatorMap[opCode];
+      if (opName) {
+        return { name: opName, position: position + 2 };
+      }
+    }
+    return { name: input.slice(position), position: input.length };
+  }
+  function demangleRustV0(input) {
+    let position = 2;
+    const parts = [];
+    while (position < input.length) {
+      const char = input[position];
+      if (char === "N") {
+        position++;
+        if (position < input.length) {
+          position++;
+        }
+        continue;
+      }
+      if (char === "C") {
+        position++;
+        const ident = parseRustV0Identifier(input, position);
+        parts.push(ident.name);
+        position = ident.position;
+        continue;
+      }
+      if (char === "M" || char === "X" || char === "Y") {
+        position++;
+        continue;
+      }
+      if (char >= "0" && char <= "9") {
+        const ident = parseRustV0Identifier(input, position);
+        parts.push(ident.name);
+        position = ident.position;
+        continue;
+      }
+      if (char === "I" || char === "s") {
+        position++;
+        continue;
+      }
+      if (char === "E") {
+        position++;
+        continue;
+      }
+      if (char === "h") {
+        break;
+      }
+      position++;
+    }
+    if (parts.length === 0) {
+      return input;
+    }
+    return parts.join("::");
+  }
+  function parseRustV0Identifier(input, position) {
+    if (position < input.length && input[position] === "s") {
+      position++;
+      while (position < input.length && input[position] !== "_") {
+        position++;
+      }
+      if (position < input.length) {
+        position++;
+      }
+    }
+    let length = 0;
+    while (position < input.length && input[position] >= "0" && input[position] <= "9") {
+      length = length * 10 + (input.charCodeAt(position) - 48);
+      position++;
+    }
+    if (position < input.length && input[position] === "_") {
+      position++;
+    }
+    const name = input.slice(position, position + length);
+    return { name: decodeRustEscapes(name), position: position + length };
+  }
+  var RUST_ESCAPES = {
+    "$LT$": "<",
+    "$GT$": ">",
+    "$u20$": " ",
+    "$u27$": "'",
+    "$u5b$": "[",
+    "$u5d$": "]",
+    "$u7b$": "{",
+    "$u7d$": "}",
+    "$u7e$": "~",
+    "$u3b$": ";",
+    "$u2b$": "+",
+    "$u22$": '"',
+    "$RF$": "&",
+    "$BP$": "*",
+    "$C$": ",",
+    "$SP$": "@"
+  };
+  function stripRustHash(input) {
+    return input.replace(/::h[0-9a-fA-F]+E?$/, "");
+  }
+  function decodeRustEscapes(input) {
+    let result = input;
+    for (const [escaped, decoded] of Object.entries(RUST_ESCAPES)) {
+      result = result.split(escaped).join(decoded);
+    }
+    result = result.replace(/\.\./g, "::");
+    return result;
+  }
+
+  // src/decompiler/ControlFlowGraph.ts
+  function addEdge(from, to) {
+    if (!from.successors.includes(to)) {
+      from.successors.push(to);
+    }
+    if (!to.predecessors.includes(from)) {
+      to.predecessors.push(from);
+    }
+  }
+  function buildControlFlowGraph(instructions) {
+    let nextBlockId = 0;
+    function createBlock() {
+      return {
+        id: nextBlockId++,
+        instructions: [],
+        successors: [],
+        predecessors: [],
+        isEntry: false,
+        isExit: false,
+        wasmBlockDepth: 0,
+        brTableTargets: null,
+        brTableDefault: null
+      };
+    }
+    const entry = createBlock();
+    entry.isEntry = true;
+    const exit = createBlock();
+    exit.isExit = true;
+    const blockEndTargets = /* @__PURE__ */ new Map();
+    const allBlocks = [entry, exit];
+    let currentBlock = entry;
+    const scopeStack = [];
+    function startNewBlock() {
+      const block = createBlock();
+      block.wasmBlockDepth = scopeStack.length;
+      allBlocks.push(block);
+      return block;
+    }
+    function resolveBreakTarget(depth) {
+      const targetIndex = scopeStack.length - 1 - depth;
+      if (targetIndex < 0 || targetIndex >= scopeStack.length) {
+        return null;
+      }
+      const scope = scopeStack[targetIndex];
+      if (scope.kind === "loop") {
+        return scope.headerBlock;
+      }
+      if (!scope.endTarget) {
+        scope.endTarget = startNewBlock();
+      }
+      return scope.endTarget;
+    }
+    for (let index = 0; index < instructions.length; index++) {
+      const instruction = instructions[index];
+      const mnemonic = instruction.opCode.mnemonic;
+      if (mnemonic === "try") {
+        currentBlock.instructions.push(instruction);
+        const tryBody = startNewBlock();
+        const catchBody = startNewBlock();
+        addEdge(currentBlock, tryBody);
+        addEdge(currentBlock, catchBody);
+        const scope = {
+          kind: "try",
+          headerBlock: currentBlock,
+          endTarget: null,
+          catchBlock: catchBody
+        };
+        scopeStack.push(scope);
+        currentBlock = tryBody;
+        continue;
+      }
+      if (mnemonic === "catch" || mnemonic === "catch_all") {
+        const scope = scopeStack[scopeStack.length - 1];
+        if (scope && scope.kind === "try" && scope.catchBlock) {
+          if (!scope.endTarget) {
+            scope.endTarget = startNewBlock();
+          }
+          addEdge(currentBlock, scope.endTarget);
+          currentBlock = scope.catchBlock;
+          scope.catchBlock = null;
+        }
+        continue;
+      }
+      if (mnemonic === "throw" || mnemonic === "rethrow") {
+        currentBlock.instructions.push(instruction);
+        currentBlock = startNewBlock();
+        continue;
+      }
+      if (mnemonic === "delegate") {
+        if (scopeStack.length > 0) {
+          const scope = scopeStack.pop();
+          if (!scope.endTarget) {
+            scope.endTarget = startNewBlock();
+          }
+          blockEndTargets.set(scope.endTarget.id, scopeStack.length);
+          if (currentBlock !== scope.endTarget) {
+            addEdge(currentBlock, scope.endTarget);
+          }
+          currentBlock = scope.endTarget;
+        }
+        continue;
+      }
+      if (mnemonic === "block" || mnemonic === "loop") {
+        currentBlock.instructions.push(instruction);
+        const continueBlock = startNewBlock();
+        addEdge(currentBlock, continueBlock);
+        const scope = {
+          kind: mnemonic,
+          headerBlock: continueBlock,
+          endTarget: null,
+          catchBlock: null
+        };
+        scopeStack.push(scope);
+        currentBlock = continueBlock;
+        continue;
+      }
+      if (mnemonic === "if") {
+        currentBlock.instructions.push(instruction);
+        const thenBlock = startNewBlock();
+        const elseBlock = startNewBlock();
+        addEdge(currentBlock, thenBlock);
+        addEdge(currentBlock, elseBlock);
+        const scope = {
+          kind: "if",
+          headerBlock: currentBlock,
+          endTarget: null,
+          catchBlock: null
+        };
+        scopeStack.push(scope);
+        currentBlock = thenBlock;
+        continue;
+      }
+      if (mnemonic === "else") {
+        const scope = scopeStack[scopeStack.length - 1];
+        if (scope && scope.kind === "if") {
+          if (!scope.endTarget) {
+            scope.endTarget = startNewBlock();
+          }
+          addEdge(currentBlock, scope.endTarget);
+          const elseBlock = scope.headerBlock.successors[1];
+          currentBlock = elseBlock;
+        }
+        continue;
+      }
+      if (mnemonic === "end") {
+        if (scopeStack.length === 0) {
+          addEdge(currentBlock, exit);
+          continue;
+        }
+        const scope = scopeStack.pop();
+        if (!scope.endTarget) {
+          scope.endTarget = startNewBlock();
+        }
+        blockEndTargets.set(scope.endTarget.id, scopeStack.length);
+        if (currentBlock !== scope.endTarget) {
+          addEdge(currentBlock, scope.endTarget);
+        }
+        if (scope.kind === "if") {
+          const elseBlock = scope.headerBlock.successors[1];
+          if (elseBlock && elseBlock.successors.length === 0 && elseBlock.instructions.length === 0) {
+            addEdge(elseBlock, scope.endTarget);
+          }
+        }
+        if (scope.kind === "try" && scope.catchBlock) {
+          addEdge(scope.catchBlock, scope.endTarget);
+        }
+        currentBlock = scope.endTarget;
+        continue;
+      }
+      if (mnemonic === "br") {
+        currentBlock.instructions.push(instruction);
+        const depth = instruction.immediates.values[0];
+        const target = resolveBreakTarget(depth);
+        if (target) {
+          addEdge(currentBlock, target);
+        }
+        currentBlock = startNewBlock();
+        continue;
+      }
+      if (mnemonic === "br_if") {
+        currentBlock.instructions.push(instruction);
+        const depth = instruction.immediates.values[0];
+        const target = resolveBreakTarget(depth);
+        const fallthrough = startNewBlock();
+        if (target) {
+          addEdge(currentBlock, target);
+        }
+        addEdge(currentBlock, fallthrough);
+        currentBlock = fallthrough;
+        continue;
+      }
+      if (mnemonic === "br_table") {
+        currentBlock.instructions.push(instruction);
+        const targets = instruction.immediates.values[0];
+        const defaultDepth = instruction.immediates.values[1];
+        const resolvedTargets = [];
+        const visitedTargets = /* @__PURE__ */ new Set();
+        for (const depth of targets) {
+          const target = resolveBreakTarget(depth);
+          if (target) {
+            resolvedTargets.push(target);
+            if (!visitedTargets.has(target)) {
+              addEdge(currentBlock, target);
+              visitedTargets.add(target);
+            }
+          }
+        }
+        const defaultTarget = resolveBreakTarget(defaultDepth);
+        if (defaultTarget && !visitedTargets.has(defaultTarget)) {
+          addEdge(currentBlock, defaultTarget);
+        }
+        currentBlock.brTableTargets = resolvedTargets;
+        currentBlock.brTableDefault = defaultTarget;
+        currentBlock = startNewBlock();
+        continue;
+      }
+      if (mnemonic === "return") {
+        currentBlock.instructions.push(instruction);
+        addEdge(currentBlock, exit);
+        currentBlock = startNewBlock();
+        continue;
+      }
+      if (mnemonic === "unreachable") {
+        currentBlock.instructions.push(instruction);
+        currentBlock = startNewBlock();
+        continue;
+      }
+      currentBlock.instructions.push(instruction);
+    }
+    if (currentBlock.successors.length === 0 && currentBlock !== exit) {
+      addEdge(currentBlock, exit);
+    }
+    const reachable = /* @__PURE__ */ new Set();
+    const worklist = [entry];
+    while (worklist.length > 0) {
+      const block = worklist.pop();
+      if (reachable.has(block)) {
+        continue;
+      }
+      reachable.add(block);
+      for (const successor of block.successors) {
+        worklist.push(successor);
+      }
+    }
+    const liveBlocks = allBlocks.filter((block) => reachable.has(block));
+    const oldIdToNewId = /* @__PURE__ */ new Map();
+    for (let blockIndex = 0; blockIndex < liveBlocks.length; blockIndex++) {
+      oldIdToNewId.set(liveBlocks[blockIndex].id, blockIndex);
+      liveBlocks[blockIndex].id = blockIndex;
+    }
+    const renumberedBlockEndTargets = /* @__PURE__ */ new Map();
+    for (const [oldBlockId, scopeDepth] of blockEndTargets) {
+      const newBlockId = oldIdToNewId.get(oldBlockId);
+      if (newBlockId !== void 0) {
+        renumberedBlockEndTargets.set(newBlockId, scopeDepth);
+      }
+    }
+    return {
+      entry: liveBlocks[0],
+      exit,
+      blocks: liveBlocks,
+      blockEndTargets: renumberedBlockEndTargets
+    };
+  }
+
+  // src/decompiler/SsaBuilder.ts
+  var COMPARE_INVERT = {
+    "==": "!=",
+    "!=": "==",
+    "<": ">=",
+    ">": "<=",
+    "<=": ">",
+    ">=": "<",
+    "<u": ">=u",
+    ">u": "<=u",
+    "<=u": ">u",
+    ">=u": "<u"
+  };
+  var BINARY_OPS = /* @__PURE__ */ new Map([
+    [OpCodes_default.i32_add, "+"],
+    [OpCodes_default.i64_add, "+"],
+    [OpCodes_default.f32_add, "+"],
+    [OpCodes_default.f64_add, "+"],
+    [OpCodes_default.i32_sub, "-"],
+    [OpCodes_default.i64_sub, "-"],
+    [OpCodes_default.f32_sub, "-"],
+    [OpCodes_default.f64_sub, "-"],
+    [OpCodes_default.i32_mul, "*"],
+    [OpCodes_default.i64_mul, "*"],
+    [OpCodes_default.f32_mul, "*"],
+    [OpCodes_default.f64_mul, "*"],
+    [OpCodes_default.i32_div_s, "/"],
+    [OpCodes_default.i64_div_s, "/"],
+    [OpCodes_default.f32_div, "/"],
+    [OpCodes_default.f64_div, "/"],
+    [OpCodes_default.i32_div_u, "/u"],
+    [OpCodes_default.i64_div_u, "/u"],
+    [OpCodes_default.i32_rem_s, "%"],
+    [OpCodes_default.i64_rem_s, "%"],
+    [OpCodes_default.i32_rem_u, "%u"],
+    [OpCodes_default.i64_rem_u, "%u"],
+    [OpCodes_default.i32_and, "&"],
+    [OpCodes_default.i64_and, "&"],
+    [OpCodes_default.i32_or, "|"],
+    [OpCodes_default.i64_or, "|"],
+    [OpCodes_default.i32_xor, "^"],
+    [OpCodes_default.i64_xor, "^"],
+    [OpCodes_default.i32_shl, "<<"],
+    [OpCodes_default.i64_shl, "<<"],
+    [OpCodes_default.i32_shr_s, ">>"],
+    [OpCodes_default.i64_shr_s, ">>"],
+    [OpCodes_default.i32_shr_u, ">>>"],
+    [OpCodes_default.i64_shr_u, ">>>"],
+    [OpCodes_default.i32_rotl, "rotl"],
+    [OpCodes_default.i64_rotl, "rotl"],
+    [OpCodes_default.i32_rotr, "rotr"],
+    [OpCodes_default.i64_rotr, "rotr"],
+    [OpCodes_default.f32_min, "min"],
+    [OpCodes_default.f64_min, "min"],
+    [OpCodes_default.f32_max, "max"],
+    [OpCodes_default.f64_max, "max"],
+    [OpCodes_default.f32_copysign, "copysign"],
+    [OpCodes_default.f64_copysign, "copysign"]
+  ]);
+  var COMPARE_OPS = /* @__PURE__ */ new Map([
+    [OpCodes_default.i32_eq, "=="],
+    [OpCodes_default.i64_eq, "=="],
+    [OpCodes_default.f32_eq, "=="],
+    [OpCodes_default.f64_eq, "=="],
+    [OpCodes_default.i32_ne, "!="],
+    [OpCodes_default.i64_ne, "!="],
+    [OpCodes_default.f32_ne, "!="],
+    [OpCodes_default.f64_ne, "!="],
+    [OpCodes_default.i32_lt_s, "<"],
+    [OpCodes_default.i64_lt_s, "<"],
+    [OpCodes_default.f32_lt, "<"],
+    [OpCodes_default.f64_lt, "<"],
+    [OpCodes_default.i32_lt_u, "<u"],
+    [OpCodes_default.i64_lt_u, "<u"],
+    [OpCodes_default.i32_gt_s, ">"],
+    [OpCodes_default.i64_gt_s, ">"],
+    [OpCodes_default.f32_gt, ">"],
+    [OpCodes_default.f64_gt, ">"],
+    [OpCodes_default.i32_gt_u, ">u"],
+    [OpCodes_default.i64_gt_u, ">u"],
+    [OpCodes_default.i32_le_s, "<="],
+    [OpCodes_default.i64_le_s, "<="],
+    [OpCodes_default.f32_le, "<="],
+    [OpCodes_default.f64_le, "<="],
+    [OpCodes_default.i32_le_u, "<=u"],
+    [OpCodes_default.i64_le_u, "<=u"],
+    [OpCodes_default.i32_ge_s, ">="],
+    [OpCodes_default.i64_ge_s, ">="],
+    [OpCodes_default.f32_ge, ">="],
+    [OpCodes_default.f64_ge, ">="],
+    [OpCodes_default.i32_ge_u, ">=u"],
+    [OpCodes_default.i64_ge_u, ">=u"]
+  ]);
+  var UNARY_OPS = /* @__PURE__ */ new Map([
+    [OpCodes_default.i32_clz, "clz"],
+    [OpCodes_default.i64_clz, "clz"],
+    [OpCodes_default.i32_ctz, "ctz"],
+    [OpCodes_default.i64_ctz, "ctz"],
+    [OpCodes_default.i32_popcnt, "popcnt"],
+    [OpCodes_default.i64_popcnt, "popcnt"],
+    [OpCodes_default.f32_abs, "abs"],
+    [OpCodes_default.f64_abs, "abs"],
+    [OpCodes_default.f32_neg, "neg"],
+    [OpCodes_default.f64_neg, "neg"],
+    [OpCodes_default.f32_ceil, "ceil"],
+    [OpCodes_default.f64_ceil, "ceil"],
+    [OpCodes_default.f32_floor, "floor"],
+    [OpCodes_default.f64_floor, "floor"],
+    [OpCodes_default.f32_trunc, "trunc"],
+    [OpCodes_default.f64_trunc, "trunc"],
+    [OpCodes_default.f32_nearest, "nearest"],
+    [OpCodes_default.f64_nearest, "nearest"],
+    [OpCodes_default.f32_sqrt, "sqrt"],
+    [OpCodes_default.f64_sqrt, "sqrt"],
+    [OpCodes_default.i32_extend8_s, "extend8_s"],
+    [OpCodes_default.i32_extend16_s, "extend16_s"],
+    [OpCodes_default.i64_extend8_s, "extend8_s"],
+    [OpCodes_default.i64_extend16_s, "extend16_s"],
+    [OpCodes_default.i64_extend32_s, "extend32_s"]
+  ]);
+  var CONVERSION_OPS = /* @__PURE__ */ new Map([
+    [OpCodes_default.i32_wrap_i64, "(int)"],
+    [OpCodes_default.i64_extend_i32_s, "(long)"],
+    [OpCodes_default.i64_extend_i32_u, "(unsigned long)"],
+    [OpCodes_default.f32_convert_i32_s, "(float)"],
+    [OpCodes_default.f32_convert_i32_u, "(float)(unsigned)"],
+    [OpCodes_default.f32_convert_i64_s, "(float)"],
+    [OpCodes_default.f32_convert_i64_u, "(float)(unsigned long)"],
+    [OpCodes_default.f64_convert_i32_s, "(double)"],
+    [OpCodes_default.f64_convert_i32_u, "(double)(unsigned)"],
+    [OpCodes_default.f64_convert_i64_s, "(double)"],
+    [OpCodes_default.f64_convert_i64_u, "(double)(unsigned long)"],
+    [OpCodes_default.i32_trunc_f32_s, "(int)"],
+    [OpCodes_default.i32_trunc_f32_u, "(unsigned)"],
+    [OpCodes_default.i32_trunc_f64_s, "(int)"],
+    [OpCodes_default.i32_trunc_f64_u, "(unsigned)"],
+    [OpCodes_default.i64_trunc_f32_s, "(long)"],
+    [OpCodes_default.i64_trunc_f64_s, "(long)"],
+    [OpCodes_default.f32_demote_f64, "(float)"],
+    [OpCodes_default.f64_promote_f32, "(double)"],
+    [OpCodes_default.i32_reinterpret_f32, "reinterpret_i32"],
+    [OpCodes_default.i64_reinterpret_f64, "reinterpret_i64"],
+    [OpCodes_default.f32_reinterpret_i32, "reinterpret_f32"],
+    [OpCodes_default.f64_reinterpret_i64, "reinterpret_f64"],
+    [OpCodes_default.i32_trunc_sat_f32_s, "(int)"],
+    [OpCodes_default.i32_trunc_sat_f32_u, "(unsigned)"],
+    [OpCodes_default.i32_trunc_sat_f64_s, "(int)"],
+    [OpCodes_default.i32_trunc_sat_f64_u, "(unsigned)"],
+    [OpCodes_default.i64_trunc_sat_f32_s, "(long)"],
+    [OpCodes_default.i64_trunc_sat_f32_u, "(unsigned long)"],
+    [OpCodes_default.i64_trunc_sat_f64_s, "(long)"],
+    [OpCodes_default.i64_trunc_sat_f64_u, "(unsigned long)"]
+  ]);
+  function wasmTypeStr(valueType) {
+    if (typeof valueType === "object" && "name" in valueType) {
+      return valueType.name;
+    }
+    const names = {
+      [-1]: "i32",
+      [-2]: "i64",
+      [-3]: "f32",
+      [-4]: "f64",
+      [-5]: "v128",
+      127: "i32",
+      126: "i64",
+      125: "f32",
+      124: "f64",
+      123: "v128"
+    };
+    return names[valueType] || "i32";
+  }
+  function flattenTypes(moduleInfo) {
+    const flat = [];
+    for (const typeEntry of moduleInfo.types) {
+      if (typeEntry.kind === "rec") {
+        for (const inner of typeEntry.types) {
+          flat.push(inner);
+        }
+      } else {
+        flat.push(typeEntry);
+      }
+    }
+    return flat;
+  }
+  function resultTypeFromOpCode(opCode) {
+    return opCode.mnemonic.split(".")[0];
+  }
+  function buildSsa(cfg, moduleInfo, localFuncIndex) {
+    const importedFunctions = moduleInfo.imports.filter((imp) => imp.kind === 0);
+    const importedGlobals = moduleInfo.imports.filter((imp) => imp.kind === 3);
+    const importedFuncCount = importedFunctions.length;
+    const func = moduleInfo.functions[localFuncIndex];
+    const flatTypes = flattenTypes(moduleInfo);
+    const funcTypeRaw = flatTypes[func.typeIndex];
+    if (!funcTypeRaw || funcTypeRaw.kind !== "func") {
+      return { blocks: [], variables: [], paramCount: 0, localCount: 0, entryBlockId: 0, exitBlockId: 0 };
+    }
+    const funcType = funcTypeRaw;
+    const paramCount = funcType.parameterTypes.length;
+    let totalLocalCount = paramCount;
+    for (const localGroup of func.locals) {
+      totalLocalCount += localGroup.count;
+    }
+    let variableCounter = 0;
+    const allVariables = [];
+    function newVariable(name, type, blockId) {
+      const variable = { id: variableCounter++, name, type, definedInBlock: blockId };
+      allVariables.push(variable);
+      return variable;
+    }
+    function getLocalType(localIndex) {
+      if (localIndex < paramCount) {
+        return wasmTypeStr(funcType.parameterTypes[localIndex]);
+      }
+      let offset = paramCount;
+      for (const localGroup of func.locals) {
+        if (localIndex < offset + localGroup.count) {
+          return wasmTypeStr(localGroup.type);
+        }
+        offset += localGroup.count;
+      }
+      return "i32";
+    }
+    function getGlobalType(globalIndex) {
+      const importedGlobalCount = importedGlobals.length;
+      if (globalIndex >= importedGlobalCount && globalIndex - importedGlobalCount < moduleInfo.globals.length) {
+        return wasmTypeStr(moduleInfo.globals[globalIndex - importedGlobalCount].valueType);
+      }
+      if (globalIndex < importedGlobalCount) {
+        const globalImport = importedGlobals[globalIndex];
+        if (globalImport?.globalType) {
+          return wasmTypeStr(globalImport.globalType.valueType);
+        }
+      }
+      return "i32";
+    }
+    function getCallTargetType(targetIndex) {
+      if (targetIndex < importedFuncCount) {
+        const importEntry = importedFunctions[targetIndex];
+        if (importEntry?.typeIndex !== void 0 && importEntry.typeIndex < flatTypes.length) {
+          const typeEntry = flatTypes[importEntry.typeIndex];
+          if (typeEntry.kind === "func") {
+            return typeEntry;
+          }
+        }
+      } else {
+        const localIdx = targetIndex - importedFuncCount;
+        if (localIdx < moduleInfo.functions.length) {
+          const targetFunc = moduleInfo.functions[localIdx];
+          if (targetFunc.typeIndex < flatTypes.length) {
+            const typeEntry = flatTypes[targetFunc.typeIndex];
+            if (typeEntry.kind === "func") {
+              return typeEntry;
+            }
+          }
+        }
+      }
+      return null;
+    }
+    const ssaBlocks = cfg.blocks.map((cfgBlock) => ({
+      id: cfgBlock.id,
+      instructions: [],
+      successors: cfgBlock.successors.map((successor) => successor.id),
+      predecessors: cfgBlock.predecessors.map((predecessor) => predecessor.id)
+    }));
+    const localVersions = /* @__PURE__ */ new Map();
+    const stackAtExit = /* @__PURE__ */ new Map();
+    for (const block of cfg.blocks) {
+      localVersions.set(block.id, /* @__PURE__ */ new Map());
+    }
+    const entryLocals = localVersions.get(cfg.entry.id);
+    for (let localIndex = 0; localIndex < paramCount; localIndex++) {
+      entryLocals.set(localIndex, newVariable(`param${localIndex}`, getLocalType(localIndex), cfg.entry.id));
+    }
+    for (let localIndex = paramCount; localIndex < totalLocalCount; localIndex++) {
+      entryLocals.set(localIndex, newVariable(`local${localIndex}`, getLocalType(localIndex), cfg.entry.id));
+    }
+    const blockOrder = computeReversePostOrder(cfg);
+    const processedBlocks = /* @__PURE__ */ new Set();
+    const incompletePhis = [];
+    for (const cfgBlock of blockOrder) {
+      const ssaBlock = ssaBlocks[cfgBlock.id];
+      const stack = [];
+      const hasStackBackEdge = cfgBlock.predecessors.some((pred) => !processedBlocks.has(pred.id));
+      if (cfgBlock.predecessors.length === 1 && !hasStackBackEdge) {
+        const predStack = stackAtExit.get(cfgBlock.predecessors[0].id);
+        if (predStack) {
+          stack.push(...predStack);
+        }
+      } else if (cfgBlock.predecessors.length > 1) {
+        const processedPreds = cfgBlock.predecessors.filter((pred) => processedBlocks.has(pred.id));
+        const predStacks = processedPreds.map((pred) => stackAtExit.get(pred.id) || []);
+        const maxDepth = Math.max(0, ...predStacks.map((s) => s.length));
+        for (let slotIndex = 0; slotIndex < maxDepth; slotIndex++) {
+          const values = predStacks.map((s) => slotIndex < s.length ? s[slotIndex] : null).filter((v) => v !== null);
+          if (values.length === 0) {
+            continue;
+          }
+          if (hasStackBackEdge) {
+            const phiVar = newVariable(`stack_${slotIndex}_b${cfgBlock.id}`, "i32", cfgBlock.id);
+            const phiInstr = {
+              kind: "phi",
+              result: phiVar,
+              inputs: cfgBlock.predecessors.map((pred, predIdx) => {
+                const predStack = stackAtExit.get(pred.id) || [];
+                return { blockId: pred.id, value: predStack[slotIndex] || values[0] };
+              })
+            };
+            ssaBlock.instructions.push(phiInstr);
+            incompletePhis.push({ phi: phiInstr, blockId: cfgBlock.id, localIndex: -(slotIndex + 1) });
+            stack.push(phiVar);
+          } else {
+            const allSameVar = values.every((v) => "id" in v && !("kind" in v) && v.id === values[0].id);
+            if (allSameVar) {
+              stack.push(values[0]);
+            } else {
+              const phiVar = newVariable(`stack_${slotIndex}_b${cfgBlock.id}`, "i32", cfgBlock.id);
+              ssaBlock.instructions.push({ kind: "phi", result: phiVar, inputs: cfgBlock.predecessors.map((pred, predIdx) => ({ blockId: pred.id, value: (stackAtExit.get(pred.id) || [])[slotIndex] || values[0] })) });
+              stack.push(phiVar);
+            }
+          }
+        }
+      }
+      const hasBackEdge = cfgBlock.predecessors.some((pred) => !processedBlocks.has(pred.id));
+      const currentLocals = new Map(localVersions.get(cfgBlock.id) || /* @__PURE__ */ new Map());
+      if (cfgBlock.predecessors.length === 1 && !hasBackEdge) {
+        const predLocals = localVersions.get(cfgBlock.predecessors[0].id);
+        if (predLocals) {
+          for (const [localIndex, variable] of predLocals) {
+            if (!currentLocals.has(localIndex)) {
+              currentLocals.set(localIndex, variable);
+            }
+          }
+        }
+      } else if (cfgBlock.predecessors.length > 1) {
+        const allLocalIndices = /* @__PURE__ */ new Set();
+        for (const predecessor of cfgBlock.predecessors) {
+          const predLocals = localVersions.get(predecessor.id);
+          if (predLocals) {
+            for (const localIndex of predLocals.keys()) {
+              allLocalIndices.add(localIndex);
+            }
+          }
+        }
+        if (hasBackEdge) {
+          for (const localIndex of allLocalIndices) {
+            const knownVersions = cfgBlock.predecessors.filter((pred) => processedBlocks.has(pred.id)).map((pred) => (localVersions.get(pred.id) || /* @__PURE__ */ new Map()).get(localIndex)).filter((version) => version !== void 0);
+            if (knownVersions.length === 0) {
+              continue;
+            }
+            const phiVar = newVariable(`phi_${localIndex}_b${cfgBlock.id}`, knownVersions[0].type, cfgBlock.id);
+            const phiInstr = {
+              kind: "phi",
+              result: phiVar,
+              inputs: cfgBlock.predecessors.map((pred) => {
+                const predLocal = (localVersions.get(pred.id) || /* @__PURE__ */ new Map()).get(localIndex);
+                return { blockId: pred.id, value: predLocal || knownVersions[0] };
+              })
+            };
+            ssaBlock.instructions.push(phiInstr);
+            currentLocals.set(localIndex, phiVar);
+            incompletePhis.push({ phi: phiInstr, blockId: cfgBlock.id, localIndex });
+          }
+        } else {
+          for (const localIndex of allLocalIndices) {
+            const versions = cfgBlock.predecessors.map((pred) => (localVersions.get(pred.id) || /* @__PURE__ */ new Map()).get(localIndex)).filter((version) => version !== void 0);
+            const allSame = versions.length > 0 && versions.every((version) => version.id === versions[0].id);
+            if (allSame && versions.length > 0) {
+              currentLocals.set(localIndex, versions[0]);
+            } else if (versions.length > 0) {
+              const phiVar = newVariable(`phi_${localIndex}_b${cfgBlock.id}`, versions[0].type, cfgBlock.id);
+              ssaBlock.instructions.push({ kind: "phi", result: phiVar, inputs: cfgBlock.predecessors.map((pred) => ({ blockId: pred.id, value: (localVersions.get(pred.id) || /* @__PURE__ */ new Map()).get(localIndex) || versions[0] })) });
+              currentLocals.set(localIndex, phiVar);
+            }
+          }
+        }
+      }
+      for (const instruction of cfgBlock.instructions) {
+        const opCode = instruction.opCode;
+        if (opCode === OpCodes_default.nop || opCode === OpCodes_default.block || opCode === OpCodes_default.loop || opCode === OpCodes_default.end || opCode === OpCodes_default.else || opCode === OpCodes_default.try || opCode === OpCodes_default.catch || opCode === OpCodes_default.catch_all || opCode === OpCodes_default.delegate) {
+          continue;
+        }
+        if (opCode === OpCodes_default.if) {
+          const condition = stack.pop();
+          if (condition && cfgBlock.successors.length >= 2) {
+            ssaBlock.instructions.push({ kind: "branch_if", condition, trueTarget: cfgBlock.successors[0].id, falseTarget: cfgBlock.successors[1].id });
+          }
+          continue;
+        }
+        if (opCode === OpCodes_default.get_local) {
+          const localIndex = instruction.immediates.values[0];
+          const variable = currentLocals.get(localIndex);
+          stack.push(variable || newVariable(`local${localIndex}`, getLocalType(localIndex), cfgBlock.id));
+          continue;
+        }
+        if (opCode === OpCodes_default.set_local) {
+          const localIndex = instruction.immediates.values[0];
+          const value = stack.pop();
+          if (value) {
+            const newVar = newVariable(`local${localIndex}_v${variableCounter}`, getLocalType(localIndex), cfgBlock.id);
+            ssaBlock.instructions.push({ kind: "assign", result: newVar, value });
+            currentLocals.set(localIndex, newVar);
+          }
+          continue;
+        }
+        if (opCode === OpCodes_default.tee_local) {
+          const localIndex = instruction.immediates.values[0];
+          const value = stack.pop();
+          if (value) {
+            const newVar = newVariable(`local${localIndex}_v${variableCounter}`, getLocalType(localIndex), cfgBlock.id);
+            ssaBlock.instructions.push({ kind: "assign", result: newVar, value });
+            currentLocals.set(localIndex, newVar);
+            stack.push(newVar);
+          }
+          continue;
+        }
+        if (opCode === OpCodes_default.get_global) {
+          const globalIndex = instruction.immediates.values[0];
+          const result = newVariable(`g${globalIndex}_v${variableCounter}`, getGlobalType(globalIndex), cfgBlock.id);
+          ssaBlock.instructions.push({ kind: "global_get", result, globalIndex });
+          stack.push(result);
+          continue;
+        }
+        if (opCode === OpCodes_default.set_global) {
+          const globalIndex = instruction.immediates.values[0];
+          const value = stack.pop();
+          if (value) {
+            ssaBlock.instructions.push({ kind: "global_set", globalIndex, value });
+          }
+          continue;
+        }
+        if (opCode === OpCodes_default.i32_const || opCode === OpCodes_default.i64_const || opCode === OpCodes_default.f32_const || opCode === OpCodes_default.f64_const) {
+          const constType = resultTypeFromOpCode(opCode);
+          const result = newVariable(`c${variableCounter}`, constType, cfgBlock.id);
+          ssaBlock.instructions.push({ kind: "const", result, value: instruction.immediates.values[0], type: constType });
+          stack.push(result);
+          continue;
+        }
+        const binaryOp = BINARY_OPS.get(opCode);
+        if (binaryOp) {
+          const right = stack.pop();
+          const left = stack.pop();
+          if (left && right) {
+            const result = newVariable(`t${variableCounter}`, resultTypeFromOpCode(opCode), cfgBlock.id);
+            ssaBlock.instructions.push({ kind: "binary", result, op: binaryOp, left, right });
+            stack.push(result);
+          }
+          continue;
+        }
+        const compareOp = COMPARE_OPS.get(opCode);
+        if (compareOp) {
+          const right = stack.pop();
+          const left = stack.pop();
+          if (left && right) {
+            const result = newVariable(`t${variableCounter}`, "i32", cfgBlock.id);
+            ssaBlock.instructions.push({ kind: "compare", result, op: compareOp, left, right });
+            stack.push(result);
+          }
+          continue;
+        }
+        if (opCode === OpCodes_default.i32_eqz || opCode === OpCodes_default.i64_eqz) {
+          const operand = stack.pop();
+          if (operand) {
+            const result = newVariable(`t${variableCounter}`, "i32", cfgBlock.id);
+            ssaBlock.instructions.push({ kind: "unary", result, op: "!", operand });
+            stack.push(result);
+          }
+          continue;
+        }
+        const unaryOp = UNARY_OPS.get(opCode);
+        if (unaryOp) {
+          const operand = stack.pop();
+          if (operand) {
+            const result = newVariable(`t${variableCounter}`, resultTypeFromOpCode(opCode), cfgBlock.id);
+            ssaBlock.instructions.push({ kind: "unary", result, op: unaryOp, operand });
+            stack.push(result);
+          }
+          continue;
+        }
+        const conversionOp = CONVERSION_OPS.get(opCode);
+        if (conversionOp) {
+          const operand = stack.pop();
+          if (operand) {
+            const result = newVariable(`t${variableCounter}`, resultTypeFromOpCode(opCode), cfgBlock.id);
+            ssaBlock.instructions.push({ kind: "convert", result, op: conversionOp, operand });
+            stack.push(result);
+          }
+          continue;
+        }
+        if (opCode.mnemonic.includes("atomic.rmw")) {
+          const offset = instruction.immediates.values.length > 1 ? instruction.immediates.values[1] : 0;
+          if (opCode.mnemonic.includes("cmpxchg")) {
+            const replacement = stack.pop();
+            const expected = stack.pop();
+            const address = stack.pop();
+            if (address) {
+              const result = newVariable(`t${variableCounter}`, resultTypeFromOpCode(opCode), cfgBlock.id);
+              ssaBlock.instructions.push({ kind: "load", result, address, offset, loadType: opCode.mnemonic });
+              stack.push(result);
+            }
+          } else {
+            const value = stack.pop();
+            const address = stack.pop();
+            if (address) {
+              const result = newVariable(`t${variableCounter}`, resultTypeFromOpCode(opCode), cfgBlock.id);
+              ssaBlock.instructions.push({ kind: "load", result, address, offset, loadType: opCode.mnemonic });
+              stack.push(result);
+            }
+          }
+          continue;
+        }
+        if (opCode.mnemonic.includes("atomic.notify") || opCode.mnemonic.includes("atomic.wait")) {
+          const extra = opCode.mnemonic.includes("wait") ? stack.pop() : void 0;
+          const value = stack.pop();
+          const address = stack.pop();
+          if (address) {
+            const result = newVariable(`t${variableCounter}`, "i32", cfgBlock.id);
+            ssaBlock.instructions.push({ kind: "load", result, address, offset: 0, loadType: opCode.mnemonic });
+            stack.push(result);
+          }
+          continue;
+        }
+        if (opCode.immediate === "MemoryImmediate" && opCode.mnemonic.includes("load")) {
+          const offset = instruction.immediates.values.length > 1 ? instruction.immediates.values[1] : 0;
+          const address = stack.pop();
+          if (address) {
+            const result = newVariable(`t${variableCounter}`, resultTypeFromOpCode(opCode), cfgBlock.id);
+            ssaBlock.instructions.push({ kind: "load", result, address, offset, loadType: opCode.mnemonic });
+            stack.push(result);
+          }
+          continue;
+        }
+        if (opCode.immediate === "MemoryImmediate" && opCode.mnemonic.includes("store")) {
+          const offset = instruction.immediates.values.length > 1 ? instruction.immediates.values[1] : 0;
+          const value = stack.pop();
+          const address = stack.pop();
+          if (address && value) {
+            ssaBlock.instructions.push({ kind: "store", address, value, offset, storeType: opCode.mnemonic });
+          }
+          continue;
+        }
+        if (opCode === OpCodes_default.call || opCode === OpCodes_default.return_call) {
+          const targetIndex = instruction.immediates.values[0];
+          const targetType = getCallTargetType(targetIndex);
+          if (targetType) {
+            const args = [];
+            for (let argIndex = 0; argIndex < targetType.parameterTypes.length; argIndex++) {
+              const arg = stack.pop();
+              if (arg) {
+                args.unshift(arg);
+              }
+            }
+            let result = null;
+            if (targetType.returnTypes.length > 0) {
+              result = newVariable(`t${variableCounter}`, wasmTypeStr(targetType.returnTypes[0]), cfgBlock.id);
+              stack.push(result);
+            }
+            ssaBlock.instructions.push({ kind: "call", result, target: targetIndex, args });
+          }
+          continue;
+        }
+        if (opCode === OpCodes_default.call_indirect || opCode === OpCodes_default.return_call_indirect) {
+          const typeIdx = instruction.immediates.values[0];
+          const tableIndex = stack.pop();
+          const calleeType = typeIdx < flatTypes.length ? flatTypes[typeIdx] : null;
+          if (calleeType && calleeType.kind === "func" && tableIndex) {
+            const args = [];
+            for (let argIndex = 0; argIndex < calleeType.parameterTypes.length; argIndex++) {
+              const arg = stack.pop();
+              if (arg) {
+                args.unshift(arg);
+              }
+            }
+            let result = null;
+            if (calleeType.returnTypes.length > 0) {
+              result = newVariable(`t${variableCounter}`, wasmTypeStr(calleeType.returnTypes[0]), cfgBlock.id);
+              stack.push(result);
+            }
+            ssaBlock.instructions.push({ kind: "call_indirect", result, tableIndex, typeIndex: typeIdx, args });
+          }
+          continue;
+        }
+        if (opCode === OpCodes_default.drop) {
+          stack.pop();
+          continue;
+        }
+        if (opCode === OpCodes_default.select) {
+          const condition = stack.pop();
+          const falseVal = stack.pop();
+          const trueVal = stack.pop();
+          if (condition && falseVal && trueVal) {
+            const selectType = "type" in trueVal && typeof trueVal.type === "string" ? trueVal.type : "i32";
+            const result = newVariable(`t${variableCounter}`, selectType, cfgBlock.id);
+            ssaBlock.instructions.push({ kind: "select", result, condition, trueVal, falseVal });
+            stack.push(result);
+          }
+          continue;
+        }
+        if (opCode === OpCodes_default.br) {
+          const targetBlock = cfgBlock.successors[0];
+          if (targetBlock) {
+            ssaBlock.instructions.push({ kind: "branch", target: targetBlock.id });
+          }
+          continue;
+        }
+        if (opCode === OpCodes_default.br_if) {
+          const condition = stack.pop();
+          if (condition && cfgBlock.successors.length >= 2) {
+            ssaBlock.instructions.push({ kind: "branch_if", condition, trueTarget: cfgBlock.successors[0].id, falseTarget: cfgBlock.successors[1].id });
+          }
+          continue;
+        }
+        if (opCode === OpCodes_default.br_table) {
+          const selector = stack.pop();
+          if (selector) {
+            if (cfgBlock.brTableTargets && cfgBlock.brTableDefault) {
+              const targets = cfgBlock.brTableTargets.map((target) => target.id);
+              const defaultTarget = cfgBlock.brTableDefault.id;
+              ssaBlock.instructions.push({ kind: "branch_table", selector, targets, defaultTarget });
+            } else {
+              const targets = cfgBlock.successors.slice(0, -1).map((successor) => successor.id);
+              const defaultTarget = cfgBlock.successors[cfgBlock.successors.length - 1]?.id || 0;
+              ssaBlock.instructions.push({ kind: "branch_table", selector, targets, defaultTarget });
+            }
+          }
+          continue;
+        }
+        if (opCode === OpCodes_default.return) {
+          const returnValue = funcType.returnTypes.length > 0 ? stack.pop() || null : null;
+          ssaBlock.instructions.push({ kind: "return", value: returnValue });
+          continue;
+        }
+        if (opCode === OpCodes_default.unreachable || opCode === OpCodes_default.throw || opCode === OpCodes_default.rethrow) {
+          ssaBlock.instructions.push({ kind: "unreachable" });
+          continue;
+        }
+        if (opCode === OpCodes_default.mem_size) {
+          const result = newVariable(`t${variableCounter}`, "i32", cfgBlock.id);
+          ssaBlock.instructions.push({ kind: "call", result, target: -1, args: [] });
+          stack.push(result);
+          continue;
+        }
+        if (opCode === OpCodes_default.mem_grow) {
+          const pages = stack.pop();
+          const result = newVariable(`t${variableCounter}`, "i32", cfgBlock.id);
+          ssaBlock.instructions.push({ kind: "call", result, target: -2, args: pages ? [pages] : [] });
+          stack.push(result);
+          continue;
+        }
+        if (opCode.stackBehavior === "PopPush") {
+          const mnemonic = opCode.mnemonic;
+          if (mnemonic.includes(".add") || mnemonic.includes(".sub") || mnemonic.includes(".mul") || mnemonic.includes(".and") || mnemonic.includes(".or") || mnemonic.includes(".xor") || mnemonic.includes(".shl") || mnemonic.includes(".shr") || mnemonic.includes(".min") || mnemonic.includes(".max") || mnemonic.includes(".eq") || mnemonic.includes(".ne") || mnemonic.includes(".lt") || mnemonic.includes(".gt") || mnemonic.includes(".le") || mnemonic.includes(".ge") || mnemonic.includes(".avgr") || mnemonic.includes(".swizzle") || mnemonic.includes(".narrow") || mnemonic.includes(".dot") || mnemonic.includes(".q15mulr")) {
+            const right = stack.pop();
+            const left = stack.pop();
+            if (left && right) {
+              const resultType = mnemonic.startsWith("v128") || mnemonic.includes("x") ? "v128" : resultTypeFromOpCode(opCode);
+              const result = newVariable(`t${variableCounter}`, resultType, cfgBlock.id);
+              const operatorName = mnemonic.split(".").pop() || mnemonic;
+              ssaBlock.instructions.push({ kind: "binary", result, op: operatorName, left, right });
+              stack.push(result);
+            }
+            continue;
+          }
+          const operand = stack.pop();
+          if (operand) {
+            const resultType = mnemonic.startsWith("v128") || mnemonic.includes("x") ? "v128" : resultTypeFromOpCode(opCode);
+            const result = newVariable(`t${variableCounter}`, resultType, cfgBlock.id);
+            ssaBlock.instructions.push({ kind: "convert", result, op: mnemonic, operand });
+            stack.push(result);
+          }
+          continue;
+        }
+        if (opCode.stackBehavior === "Push") {
+          const resultType = opCode.mnemonic.includes("v128") ? "v128" : "i32";
+          const result = newVariable(`t${variableCounter}`, resultType, cfgBlock.id);
+          ssaBlock.instructions.push({ kind: "const", result, value: 0, type: resultType });
+          stack.push(result);
+          continue;
+        }
+        if (opCode.stackBehavior === "Pop") {
+          stack.pop();
+          continue;
+        }
+      }
+      const hasExitEdge = cfgBlock.successors.some((successor) => successor.id === cfg.exit.id);
+      if (hasExitEdge && stack.length > 0 && funcType.returnTypes.length > 0) {
+        ssaBlock.instructions.push({ kind: "return", value: stack.pop() });
+      } else if (hasExitEdge && funcType.returnTypes.length === 0) {
+        const lastInstr = ssaBlock.instructions[ssaBlock.instructions.length - 1];
+        if (!lastInstr || lastInstr.kind !== "return") {
+          ssaBlock.instructions.push({ kind: "return", value: null });
+        }
+      }
+      localVersions.set(cfgBlock.id, currentLocals);
+      stackAtExit.set(cfgBlock.id, [...stack]);
+      processedBlocks.add(cfgBlock.id);
+      for (const successor of cfgBlock.successors) {
+        let successorLocals = localVersions.get(successor.id);
+        if (!successorLocals) {
+          successorLocals = /* @__PURE__ */ new Map();
+          localVersions.set(successor.id, successorLocals);
+        }
+        if (successorLocals.size === 0) {
+          for (const [localIndex, variable] of currentLocals) {
+            successorLocals.set(localIndex, variable);
+          }
+        }
+      }
+    }
+    for (const { phi, blockId, localIndex } of incompletePhis) {
+      const block = cfg.blocks.find((block2) => block2.id === blockId);
+      if (!block) {
+        continue;
+      }
+      for (let inputIndex = 0; inputIndex < phi.inputs.length; inputIndex++) {
+        const predId = block.predecessors[inputIndex].id;
+        if (localIndex < 0) {
+          const stackSlot = -(localIndex + 1);
+          const predStack = stackAtExit.get(predId);
+          if (predStack && stackSlot < predStack.length) {
+            phi.inputs[inputIndex] = { blockId: predId, value: predStack[stackSlot] };
+          }
+        } else {
+          const predLocals = localVersions.get(predId);
+          if (predLocals && predLocals.has(localIndex)) {
+            phi.inputs[inputIndex] = { blockId: predId, value: predLocals.get(localIndex) };
+          }
+        }
+      }
+    }
+    return {
+      blocks: ssaBlocks,
+      variables: allVariables,
+      paramCount,
+      localCount: totalLocalCount,
+      entryBlockId: cfg.entry.id,
+      exitBlockId: cfg.exit.id
+    };
+  }
+  function computeReversePostOrder(cfg) {
+    const visited = /* @__PURE__ */ new Set();
+    const order = [];
+    function visit(block) {
+      if (visited.has(block.id)) {
+        return;
+      }
+      visited.add(block.id);
+      for (const successor of block.successors) {
+        visit(successor);
+      }
+      order.push(block);
+    }
+    visit(cfg.entry);
+    order.reverse();
+    return order;
+  }
+
+  // src/decompiler/DominanceTree.ts
+  function computeDominance(ssaFunc) {
+    const blocks = ssaFunc.blocks;
+    const entryId = ssaFunc.entryBlockId;
+    const exitId = ssaFunc.exitBlockId;
+    const idom = computeImmediateDominators(blocks, entryId, true);
+    const domFrontier = computeDominanceFrontiers(blocks, idom, true);
+    const domChildren = buildChildrenMap(idom);
+    const postIdom = computeImmediateDominators(blocks, exitId, false);
+    const postDomFrontier = computeDominanceFrontiers(blocks, postIdom, false);
+    const postDomChildren = buildChildrenMap(postIdom);
+    return {
+      immediateDominator: idom,
+      dominanceFrontier: domFrontier,
+      children: domChildren,
+      postImmediateDominator: postIdom,
+      postDominanceFrontier: postDomFrontier,
+      postChildren: postDomChildren
+    };
+  }
+  function computeImmediateDominators(blocks, rootId, forward) {
+    const blockMap = /* @__PURE__ */ new Map();
+    for (const block of blocks) {
+      blockMap.set(block.id, block);
+    }
+    const order = computeReversePostOrder2(blocks, rootId, forward);
+    const orderIndex = /* @__PURE__ */ new Map();
+    for (let position = 0; position < order.length; position++) {
+      orderIndex.set(order[position], position);
+    }
+    const idom = /* @__PURE__ */ new Map();
+    idom.set(rootId, rootId);
+    function intersect(blockA, blockB) {
+      let fingerA = blockA;
+      let fingerB = blockB;
+      let iterations = 0;
+      while (fingerA !== fingerB && iterations < 1e3) {
+        iterations++;
+        while ((orderIndex.get(fingerA) ?? 0) > (orderIndex.get(fingerB) ?? 0)) {
+          const next = idom.get(fingerA);
+          if (next === void 0 || next === fingerA) {
+            return fingerA;
+          }
+          fingerA = next;
+        }
+        while ((orderIndex.get(fingerB) ?? 0) > (orderIndex.get(fingerA) ?? 0)) {
+          const next = idom.get(fingerB);
+          if (next === void 0 || next === fingerB) {
+            return fingerB;
+          }
+          fingerB = next;
+        }
+      }
+      return fingerA;
+    }
+    let changed = true;
+    while (changed) {
+      changed = false;
+      for (const blockId of order) {
+        if (blockId === rootId) {
+          continue;
+        }
+        const block = blockMap.get(blockId);
+        if (!block) {
+          continue;
+        }
+        const preds = forward ? block.predecessors : block.successors;
+        let newIdom = null;
+        for (const predId of preds) {
+          if (!idom.has(predId)) {
+            continue;
+          }
+          if (newIdom === null) {
+            newIdom = predId;
+          } else {
+            newIdom = intersect(newIdom, predId);
+          }
+        }
+        if (newIdom !== null && idom.get(blockId) !== newIdom) {
+          idom.set(blockId, newIdom);
+          changed = true;
+        }
+      }
+    }
+    return idom;
+  }
+  function computeDominanceFrontiers(blocks, idom, forward) {
+    const frontier = /* @__PURE__ */ new Map();
+    for (const block of blocks) {
+      frontier.set(block.id, /* @__PURE__ */ new Set());
+    }
+    for (const block of blocks) {
+      const preds = forward ? block.predecessors : block.successors;
+      if (preds.length < 2) {
+        continue;
+      }
+      for (const predId of preds) {
+        let runner = predId;
+        const target = idom.get(block.id);
+        while (runner !== void 0 && runner !== target) {
+          const frontierSet = frontier.get(runner);
+          if (frontierSet) {
+            frontierSet.add(block.id);
+          }
+          const next = idom.get(runner);
+          if (next === void 0 || next === runner) {
+            break;
+          }
+          runner = next;
+        }
+      }
+    }
+    return frontier;
+  }
+  function buildChildrenMap(idom) {
+    const children = /* @__PURE__ */ new Map();
+    for (const [blockId, parentId] of idom) {
+      if (blockId === parentId) {
+        continue;
+      }
+      if (!children.has(parentId)) {
+        children.set(parentId, []);
+      }
+      children.get(parentId).push(blockId);
+    }
+    return children;
+  }
+  function computeReversePostOrder2(blocks, rootId, forward) {
+    const visited = /* @__PURE__ */ new Set();
+    const order = [];
+    const blockMap = /* @__PURE__ */ new Map();
+    for (const block of blocks) {
+      blockMap.set(block.id, block);
+    }
+    function visit(blockId) {
+      if (visited.has(blockId)) {
+        return;
+      }
+      visited.add(blockId);
+      const block = blockMap.get(blockId);
+      if (!block) {
+        return;
+      }
+      const successors = forward ? block.successors : block.predecessors;
+      for (const successorId of successors) {
+        visit(successorId);
+      }
+      order.push(blockId);
+    }
+    visit(rootId);
+    order.reverse();
+    return order;
+  }
+  function dominates(idom, dominatorId, blockId) {
+    let current = blockId;
+    let iterations = 0;
+    while (current !== dominatorId && iterations < 1e3) {
+      iterations++;
+      const parent = idom.get(current);
+      if (parent === void 0 || parent === current) {
+        return false;
+      }
+      current = parent;
+    }
+    return current === dominatorId;
+  }
+  function findNaturalLoops(blocks, idom) {
+    const loops = [];
+    for (const block of blocks) {
+      for (const successorId of block.successors) {
+        if (dominates(idom, successorId, block.id)) {
+          const loop = buildNaturalLoop(blocks, idom, successorId, block.id);
+          loops.push(loop);
+        }
+      }
+    }
+    return loops;
+  }
+  function buildNaturalLoop(blocks, idom, headerId, backEdgeSourceId) {
+    const bodyIds = /* @__PURE__ */ new Set([headerId]);
+    const worklist = [backEdgeSourceId];
+    const blockMap = /* @__PURE__ */ new Map();
+    for (const block of blocks) {
+      blockMap.set(block.id, block);
+    }
+    while (worklist.length > 0) {
+      const blockId = worklist.pop();
+      if (bodyIds.has(blockId)) {
+        continue;
+      }
+      bodyIds.add(blockId);
+      const block = blockMap.get(blockId);
+      if (block) {
+        for (const predId of block.predecessors) {
+          worklist.push(predId);
+        }
+      }
+    }
+    const exitIds = /* @__PURE__ */ new Set();
+    for (const blockId of bodyIds) {
+      const block = blockMap.get(blockId);
+      if (block) {
+        for (const successorId of block.successors) {
+          if (!bodyIds.has(successorId)) {
+            exitIds.add(successorId);
+          }
+        }
+      }
+    }
+    return { headerId, bodyIds, exitIds, backEdgeSourceId };
+  }
+
+  // src/decompiler/StructuredPostProcessing.ts
+  function postProcessNode(node, negateFn) {
+    switch (node.kind) {
+      case "sequence": {
+        const processed = node.children.map((child) => postProcessNode(child, negateFn));
+        const reduced = reduceNesting(processed, negateFn);
+        const flattened = [];
+        for (const child of reduced) {
+          if (child.kind === "sequence") {
+            for (const grandchild of child.children) {
+              if (!isEmptyNode(grandchild)) {
+                flattened.push(grandchild);
+              }
+            }
+          } else if (!isEmptyNode(child)) {
+            flattened.push(child);
+          }
+        }
+        if (flattened.length === 1) {
+          return flattened[0];
+        }
+        return { kind: "sequence", children: flattened };
+      }
+      case "if": {
+        let thenBody = postProcessNode(node.thenBody, negateFn);
+        let elseBody = node.elseBody ? postProcessNode(node.elseBody, negateFn) : null;
+        let condition = node.condition;
+        if (isEmptyNode(thenBody) && elseBody && !isEmptyNode(elseBody)) {
+          condition = negateFn(condition);
+          thenBody = elseBody;
+          elseBody = null;
+        }
+        const processedIf = { kind: "if", condition, thenBody, elseBody };
+        const reduced = reduceNesting([processedIf], negateFn);
+        if (reduced.length === 1) {
+          return reduced[0];
+        }
+        return { kind: "sequence", children: reduced };
+      }
+      case "while":
+        return extractLoopCondition({
+          kind: "while",
+          condition: node.condition,
+          body: postProcessNode(node.body, negateFn)
+        }, negateFn);
+      case "do_while":
+        return { kind: "do_while", body: postProcessNode(node.body, negateFn), condition: node.condition };
+      case "labeled_block":
+        return { kind: "labeled_block", label: node.label, body: postProcessNode(node.body, negateFn) };
+      default:
+        return node;
+    }
+  }
+  function endsWithExit(node) {
+    if (node.kind === "return" || node.kind === "break" || node.kind === "continue" || node.kind === "unreachable") {
+      return true;
+    }
+    if (node.kind === "sequence" && node.children.length > 0) {
+      return endsWithExit(node.children[node.children.length - 1]);
+    }
+    if (node.kind === "block" && node.body.length > 0) {
+      const lastInstr = node.body[node.body.length - 1];
+      return lastInstr.kind === "return" || lastInstr.kind === "unreachable";
+    }
+    return false;
+  }
+  function reduceNesting(children, negateFn) {
+    const result = [];
+    for (const child of children) {
+      if (child.kind === "if" && child.elseBody && !isEmptyNode(child.elseBody) && endsWithExit(child.thenBody)) {
+        result.push({ kind: "if", condition: child.condition, thenBody: child.thenBody, elseBody: null });
+        result.push(child.elseBody);
+      } else if (child.kind === "if" && child.elseBody && !isEmptyNode(child.thenBody) && endsWithExit(child.elseBody)) {
+        result.push({ kind: "if", condition: negateFn(child.condition), thenBody: child.elseBody, elseBody: null });
+        result.push(child.thenBody);
+      } else {
+        result.push(child);
+      }
+    }
+    return result;
+  }
+  function isEmptyNode(node) {
+    if (node.kind === "sequence" && node.children.length === 0) {
+      return true;
+    }
+    if (node.kind === "block" && node.body.length === 0) {
+      return true;
+    }
+    return false;
+  }
+  function extractLoopCondition(node, negateFn) {
+    if (node.condition !== null) {
+      return node;
+    }
+    const bodyChildren = getSequenceChildren(node.body);
+    if (bodyChildren.length === 0) {
+      return node;
+    }
+    const lastChild = bodyChildren[bodyChildren.length - 1];
+    if (lastChild.kind === "if" && lastChild.elseBody === null) {
+      if (lastChild.thenBody.kind === "break") {
+        const conditionUsesBodyVars = conditionReferencesBodyDefinitions(lastChild.condition, bodyChildren.slice(0, -1));
+        if (!conditionUsesBodyVars) {
+          const newBody = bodyChildren.length > 1 ? { kind: "sequence", children: bodyChildren.slice(0, -1) } : { kind: "sequence", children: [] };
+          return { kind: "while", condition: negateFn(lastChild.condition), body: newBody };
+        }
+      }
+      if (lastChild.thenBody.kind === "continue") {
+        const newBody = bodyChildren.length > 1 ? { kind: "sequence", children: bodyChildren.slice(0, -1) } : { kind: "sequence", children: [] };
+        return { kind: "do_while", body: newBody, condition: lastChild.condition };
+      }
+    }
+    const firstChild = bodyChildren[0];
+    if (firstChild.kind === "if" && firstChild.elseBody === null && firstChild.thenBody.kind === "break") {
+      const conditionUsesBodyVars = conditionReferencesBodyDefinitions(firstChild.condition, bodyChildren.slice(1));
+      if (!conditionUsesBodyVars) {
+        const newBody = bodyChildren.length > 1 ? { kind: "sequence", children: bodyChildren.slice(1) } : { kind: "sequence", children: [] };
+        return { kind: "while", condition: negateFn(firstChild.condition), body: newBody };
+      }
+    }
+    return node;
+  }
+  function conditionReferencesBodyDefinitions(condition, bodyNodes) {
+    const definedIds = /* @__PURE__ */ new Set();
+    for (const bodyNode of bodyNodes) {
+      collectDefinedIds(bodyNode, definedIds);
+    }
+    return conditionUsesIdsDeep(condition, definedIds, bodyNodes);
+  }
+  function collectDefinedIds(node, ids) {
+    if (node.kind === "block") {
+      for (const instr of node.body) {
+        if ("result" in instr && instr.result && "id" in instr.result) {
+          const result = instr.result;
+          ids.add(result.id);
+        }
+      }
+    } else if (node.kind === "sequence") {
+      for (const child of node.children) {
+        collectDefinedIds(child, ids);
+      }
+    } else if (node.kind === "if") {
+      collectDefinedIds(node.thenBody, ids);
+      if (node.elseBody) {
+        collectDefinedIds(node.elseBody, ids);
+      }
+    }
+  }
+  function conditionUsesIdsDeep(value, ids, bodyNodes) {
+    if ("id" in value && !("kind" in value)) {
+      if (ids.has(value.id)) {
+        return true;
+      }
+      const defInstr = findDefiningInstruction(value.id, bodyNodes);
+      if (defInstr) {
+        return instrOperandsUseIds(defInstr, ids, bodyNodes);
+      }
+      return false;
+    }
+    return false;
+  }
+  function findDefiningInstruction(varId, nodes) {
+    for (const node of nodes) {
+      if (node.kind === "block") {
+        for (const instr of node.body) {
+          if ("result" in instr && instr.result && "id" in instr.result && instr.result.id === varId) {
+            return instr;
+          }
+        }
+      } else if (node.kind === "sequence") {
+        const found = findDefiningInstruction(varId, node.children);
+        if (found) {
+          return found;
+        }
+      } else if (node.kind === "if") {
+        const found = findDefiningInstruction(varId, [node.thenBody]);
+        if (found) {
+          return found;
+        }
+        if (node.elseBody) {
+          const foundElse = findDefiningInstruction(varId, [node.elseBody]);
+          if (foundElse) {
+            return foundElse;
+          }
+        }
+      }
+    }
+    return null;
+  }
+  function instrOperandsUseIds(instr, ids, bodyNodes) {
+    const operands = [];
+    if ("left" in instr) {
+      operands.push(instr.left);
+    }
+    if ("right" in instr) {
+      operands.push(instr.right);
+    }
+    if ("operand" in instr) {
+      operands.push(instr.operand);
+    }
+    if ("address" in instr && instr.kind === "load") {
+      operands.push(instr.address);
+    }
+    if ("value" in instr && instr.kind === "assign") {
+      operands.push(instr.value);
+    }
+    for (const operand of operands) {
+      if (conditionUsesIdsDeep(operand, ids, bodyNodes)) {
+        return true;
+      }
+    }
+    return false;
+  }
+  function getSequenceChildren(node) {
+    if (node.kind === "sequence") {
+      return node.children;
+    }
+    return [node];
+  }
+
+  // src/decompiler/StructuralAnalysis.ts
+  function structureFunction(ssaFunc, dominance, blockEndTargets) {
+    const blockMap = /* @__PURE__ */ new Map();
+    for (const block of ssaFunc.blocks) {
+      blockMap.set(block.id, block);
+    }
+    const loops = findNaturalLoops(ssaFunc.blocks, dominance.immediateDominator);
+    const loopsByHeader = /* @__PURE__ */ new Map();
+    for (const loop of loops) {
+      loopsByHeader.set(loop.headerId, loop);
+    }
+    const processed = /* @__PURE__ */ new Set();
+    const defMap = /* @__PURE__ */ new Map();
+    for (const block of ssaFunc.blocks) {
+      for (const instr of block.instructions) {
+        if ("result" in instr && instr.result) {
+          defMap.set(instr.result.id, instr);
+        }
+      }
+    }
+    let nextVarId = ssaFunc.variables.length > 0 ? ssaFunc.variables.reduce((maxId, variable) => Math.max(maxId, variable.id), 0) + 1 : 1e3;
+    function isTerminatorKind(kind) {
+      return kind === "branch" || kind === "branch_if" || kind === "branch_table" || kind === "return" || kind === "unreachable";
+    }
+    function insertBeforeTerminator(block, instruction) {
+      const lastInstruction = block.instructions[block.instructions.length - 1];
+      if (lastInstruction && isTerminatorKind(lastInstruction.kind)) {
+        block.instructions.splice(block.instructions.length - 1, 0, instruction);
+      } else {
+        block.instructions.push(instruction);
+      }
+    }
+    function findBlockContaining(varId) {
+      for (const block of ssaFunc.blocks) {
+        for (const instr of block.instructions) {
+          if ("result" in instr && instr.result && instr.result.id === varId) {
+            return block;
+          }
+        }
+      }
+      return null;
+    }
+    function negateCondition(condition) {
+      if ("kind" in condition && condition.kind === "const") {
+        return { kind: "const", value: condition.value ? 0 : 1, type: "i32" };
+      }
+      if ("id" in condition && !("kind" in condition)) {
+        const defInstr = defMap.get(condition.id);
+        if (defInstr && defInstr.kind === "compare") {
+          const inverted = COMPARE_INVERT[defInstr.op];
+          if (inverted) {
+            const newVar2 = { id: nextVarId++, name: `neg_${condition.id}`, type: "i32", definedInBlock: -1 };
+            const newInstr2 = { kind: "compare", result: newVar2, op: inverted, left: defInstr.left, right: defInstr.right };
+            const ownerBlock = findBlockContaining(condition.id);
+            if (ownerBlock) {
+              insertBeforeTerminator(ownerBlock, newInstr2);
+            }
+            defMap.set(newVar2.id, newInstr2);
+            return newVar2;
+          }
+        }
+        if (defInstr && defInstr.kind === "unary" && defInstr.op === "!") {
+          return defInstr.operand;
+        }
+      }
+      const varId = nextVarId++;
+      const newVar = { id: varId, name: `neg_${varId}`, type: "i32", definedInBlock: -1 };
+      const newInstr = { kind: "unary", result: newVar, op: "!", operand: condition };
+      if ("id" in condition && !("kind" in condition)) {
+        const ownerBlock = findBlockContaining(condition.id);
+        if (ownerBlock) {
+          insertBeforeTerminator(ownerBlock, newInstr);
+        }
+      } else {
+        if (ssaFunc.blocks[0]) {
+          insertBeforeTerminator(ssaFunc.blocks[0], newInstr);
+        }
+      }
+      defMap.set(newVar.id, newInstr);
+      return newVar;
+    }
+    function isExitTarget(blockId) {
+      if (blockId === ssaFunc.exitBlockId) {
+        return true;
+      }
+      const block = blockMap.get(blockId);
+      if (!block) {
+        return false;
+      }
+      if (block.instructions.length === 0 && block.successors.length === 1 && block.successors[0] === ssaFunc.exitBlockId) {
+        return true;
+      }
+      if (block.successors.includes(ssaFunc.exitBlockId)) {
+        const substantiveInstrs = block.instructions.filter((i) => i.kind !== "return" && i.kind !== "phi");
+        if (substantiveInstrs.length === 0) {
+          return true;
+        }
+      }
+      return false;
+    }
+    function structureRegion(blockId, regionEnd, virtuallyProcessed) {
+      if (processed.has(blockId)) {
+        return { kind: "sequence", children: [] };
+      }
+      const block = blockMap.get(blockId);
+      if (!block) {
+        return { kind: "sequence", children: [] };
+      }
+      try {
+        const loop = loopsByHeader.get(blockId);
+        if (loop) {
+          return structureLoop(blockId, loop, regionEnd);
+        }
+        return structureLinear(blockId, regionEnd, virtuallyProcessed);
+      } catch (structureError) {
+        processed.add(blockId);
+        return { kind: "labeled_block", label: `block_${blockId}`, body: { kind: "block", body: block.instructions } };
+      }
+    }
+    function structureLinear(blockId, regionEnd, virtuallyProcessed) {
+      const children = [];
+      let currentBlockId = blockId;
+      while (currentBlockId !== null && currentBlockId !== regionEnd) {
+        if (processed.has(currentBlockId)) {
+          break;
+        }
+        const block = blockMap.get(currentBlockId);
+        if (!block) {
+          break;
+        }
+        const loop = loopsByHeader.get(currentBlockId);
+        if (loop && children.length > 0) {
+          children.push(structureLoop(currentBlockId, loop, regionEnd));
+          const exitId = findSingleExit(loop);
+          currentBlockId = exitId;
+          continue;
+        }
+        processed.add(currentBlockId);
+        const terminator = findTerminator(block);
+        if (!terminator) {
+          children.push(blockToNode(block));
+          if (block.successors.length === 1) {
+            currentBlockId = block.successors[0];
+          } else {
+            currentBlockId = null;
+          }
+          continue;
+        }
+        if (terminator.kind === "return" || terminator.kind === "unreachable") {
+          children.push(blockToNode(block));
+          currentBlockId = null;
+          continue;
+        }
+        if (terminator.kind === "branch") {
+          children.push(blockToNodeWithoutTerminator(block));
+          const exitCheck = isExitTarget(terminator.target);
+          if (exitCheck) {
+            children.push({ kind: "return", value: null });
+            currentBlockId = null;
+            continue;
+          }
+          const targetBlock = blockMap.get(terminator.target);
+          if (targetBlock && targetBlock.predecessors.length > 1) {
+            const unprocessedPreds = targetBlock.predecessors.filter((predId) => !processed.has(predId) && !(virtuallyProcessed && virtuallyProcessed.has(predId)));
+            if (unprocessedPreds.length > 0 && !dominates(dominance.immediateDominator, currentBlockId, terminator.target)) {
+              currentBlockId = null;
+              continue;
+            }
+          }
+          currentBlockId = terminator.target;
+          continue;
+        }
+        if (terminator.kind === "branch_if") {
+          const ifNode = structureIf(block, terminator, regionEnd);
+          children.push(ifNode.node);
+          currentBlockId = ifNode.mergeBlockId;
+          continue;
+        }
+        if (terminator.kind === "branch_table") {
+          children.push(blockToNodeWithoutTerminator(block));
+          const switchResult = structureSwitch(terminator, regionEnd, currentBlockId);
+          children.push(switchResult.node);
+          currentBlockId = switchResult.mergeBlockId;
+          continue;
+        }
+        children.push(blockToNode(block));
+        currentBlockId = null;
+      }
+      if (children.length === 1) {
+        return children[0];
+      }
+      return { kind: "sequence", children };
+    }
+    function structureLoop(headerId, loop, regionEnd) {
+      processed.add(headerId);
+      const headerBlock = blockMap.get(headerId);
+      const terminator = findTerminator(headerBlock);
+      if (terminator && terminator.kind === "branch_if") {
+        const trueTarget = terminator.trueTarget;
+        const falseTarget = terminator.falseTarget;
+        const trueInLoop = loop.bodyIds.has(trueTarget);
+        const falseInLoop = loop.bodyIds.has(falseTarget);
+        if (trueInLoop && !falseInLoop) {
+          const bodyNode2 = structureLoopBody(trueTarget, headerId, loop);
+          const preBody = blockToNodeWithoutTerminator(headerBlock);
+          const whileNode2 = {
+            kind: "while",
+            condition: terminator.condition,
+            body: prependNode(preBody, bodyNode2)
+          };
+          const exitId2 = falseTarget;
+          if (exitId2 !== regionEnd && !processed.has(exitId2)) {
+            const afterLoop = structureRegion(exitId2, regionEnd);
+            return { kind: "sequence", children: [whileNode2, afterLoop] };
+          }
+          return whileNode2;
+        }
+        if (!trueInLoop && falseInLoop) {
+          const bodyNode2 = structureLoopBody(falseTarget, headerId, loop);
+          const preBody = blockToNodeWithoutTerminator(headerBlock);
+          const negatedCondition = negateCondition(terminator.condition);
+          const whileNode2 = {
+            kind: "while",
+            condition: negatedCondition,
+            body: prependNode(preBody, bodyNode2)
+          };
+          const exitId2 = trueTarget;
+          if (exitId2 !== regionEnd && !processed.has(exitId2)) {
+            const afterLoop = structureRegion(exitId2, regionEnd);
+            return { kind: "sequence", children: [whileNode2, afterLoop] };
+          }
+          return whileNode2;
+        }
+      }
+      const bodyNode = structureLoopBody(headerId, headerId, loop);
+      const whileNode = { kind: "while", condition: null, body: bodyNode };
+      const exitId = findSingleExit(loop);
+      if (exitId !== null && exitId !== regionEnd && !processed.has(exitId)) {
+        const afterLoop = structureRegion(exitId, regionEnd);
+        return { kind: "sequence", children: [whileNode, afterLoop] };
+      }
+      return whileNode;
+    }
+    function structureLoopBody(startId, headerId, loop) {
+      const children = [];
+      let currentBlockId = startId;
+      while (currentBlockId !== null) {
+        if (currentBlockId === headerId && children.length > 0) {
+          children.push({ kind: "continue" });
+          break;
+        }
+        if (!loop.bodyIds.has(currentBlockId)) {
+          children.push({ kind: "break" });
+          break;
+        }
+        if (processed.has(currentBlockId) && currentBlockId !== startId) {
+          break;
+        }
+        const block = blockMap.get(currentBlockId);
+        if (!block) {
+          break;
+        }
+        processed.add(currentBlockId);
+        const terminator = findTerminator(block);
+        if (!terminator) {
+          children.push(blockToNode(block));
+          if (block.successors.length === 1) {
+            currentBlockId = block.successors[0];
+          } else {
+            break;
+          }
+          continue;
+        }
+        if (terminator.kind === "return" || terminator.kind === "unreachable") {
+          children.push(blockToNode(block));
+          break;
+        }
+        if (terminator.kind === "branch") {
+          children.push(blockToNodeWithoutTerminator(block));
+          const target = terminator.target;
+          if (target === headerId) {
+            children.push({ kind: "continue" });
+            break;
+          }
+          if (!loop.bodyIds.has(target)) {
+            children.push({ kind: "break" });
+            break;
+          }
+          currentBlockId = target;
+          continue;
+        }
+        if (terminator.kind === "branch_if") {
+          const trueTarget = terminator.trueTarget;
+          const falseTarget = terminator.falseTarget;
+          const trueIsExit = !loop.bodyIds.has(trueTarget) || trueTarget === headerId;
+          const falseIsExit = !loop.bodyIds.has(falseTarget) || falseTarget === headerId;
+          if (trueIsExit && !falseIsExit) {
+            children.push(blockToNodeWithoutTerminator(block));
+            if (trueTarget === headerId) {
+              children.push({
+                kind: "if",
+                condition: terminator.condition,
+                thenBody: { kind: "continue" },
+                elseBody: null
+              });
+            } else {
+              children.push({
+                kind: "if",
+                condition: terminator.condition,
+                thenBody: { kind: "break" },
+                elseBody: null
+              });
+            }
+            currentBlockId = falseTarget;
+            continue;
+          }
+          if (falseIsExit && !trueIsExit) {
+            children.push(blockToNodeWithoutTerminator(block));
+            const negated = negateCondition(terminator.condition);
+            if (falseTarget === headerId) {
+              children.push({
+                kind: "if",
+                condition: negated,
+                thenBody: { kind: "continue" },
+                elseBody: null
+              });
+            } else {
+              children.push({
+                kind: "if",
+                condition: negated,
+                thenBody: { kind: "break" },
+                elseBody: null
+              });
+            }
+            currentBlockId = trueTarget;
+            continue;
+          }
+          const ifResult = structureIf(block, terminator, null);
+          children.push(ifResult.node);
+          currentBlockId = ifResult.mergeBlockId;
+          continue;
+        }
+        children.push(blockToNode(block));
+        break;
+      }
+      if (children.length === 1) {
+        return children[0];
+      }
+      return { kind: "sequence", children };
+    }
+    function findMergePoint(targetA, targetB) {
+      const reachableA = /* @__PURE__ */ new Set();
+      const worklistA = [targetA];
+      while (worklistA.length > 0) {
+        const blockId = worklistA.pop();
+        if (reachableA.has(blockId)) {
+          continue;
+        }
+        reachableA.add(blockId);
+        const block = blockMap.get(blockId);
+        if (block) {
+          for (const successorId of block.successors) {
+            worklistA.push(successorId);
+          }
+        }
+      }
+      const worklistB = [targetB];
+      const visited = /* @__PURE__ */ new Set();
+      while (worklistB.length > 0) {
+        const blockId = worklistB.pop();
+        if (visited.has(blockId)) {
+          continue;
+        }
+        visited.add(blockId);
+        if (reachableA.has(blockId)) {
+          return blockId;
+        }
+        const block = blockMap.get(blockId);
+        if (block) {
+          for (const successorId of block.successors) {
+            worklistB.push(successorId);
+          }
+        }
+      }
+      return null;
+    }
+    function structureSwitch(terminator, regionEnd, dispatchBlockId) {
+      const targetToCaseValues = /* @__PURE__ */ new Map();
+      for (let caseIndex = 0; caseIndex < terminator.targets.length; caseIndex++) {
+        const targetId = terminator.targets[caseIndex];
+        if (!targetToCaseValues.has(targetId)) {
+          targetToCaseValues.set(targetId, []);
+        }
+        targetToCaseValues.get(targetId).push(caseIndex);
+      }
+      const uniqueTargetIds = /* @__PURE__ */ new Set();
+      for (const targetId of terminator.targets) {
+        if (targetId !== terminator.defaultTarget) {
+          uniqueTargetIds.add(targetId);
+        }
+      }
+      let mergeBlockId = null;
+      const allTargetIds = /* @__PURE__ */ new Set([...uniqueTargetIds, terminator.defaultTarget]);
+      const postDomCandidate = dominance.postImmediateDominator.get(dispatchBlockId);
+      if (postDomCandidate !== void 0 && postDomCandidate !== dispatchBlockId && !allTargetIds.has(postDomCandidate)) {
+        mergeBlockId = postDomCandidate;
+      }
+      const switchTargetSet = new Set(allTargetIds);
+      const cases = [];
+      for (const targetId of uniqueTargetIds) {
+        const caseValues = targetToCaseValues.get(targetId) || [];
+        if (processed.has(targetId)) {
+          cases.push({ values: caseValues, body: { kind: "sequence", children: [] } });
+          continue;
+        }
+        const caseBody = structureRegion(targetId, mergeBlockId ?? regionEnd, switchTargetSet);
+        cases.push({ values: caseValues, body: caseBody });
+      }
+      let defaultBody;
+      if (processed.has(terminator.defaultTarget)) {
+        defaultBody = { kind: "sequence", children: [] };
+      } else {
+        defaultBody = structureRegion(terminator.defaultTarget, mergeBlockId ?? regionEnd, switchTargetSet);
+      }
+      const switchNode = {
+        kind: "switch",
+        selector: terminator.selector,
+        cases,
+        defaultBody
+      };
+      return { node: switchNode, mergeBlockId };
+    }
+    function structureIf(block, terminator, regionEnd) {
+      const trueTarget = terminator.trueTarget;
+      const falseTarget = terminator.falseTarget;
+      const preBody = blockToNodeWithoutTerminator(block);
+      const trueBlock = blockMap.get(trueTarget);
+      const falseBlock = blockMap.get(falseTarget);
+      const trueInlineable = trueBlock && trueBlock.predecessors.length === 1 && !processed.has(trueTarget);
+      const falseInlineable = falseBlock && falseBlock.predecessors.length === 1 && !processed.has(falseTarget);
+      const mergePoint = findMergePoint(trueTarget, falseTarget);
+      if (trueInlineable && falseInlineable) {
+        const thenBody = structureRegion(trueTarget, mergePoint);
+        const elseBody = structureRegion(falseTarget, mergePoint);
+        const ifNode = { kind: "if", condition: terminator.condition, thenBody, elseBody };
+        const nextId = mergePoint !== null && mergePoint !== regionEnd && !processed.has(mergePoint) ? mergePoint : null;
+        return { node: prependNode(preBody, ifNode), mergeBlockId: nextId };
+      }
+      if (trueInlineable) {
+        const thenBody = structureRegion(trueTarget, falseTarget);
+        const ifNode = { kind: "if", condition: terminator.condition, thenBody, elseBody: null };
+        const mergeId = falseTarget !== regionEnd && !processed.has(falseTarget) ? falseTarget : null;
+        return { node: prependNode(preBody, ifNode), mergeBlockId: mergeId };
+      }
+      if (falseInlineable) {
+        const elseBody = structureRegion(falseTarget, trueTarget);
+        const negated = negateCondition(terminator.condition);
+        const ifNode = { kind: "if", condition: negated, thenBody: elseBody, elseBody: null };
+        const mergeId = trueTarget !== regionEnd && !processed.has(trueTarget) ? trueTarget : null;
+        return { node: prependNode(preBody, ifNode), mergeBlockId: mergeId };
+      }
+      const labeledBody = blockToNode(block);
+      return { node: labeledBody, mergeBlockId: null };
+    }
+    function findSingleExit(loop) {
+      if (loop.exitIds.size > 0) {
+        return loop.exitIds.values().next().value ?? null;
+      }
+      return null;
+    }
+    const result = structureRegion(ssaFunc.entryBlockId, ssaFunc.exitBlockId);
+    const unvisited = [];
+    for (const block of ssaFunc.blocks) {
+      if (block.id === ssaFunc.exitBlockId) {
+        continue;
+      }
+      if (block.instructions.length === 0) {
+        continue;
+      }
+      if (processed.has(block.id)) {
+        continue;
+      }
+      unvisited.push({ kind: "labeled_block", label: `unvisited_${block.id}`, body: { kind: "block", body: block.instructions } });
+    }
+    const full = unvisited.length > 0 ? { kind: "sequence", children: [result, ...unvisited] } : result;
+    return postProcessNode(full, negateCondition);
+  }
+  function findTerminator(block) {
+    for (let index = block.instructions.length - 1; index >= 0; index--) {
+      const instruction = block.instructions[index];
+      if (instruction.kind === "branch" || instruction.kind === "branch_if" || instruction.kind === "branch_table" || instruction.kind === "return" || instruction.kind === "unreachable") {
+        return instruction;
+      }
+    }
+    return null;
+  }
+  function blockToNode(block) {
+    if (block.instructions.length === 0) {
+      return { kind: "sequence", children: [] };
+    }
+    return { kind: "block", body: block.instructions };
+  }
+  function blockToNodeWithoutTerminator(block) {
+    const nonTerminators = block.instructions.filter(
+      (instruction) => instruction.kind !== "branch" && instruction.kind !== "branch_if" && instruction.kind !== "branch_table"
+    );
+    if (nonTerminators.length === 0) {
+      return { kind: "sequence", children: [] };
+    }
+    return { kind: "block", body: nonTerminators };
+  }
+  function prependNode(prefix, main) {
+    if (prefix.kind === "sequence" && prefix.children.length === 0) {
+      return main;
+    }
+    if (prefix.kind === "block" && prefix.body.length === 0) {
+      return main;
+    }
+    return { kind: "sequence", children: [prefix, main] };
+  }
+
+  // src/decompiler/OptimizationPasses.ts
+  function optimizeSsa(ssaFunc) {
+    stackFrameDetection(ssaFunc);
+    let changed = true;
+    let iteration = 0;
+    while (changed && iteration < 10) {
+      changed = false;
+      changed = constantFolding(ssaFunc) || changed;
+      changed = doubleNegationElimination(ssaFunc) || changed;
+      changed = comparisonInversion(ssaFunc) || changed;
+      changed = copyPropagation(ssaFunc) || changed;
+      changed = localAssignInlining(ssaFunc) || changed;
+      changed = localCommonSubexpressionElimination(ssaFunc) || changed;
+      changed = deadCodeElimination(ssaFunc) || changed;
+      changed = phiSimplification(ssaFunc) || changed;
+      iteration++;
+    }
+  }
+  function stackFrameDetection(ssaFunc) {
+    if (ssaFunc.blocks.length === 0) {
+      return;
+    }
+    const entryBlock = ssaFunc.blocks.find((block) => block.id === ssaFunc.entryBlockId);
+    if (!entryBlock || entryBlock.instructions.length < 4) {
+      return;
+    }
+    const instructions = entryBlock.instructions;
+    let prologueEnd = -1;
+    for (let index = 0; index + 3 < instructions.length; index++) {
+      const i0 = instructions[index];
+      const i1 = instructions[index + 1];
+      const i2 = instructions[index + 2];
+      const i3 = instructions[index + 3];
+      if (i0.kind === "global_get" && i1.kind === "const" && typeof i1.value === "number" && i2.kind === "binary" && i2.op === "-" && i3.kind === "assign" && i3.result.name.startsWith("local")) {
+        if (index + 4 < instructions.length) {
+          const i4 = instructions[index + 4];
+          if (i4.kind === "global_set" && i4.globalIndex === i0.globalIndex) {
+            prologueEnd = index + 5;
+            break;
+          }
+        }
+        prologueEnd = index + 4;
+        break;
+      }
+    }
+    if (prologueEnd > 0) {
+      const filtered = [];
+      for (let index = 0; index < prologueEnd; index++) {
+        const instruction = instructions[index];
+        if (instruction.kind !== "global_set") {
+          filtered.push(instruction);
+        }
+      }
+      entryBlock.instructions.splice(0, prologueEnd, ...filtered);
+    }
+  }
+  function isConst(value) {
+    return "kind" in value && value.kind === "const";
+  }
+  function isVariable(value) {
+    return "id" in value && !("kind" in value);
+  }
+  function getConstValue(value, defMap) {
+    if (isConst(value)) {
+      return Number(value.value);
+    }
+    if (isVariable(value) && defMap) {
+      const def = defMap.get(value.id);
+      if (def && def.instruction.kind === "const") {
+        return Number(def.instruction.value);
+      }
+    }
+    return null;
+  }
+  function buildDefMap(ssaFunc) {
+    const defMap = /* @__PURE__ */ new Map();
+    for (const block of ssaFunc.blocks) {
+      for (const instruction of block.instructions) {
+        const result = getInstructionResult(instruction);
+        if (result) {
+          defMap.set(result.id, { block, instruction });
+        }
+      }
+    }
+    return defMap;
+  }
+  function getInstructionResult(instruction) {
+    switch (instruction.kind) {
+      case "phi":
+      case "assign":
+      case "const":
+      case "binary":
+      case "unary":
+      case "compare":
+      case "load":
+      case "convert":
+      case "select":
+      case "global_get":
+        return instruction.result;
+      case "call":
+      case "call_indirect":
+        return instruction.result || null;
+      default:
+        return null;
+    }
+  }
+  function buildUseMap(ssaFunc) {
+    const useCount = /* @__PURE__ */ new Map();
+    function countUse(value) {
+      if (isVariable(value)) {
+        useCount.set(value.id, (useCount.get(value.id) || 0) + 1);
+      }
+    }
+    for (const block of ssaFunc.blocks) {
+      for (const instruction of block.instructions) {
+        visitInstructionOperands(instruction, countUse);
+      }
+    }
+    return useCount;
+  }
+  function visitInstructionOperands(instruction, visitor) {
+    switch (instruction.kind) {
+      case "phi":
+        for (const input of instruction.inputs) {
+          visitor(input.value);
+        }
+        break;
+      case "assign":
+        visitor(instruction.value);
+        break;
+      case "binary":
+        visitor(instruction.left);
+        visitor(instruction.right);
+        break;
+      case "unary":
+        visitor(instruction.operand);
+        break;
+      case "compare":
+        visitor(instruction.left);
+        visitor(instruction.right);
+        break;
+      case "load":
+        visitor(instruction.address);
+        break;
+      case "store":
+        visitor(instruction.address);
+        visitor(instruction.value);
+        break;
+      case "call":
+        for (const arg of instruction.args) {
+          visitor(arg);
+        }
+        break;
+      case "call_indirect":
+        visitor(instruction.tableIndex);
+        for (const arg of instruction.args) {
+          visitor(arg);
+        }
+        break;
+      case "convert":
+        visitor(instruction.operand);
+        break;
+      case "select":
+        visitor(instruction.condition);
+        visitor(instruction.trueVal);
+        visitor(instruction.falseVal);
+        break;
+      case "global_set":
+        visitor(instruction.value);
+        break;
+      case "branch_if":
+        visitor(instruction.condition);
+        break;
+      case "branch_table":
+        visitor(instruction.selector);
+        break;
+      case "return":
+        if (instruction.value) {
+          visitor(instruction.value);
+        }
+        break;
+    }
+  }
+  function replaceOperand(instruction, oldId, newValue) {
+    let replaced = false;
+    function replace(value) {
+      if (isVariable(value) && value.id === oldId) {
+        replaced = true;
+        return newValue;
+      }
+      return value;
+    }
+    switch (instruction.kind) {
+      case "phi":
+        for (let inputIndex = 0; inputIndex < instruction.inputs.length; inputIndex++) {
+          instruction.inputs[inputIndex].value = replace(instruction.inputs[inputIndex].value);
+        }
+        break;
+      case "assign":
+        instruction.value = replace(instruction.value);
+        break;
+      case "binary":
+        instruction.left = replace(instruction.left);
+        instruction.right = replace(instruction.right);
+        break;
+      case "unary":
+        instruction.operand = replace(instruction.operand);
+        break;
+      case "compare":
+        instruction.left = replace(instruction.left);
+        instruction.right = replace(instruction.right);
+        break;
+      case "load":
+        instruction.address = replace(instruction.address);
+        break;
+      case "store":
+        instruction.address = replace(instruction.address);
+        instruction.value = replace(instruction.value);
+        break;
+      case "call":
+        for (let argIndex = 0; argIndex < instruction.args.length; argIndex++) {
+          instruction.args[argIndex] = replace(instruction.args[argIndex]);
+        }
+        break;
+      case "call_indirect":
+        instruction.tableIndex = replace(instruction.tableIndex);
+        for (let argIndex = 0; argIndex < instruction.args.length; argIndex++) {
+          instruction.args[argIndex] = replace(instruction.args[argIndex]);
+        }
+        break;
+      case "convert":
+        instruction.operand = replace(instruction.operand);
+        break;
+      case "select":
+        instruction.condition = replace(instruction.condition);
+        instruction.trueVal = replace(instruction.trueVal);
+        instruction.falseVal = replace(instruction.falseVal);
+        break;
+      case "global_set":
+        instruction.value = replace(instruction.value);
+        break;
+      case "branch_if":
+        instruction.condition = replace(instruction.condition);
+        break;
+      case "branch_table":
+        instruction.selector = replace(instruction.selector);
+        break;
+      case "return":
+        if (instruction.value) {
+          instruction.value = replace(instruction.value);
+        }
+        break;
+    }
+    return replaced;
+  }
+  function doubleNegationElimination(ssaFunc) {
+    let changed = false;
+    const defMap = buildDefMap(ssaFunc);
+    for (const block of ssaFunc.blocks) {
+      for (let instrIndex = 0; instrIndex < block.instructions.length; instrIndex++) {
+        const instruction = block.instructions[instrIndex];
+        if (instruction.kind === "unary" && instruction.op === "!" && isVariable(instruction.operand)) {
+          const innerDef = defMap.get(instruction.operand.id);
+          if (innerDef && innerDef.instruction.kind === "unary" && innerDef.instruction.op === "!") {
+            block.instructions[instrIndex] = {
+              kind: "assign",
+              result: instruction.result,
+              value: innerDef.instruction.operand
+            };
+            changed = true;
+          }
+        }
+      }
+    }
+    return changed;
+  }
+  function comparisonInversion(ssaFunc) {
+    let changed = false;
+    const defMap = buildDefMap(ssaFunc);
+    for (const block of ssaFunc.blocks) {
+      for (let instrIndex = 0; instrIndex < block.instructions.length; instrIndex++) {
+        const instruction = block.instructions[instrIndex];
+        if (instruction.kind === "unary" && instruction.op === "!" && isVariable(instruction.operand)) {
+          const innerDef = defMap.get(instruction.operand.id);
+          if (innerDef && innerDef.instruction.kind === "compare") {
+            const inverted = COMPARE_INVERT[innerDef.instruction.op];
+            if (inverted) {
+              block.instructions[instrIndex] = {
+                kind: "compare",
+                result: instruction.result,
+                op: inverted,
+                left: innerDef.instruction.left,
+                right: innerDef.instruction.right
+              };
+              changed = true;
+            }
+          }
+        }
+      }
+    }
+    return changed;
+  }
+  function localAssignInlining(ssaFunc) {
+    let changed = false;
+    const useCount = buildUseMap(ssaFunc);
+    for (const block of ssaFunc.blocks) {
+      for (const instruction of block.instructions) {
+        if (instruction.kind !== "assign") {
+          continue;
+        }
+        if (!instruction.result.name.startsWith("local")) {
+          continue;
+        }
+        if (!isVariable(instruction.value)) {
+          continue;
+        }
+        const sourceVar = instruction.value;
+        const uses = useCount.get(sourceVar.id) || 0;
+        if (uses !== 2) {
+          continue;
+        }
+        for (const otherBlock of ssaFunc.blocks) {
+          for (const otherInstruction of otherBlock.instructions) {
+            if (otherInstruction === instruction) {
+              continue;
+            }
+            if (replaceOperand(otherInstruction, sourceVar.id, instruction.result)) {
+              changed = true;
+            }
+          }
+        }
+      }
+    }
+    return changed;
+  }
+  function constantFolding(ssaFunc) {
+    let changed = false;
+    const defMap = buildDefMap(ssaFunc);
+    for (const block of ssaFunc.blocks) {
+      for (let instrIndex = 0; instrIndex < block.instructions.length; instrIndex++) {
+        const instruction = block.instructions[instrIndex];
+        if (instruction.kind === "binary") {
+          const leftConst = getConstValue(instruction.left, defMap);
+          const rightConst = getConstValue(instruction.right, defMap);
+          if (leftConst !== null && rightConst !== null) {
+            const result = evaluateBinaryOp(instruction.op, leftConst, rightConst);
+            if (result !== null) {
+              block.instructions[instrIndex] = {
+                kind: "const",
+                result: instruction.result,
+                value: result,
+                type: instruction.result.type
+              };
+              changed = true;
+            }
+          }
+          if (rightConst === 0 && (instruction.op === "+" || instruction.op === "-" || instruction.op === "|" || instruction.op === "^")) {
+            block.instructions[instrIndex] = { kind: "assign", result: instruction.result, value: instruction.left };
+            changed = true;
+          }
+          if (rightConst !== null && rightConst < 0 && instruction.op === "+") {
+            const positiveConst = { kind: "const", value: -rightConst, type: instruction.result.type };
+            block.instructions[instrIndex] = { kind: "binary", result: instruction.result, op: "-", left: instruction.left, right: positiveConst };
+            changed = true;
+          }
+          if (rightConst === 1 && instruction.op === "*") {
+            block.instructions[instrIndex] = { kind: "assign", result: instruction.result, value: instruction.left };
+            changed = true;
+          }
+          if (rightConst === 0 && instruction.op === "*") {
+            block.instructions[instrIndex] = { kind: "const", result: instruction.result, value: 0, type: instruction.result.type };
+            changed = true;
+          }
+        }
+        if (instruction.kind === "compare") {
+          const leftConst = getConstValue(instruction.left, defMap);
+          const rightConst = getConstValue(instruction.right, defMap);
+          if (leftConst !== null && rightConst !== null) {
+            const result = evaluateCompareOp(instruction.op, leftConst, rightConst);
+            if (result !== null) {
+              block.instructions[instrIndex] = {
+                kind: "const",
+                result: instruction.result,
+                value: result ? 1 : 0,
+                type: "i32"
+              };
+              changed = true;
+            }
+          }
+        }
+        if (instruction.kind === "unary" && instruction.op === "!") {
+          const constVal = getConstValue(instruction.operand, defMap);
+          if (constVal !== null) {
+            block.instructions[instrIndex] = {
+              kind: "const",
+              result: instruction.result,
+              value: constVal === 0 ? 1 : 0,
+              type: "i32"
+            };
+            changed = true;
+          }
+        }
+      }
+    }
+    return changed;
+  }
+  function evaluateBinaryOp(op, left, right) {
+    switch (op) {
+      case "+":
+        return left + right | 0;
+      case "-":
+        return left - right | 0;
+      case "*":
+        return Math.imul(left, right);
+      case "&":
+        return left & right;
+      case "|":
+        return left | right;
+      case "^":
+        return left ^ right;
+      case "<<":
+        return left << (right & 31);
+      case ">>":
+        return left >> (right & 31);
+      case ">>>":
+        return left >>> (right & 31);
+      default:
+        return null;
+    }
+  }
+  function evaluateCompareOp(op, left, right) {
+    switch (op) {
+      case "==":
+        return left === right;
+      case "!=":
+        return left !== right;
+      case "<":
+        return left < right;
+      case ">":
+        return left > right;
+      case "<=":
+        return left <= right;
+      case ">=":
+        return left >= right;
+      default:
+        return null;
+    }
+  }
+  function copyPropagation(ssaFunc) {
+    let changed = false;
+    for (const block of ssaFunc.blocks) {
+      for (const instruction of block.instructions) {
+        if (instruction.kind === "assign" && isVariable(instruction.value)) {
+          if (instruction.result.name.startsWith("local") || instruction.result.name.startsWith("phi")) {
+            continue;
+          }
+          const targetId = instruction.result.id;
+          for (const otherBlock of ssaFunc.blocks) {
+            for (const otherInstruction of otherBlock.instructions) {
+              if (otherInstruction === instruction) {
+                continue;
+              }
+              if (replaceOperand(otherInstruction, targetId, instruction.value)) {
+                changed = true;
+              }
+            }
+          }
+        }
+      }
+    }
+    return changed;
+  }
+  function deadCodeElimination(ssaFunc) {
+    let changed = false;
+    const useCount = buildUseMap(ssaFunc);
+    for (const block of ssaFunc.blocks) {
+      const filtered = [];
+      for (const instruction of block.instructions) {
+        const result = getInstructionResult(instruction);
+        if (result && (useCount.get(result.id) || 0) === 0) {
+          if (instruction.kind !== "call" && instruction.kind !== "call_indirect" && instruction.kind !== "store" && instruction.kind !== "global_set" && instruction.kind !== "phi") {
+            if (instruction.kind === "assign" && result.name.startsWith("local")) {
+            } else {
+              changed = true;
+              continue;
+            }
+          }
+        }
+        filtered.push(instruction);
+      }
+      if (filtered.length !== block.instructions.length) {
+        block.instructions = filtered;
+      }
+    }
+    return changed;
+  }
+  function phiSimplification(ssaFunc) {
+    let changed = false;
+    for (const block of ssaFunc.blocks) {
+      for (let instrIndex = 0; instrIndex < block.instructions.length; instrIndex++) {
+        const instruction = block.instructions[instrIndex];
+        if (instruction.kind !== "phi") {
+          continue;
+        }
+        const uniqueInputs = /* @__PURE__ */ new Map();
+        for (const input of instruction.inputs) {
+          const key = isVariable(input.value) ? input.value.id : `const_${input.value.value}`;
+          if (!uniqueInputs.has(key)) {
+            uniqueInputs.set(key, input.value);
+          }
+        }
+        const filteredInputs = Array.from(uniqueInputs.values()).filter((value) => !(isVariable(value) && value.id === instruction.result.id));
+        if (filteredInputs.length === 1) {
+          block.instructions[instrIndex] = {
+            kind: "assign",
+            result: instruction.result,
+            value: filteredInputs[0]
+          };
+          changed = true;
+        }
+      }
+    }
+    return changed;
+  }
+  function localCommonSubexpressionElimination(ssaFunc) {
+    let changed = false;
+    for (const block of ssaFunc.blocks) {
+      const loadCache = /* @__PURE__ */ new Map();
+      for (let instrIndex = 0; instrIndex < block.instructions.length; instrIndex++) {
+        const instruction = block.instructions[instrIndex];
+        if (instruction.kind === "store" || instruction.kind === "call" || instruction.kind === "call_indirect") {
+          loadCache.clear();
+          continue;
+        }
+        if (instruction.kind === "load" && isVariable(instruction.address)) {
+          const key = `${instruction.address.id}:${instruction.offset}:${instruction.loadType}`;
+          const existing = loadCache.get(key);
+          if (existing) {
+            block.instructions[instrIndex] = {
+              kind: "assign",
+              result: instruction.result,
+              value: existing
+            };
+            changed = true;
+          } else {
+            loadCache.set(key, instruction.result);
+          }
+        }
+      }
+    }
+    return changed;
+  }
+
+  // src/decompiler/KnownFunctions.ts
+  var MAX_GENERATED_NAME_LENGTH = 12;
+  var KNOWN_FUNCTIONS = /* @__PURE__ */ new Map([
+    // ─── C Standard Library ───
+    // Memory management
+    ["malloc", { returnName: "buf", params: ["size"] }],
+    ["calloc", { returnName: "buf", params: ["count", "size"] }],
+    ["realloc", { returnName: "buf", params: ["ptr", "size"] }],
+    ["free", { returnName: null, params: ["ptr"] }],
+    ["alloca", { returnName: "buf", params: ["size"] }],
+    ["_alloca", { returnName: "buf", params: ["size"] }],
+    ["aligned_alloc", { returnName: "buf", params: ["alignment", "size"] }],
+    ["posix_memalign", { returnName: "err", params: ["memptr", "alignment", "size"] }],
+    ["mmap", { returnName: "addr", params: ["addr", "length", "prot", "flags", "fd", "offset"] }],
+    ["munmap", { returnName: "err", params: ["addr", "length"] }],
+    ["brk", { returnName: "err", params: ["addr"] }],
+    ["sbrk", { returnName: "prev", params: ["increment"] }],
+    // String operations
+    ["strlen", { returnName: "len", params: ["str"] }],
+    ["wcslen", { returnName: "len", params: ["str"] }],
+    ["strnlen", { returnName: "len", params: ["str", "max"] }],
+    ["strcpy", { returnName: "dst", params: ["dst", "src"] }],
+    ["strncpy", { returnName: "dst", params: ["dst", "src", "n"] }],
+    ["strcat", { returnName: "dst", params: ["dst", "src"] }],
+    ["strncat", { returnName: "dst", params: ["dst", "src", "n"] }],
+    ["strcmp", { returnName: "cmp", params: ["s1", "s2"] }],
+    ["strncmp", { returnName: "cmp", params: ["s1", "s2", "n"] }],
+    ["strcasecmp", { returnName: "cmp", params: ["s1", "s2"] }],
+    ["strncasecmp", { returnName: "cmp", params: ["s1", "s2", "n"] }],
+    ["strchr", { returnName: "pos", params: ["str", "ch"] }],
+    ["strrchr", { returnName: "pos", params: ["str", "ch"] }],
+    ["strstr", { returnName: "pos", params: ["haystack", "needle"] }],
+    ["strtok", { returnName: "token", params: ["str", "delim"] }],
+    ["strtok_r", { returnName: "token", params: ["str", "delim", "saveptr"] }],
+    ["strdup", { returnName: "copy", params: ["str"] }],
+    ["strndup", { returnName: "copy", params: ["str", "n"] }],
+    ["strspn", { returnName: "count", params: ["str", "accept"] }],
+    ["strcspn", { returnName: "count", params: ["str", "reject"] }],
+    ["strpbrk", { returnName: "pos", params: ["str", "accept"] }],
+    ["strerror", { returnName: "msg", params: ["errnum"] }],
+    ["strtol", { returnName: "val", params: ["str", "endptr", "base"] }],
+    ["strtoul", { returnName: "val", params: ["str", "endptr", "base"] }],
+    ["strtoll", { returnName: "val", params: ["str", "endptr", "base"] }],
+    ["strtoull", { returnName: "val", params: ["str", "endptr", "base"] }],
+    ["strtod", { returnName: "val", params: ["str", "endptr"] }],
+    ["strtof", { returnName: "val", params: ["str", "endptr"] }],
+    ["atoi", { returnName: "val", params: ["str"] }],
+    ["atol", { returnName: "val", params: ["str"] }],
+    ["atof", { returnName: "val", params: ["str"] }],
+    ["sprintf", { returnName: "len", params: ["buf", "fmt"] }],
+    ["snprintf", { returnName: "len", params: ["buf", "size", "fmt"] }],
+    ["sscanf", { returnName: "count", params: ["str", "fmt"] }],
+    ["vsprintf", { returnName: "len", params: ["buf", "fmt", "args"] }],
+    ["vsnprintf", { returnName: "len", params: ["buf", "size", "fmt", "args"] }],
+    // Memory operations
+    ["memcpy", { returnName: "dst", params: ["dst", "src", "n"] }],
+    ["memmove", { returnName: "dst", params: ["dst", "src", "n"] }],
+    ["memset", { returnName: "dst", params: ["dst", "ch", "n"] }],
+    ["memcmp", { returnName: "cmp", params: ["s1", "s2", "n"] }],
+    ["memchr", { returnName: "pos", params: ["str", "ch", "n"] }],
+    ["bzero", { returnName: null, params: ["str", "n"] }],
+    ["bcopy", { returnName: null, params: ["src", "dst", "n"] }],
+    // I/O
+    ["printf", { returnName: "len", params: ["fmt"] }],
+    ["fprintf", { returnName: "len", params: ["fp", "fmt"] }],
+    ["vprintf", { returnName: "len", params: ["fmt", "args"] }],
+    ["vfprintf", { returnName: "len", params: ["fp", "fmt", "args"] }],
+    ["puts", { returnName: "err", params: ["str"] }],
+    ["fputs", { returnName: "err", params: ["str", "fp"] }],
+    ["putchar", { returnName: "ch", params: ["ch"] }],
+    ["fputc", { returnName: "ch", params: ["ch", "fp"] }],
+    ["getchar", { returnName: "ch", params: [] }],
+    ["fgetc", { returnName: "ch", params: ["fp"] }],
+    ["getc", { returnName: "ch", params: ["fp"] }],
+    ["ungetc", { returnName: "ch", params: ["ch", "fp"] }],
+    ["fgets", { returnName: "str", params: ["str", "n", "fp"] }],
+    ["scanf", { returnName: "count", params: ["fmt"] }],
+    ["fscanf", { returnName: "count", params: ["fp", "fmt"] }],
+    ["fopen", { returnName: "fp", params: ["path", "mode"] }],
+    ["fclose", { returnName: "err", params: ["fp"] }],
+    ["fread", { returnName: "count", params: ["buf", "size", "count", "fp"] }],
+    ["fwrite", { returnName: "count", params: ["buf", "size", "count", "fp"] }],
+    ["fseek", { returnName: "err", params: ["fp", "offset", "whence"] }],
+    ["ftell", { returnName: "pos", params: ["fp"] }],
+    ["rewind", { returnName: null, params: ["fp"] }],
+    ["fflush", { returnName: "err", params: ["fp"] }],
+    ["feof", { returnName: "val", params: ["fp"] }],
+    ["ferror", { returnName: "err", params: ["fp"] }],
+    ["clearerr", { returnName: null, params: ["fp"] }],
+    ["remove", { returnName: "err", params: ["path"] }],
+    ["rename", { returnName: "err", params: ["old_path", "new_path"] }],
+    // Process / program
+    ["exit", { returnName: null, params: ["status"] }],
+    ["abort", { returnName: null, params: [] }],
+    ["atexit", { returnName: "err", params: ["func"] }],
+    ["getenv", { returnName: "val", params: ["name"] }],
+    ["putenv", { returnName: "err", params: ["str"] }],
+    ["setenv", { returnName: "err", params: ["name", "val", "overwrite"] }],
+    ["unsetenv", { returnName: "err", params: ["name"] }],
+    ["system", { returnName: "status", params: ["cmd"] }],
+    ["assert", { returnName: null, params: ["cond"] }],
+    // Math (integer)
+    ["abs", { returnName: "val", params: ["n"] }],
+    ["labs", { returnName: "val", params: ["n"] }],
+    ["llabs", { returnName: "val", params: ["n"] }],
+    ["rand", { returnName: "val", params: [] }],
+    ["srand", { returnName: null, params: ["seed"] }],
+    ["qsort", { returnName: null, params: ["base", "count", "size", "compare"] }],
+    ["bsearch", { returnName: "found", params: ["key", "base", "count", "size", "compare"] }],
+    // Math (floating point)
+    ["sqrt", { returnName: "val", params: ["val"] }],
+    ["sqrtf", { returnName: "val", params: ["val"] }],
+    ["fabs", { returnName: "val", params: ["val"] }],
+    ["fabsf", { returnName: "val", params: ["val"] }],
+    ["floor", { returnName: "val", params: ["val"] }],
+    ["floorf", { returnName: "val", params: ["val"] }],
+    ["ceil", { returnName: "val", params: ["val"] }],
+    ["ceilf", { returnName: "val", params: ["val"] }],
+    ["round", { returnName: "val", params: ["val"] }],
+    ["roundf", { returnName: "val", params: ["val"] }],
+    ["trunc", { returnName: "val", params: ["val"] }],
+    ["truncf", { returnName: "val", params: ["val"] }],
+    ["sin", { returnName: "val", params: ["angle"] }],
+    ["sinf", { returnName: "val", params: ["angle"] }],
+    ["cos", { returnName: "val", params: ["angle"] }],
+    ["cosf", { returnName: "val", params: ["angle"] }],
+    ["tan", { returnName: "val", params: ["angle"] }],
+    ["tanf", { returnName: "val", params: ["angle"] }],
+    ["asin", { returnName: "val", params: ["val"] }],
+    ["acos", { returnName: "val", params: ["val"] }],
+    ["atan", { returnName: "val", params: ["val"] }],
+    ["atan2", { returnName: "angle", params: ["y", "x"] }],
+    ["atan2f", { returnName: "angle", params: ["y", "x"] }],
+    ["pow", { returnName: "val", params: ["base", "exp"] }],
+    ["powf", { returnName: "val", params: ["base", "exp"] }],
+    ["log", { returnName: "val", params: ["val"] }],
+    ["logf", { returnName: "val", params: ["val"] }],
+    ["log2", { returnName: "val", params: ["val"] }],
+    ["log10", { returnName: "val", params: ["val"] }],
+    ["exp", { returnName: "val", params: ["val"] }],
+    ["expf", { returnName: "val", params: ["val"] }],
+    ["exp2", { returnName: "val", params: ["val"] }],
+    ["fmod", { returnName: "val", params: ["x", "y"] }],
+    ["fmodf", { returnName: "val", params: ["x", "y"] }],
+    ["fmin", { returnName: "val", params: ["x", "y"] }],
+    ["fmax", { returnName: "val", params: ["x", "y"] }],
+    ["copysign", { returnName: "val", params: ["x", "y"] }],
+    ["ldexp", { returnName: "val", params: ["x", "exp"] }],
+    ["frexp", { returnName: "val", params: ["x", "exp"] }],
+    ["modf", { returnName: "val", params: ["x", "iptr"] }],
+    // Time
+    ["time", { returnName: "t", params: ["tloc"] }],
+    ["clock", { returnName: "ticks", params: [] }],
+    ["difftime", { returnName: "diff", params: ["t1", "t0"] }],
+    ["mktime", { returnName: "t", params: ["tm"] }],
+    ["gmtime", { returnName: "tm", params: ["t"] }],
+    ["localtime", { returnName: "tm", params: ["t"] }],
+    ["strftime", { returnName: "len", params: ["buf", "max", "fmt", "tm"] }],
+    ["gettimeofday", { returnName: "err", params: ["tv", "tz"] }],
+    ["clock_gettime", { returnName: "err", params: ["clk_id", "tp"] }],
+    // ─── POSIX / Unix ───
+    // File & I/O
+    ["open", { returnName: "fd", params: ["path", "flags", "mode"] }],
+    ["close", { returnName: "err", params: ["fd"] }],
+    ["read", { returnName: "n", params: ["fd", "buf", "count"] }],
+    ["write", { returnName: "n", params: ["fd", "buf", "count"] }],
+    ["pread", { returnName: "n", params: ["fd", "buf", "count", "offset"] }],
+    ["pwrite", { returnName: "n", params: ["fd", "buf", "count", "offset"] }],
+    ["lseek", { returnName: "pos", params: ["fd", "offset", "whence"] }],
+    ["dup", { returnName: "fd", params: ["fd"] }],
+    ["dup2", { returnName: "fd", params: ["fd", "fd2"] }],
+    ["pipe", { returnName: "err", params: ["fds"] }],
+    ["fcntl", { returnName: "val", params: ["fd", "cmd"] }],
+    ["ioctl", { returnName: "val", params: ["fd", "request"] }],
+    ["stat", { returnName: "err", params: ["path", "statbuf"] }],
+    ["fstat", { returnName: "err", params: ["fd", "statbuf"] }],
+    ["lstat", { returnName: "err", params: ["path", "statbuf"] }],
+    ["access", { returnName: "err", params: ["path", "mode"] }],
+    ["chmod", { returnName: "err", params: ["path", "mode"] }],
+    ["chown", { returnName: "err", params: ["path", "uid", "gid"] }],
+    ["unlink", { returnName: "err", params: ["path"] }],
+    ["rmdir", { returnName: "err", params: ["path"] }],
+    ["mkdir", { returnName: "err", params: ["path", "mode"] }],
+    ["opendir", { returnName: "dir", params: ["path"] }],
+    ["readdir", { returnName: "entry", params: ["dir"] }],
+    ["closedir", { returnName: "err", params: ["dir"] }],
+    ["getcwd", { returnName: "path", params: ["buf", "size"] }],
+    ["chdir", { returnName: "err", params: ["path"] }],
+    ["realpath", { returnName: "path", params: ["path", "resolved"] }],
+    // Process
+    ["fork", { returnName: "pid", params: [] }],
+    ["execv", { returnName: "err", params: ["path", "argv"] }],
+    ["execve", { returnName: "err", params: ["path", "argv", "envp"] }],
+    ["waitpid", { returnName: "pid", params: ["pid", "status", "options"] }],
+    ["kill", { returnName: "err", params: ["pid", "sig"] }],
+    ["getpid", { returnName: "pid", params: [] }],
+    ["getppid", { returnName: "pid", params: [] }],
+    // Networking
+    ["socket", { returnName: "fd", params: ["domain", "type", "protocol"] }],
+    ["bind", { returnName: "err", params: ["fd", "addr", "addrlen"] }],
+    ["listen", { returnName: "err", params: ["fd", "backlog"] }],
+    ["accept", { returnName: "fd", params: ["fd", "addr", "addrlen"] }],
+    ["connect", { returnName: "err", params: ["fd", "addr", "addrlen"] }],
+    ["send", { returnName: "n", params: ["fd", "buf", "len", "flags"] }],
+    ["recv", { returnName: "n", params: ["fd", "buf", "len", "flags"] }],
+    ["sendto", { returnName: "n", params: ["fd", "buf", "len", "flags", "addr", "addrlen"] }],
+    ["recvfrom", { returnName: "n", params: ["fd", "buf", "len", "flags", "addr", "addrlen"] }],
+    ["setsockopt", { returnName: "err", params: ["fd", "level", "optname", "optval", "optlen"] }],
+    ["getsockopt", { returnName: "err", params: ["fd", "level", "optname", "optval", "optlen"] }],
+    ["htons", { returnName: "val", params: ["val"] }],
+    ["ntohs", { returnName: "val", params: ["val"] }],
+    ["htonl", { returnName: "val", params: ["val"] }],
+    ["ntohl", { returnName: "val", params: ["val"] }],
+    ["inet_addr", { returnName: "addr", params: ["str"] }],
+    ["inet_ntoa", { returnName: "str", params: ["addr"] }],
+    // Threads
+    ["pthread_create", { returnName: "err", params: ["thread", "attr", "func", "arg"] }],
+    ["pthread_join", { returnName: "err", params: ["thread", "retval"] }],
+    ["pthread_exit", { returnName: null, params: ["retval"] }],
+    ["pthread_mutex_init", { returnName: "err", params: ["mutex", "attr"] }],
+    ["pthread_mutex_lock", { returnName: "err", params: ["mutex"] }],
+    ["pthread_mutex_unlock", { returnName: "err", params: ["mutex"] }],
+    ["pthread_mutex_destroy", { returnName: "err", params: ["mutex"] }],
+    ["pthread_cond_wait", { returnName: "err", params: ["cond", "mutex"] }],
+    ["pthread_cond_signal", { returnName: "err", params: ["cond"] }],
+    ["pthread_cond_broadcast", { returnName: "err", params: ["cond"] }],
+    ["pthread_self", { returnName: "thread", params: [] }],
+    // ─── WASI ───
+    // File system
+    ["fd_read", { returnName: "err", params: ["fd", "iovs", "iovs_len", "nread"] }],
+    ["fd_write", { returnName: "err", params: ["fd", "iovs", "iovs_len", "nwritten"] }],
+    ["fd_seek", { returnName: "err", params: ["fd", "offset", "whence", "newoffset"] }],
+    ["fd_tell", { returnName: "err", params: ["fd", "offset"] }],
+    ["fd_close", { returnName: "err", params: ["fd"] }],
+    ["fd_sync", { returnName: "err", params: ["fd"] }],
+    ["fd_datasync", { returnName: "err", params: ["fd"] }],
+    ["fd_filestat_get", { returnName: "err", params: ["fd", "stat"] }],
+    ["fd_filestat_set_size", { returnName: "err", params: ["fd", "size"] }],
+    ["fd_filestat_set_times", { returnName: "err", params: ["fd", "atim", "mtim", "fst_flags"] }],
+    ["fd_pread", { returnName: "err", params: ["fd", "iovs", "iovs_len", "offset", "nread"] }],
+    ["fd_pwrite", { returnName: "err", params: ["fd", "iovs", "iovs_len", "offset", "nwritten"] }],
+    ["fd_readdir", { returnName: "err", params: ["fd", "buf", "buf_len", "cookie", "bufused"] }],
+    ["fd_renumber", { returnName: "err", params: ["fd", "to"] }],
+    ["fd_advise", { returnName: "err", params: ["fd", "offset", "len", "advice"] }],
+    ["fd_allocate", { returnName: "err", params: ["fd", "offset", "len"] }],
+    ["fd_prestat_get", { returnName: "err", params: ["fd", "buf"] }],
+    ["fd_prestat_dir_name", { returnName: "err", params: ["fd", "path", "path_len"] }],
+    ["path_open", { returnName: "err", params: ["fd", "dirflags", "path", "path_len", "oflags", "rights_base", "rights_inheriting", "fdflags", "opened_fd"] }],
+    ["path_create_directory", { returnName: "err", params: ["fd", "path", "path_len"] }],
+    ["path_remove_directory", { returnName: "err", params: ["fd", "path", "path_len"] }],
+    ["path_unlink_file", { returnName: "err", params: ["fd", "path", "path_len"] }],
+    ["path_rename", { returnName: "err", params: ["old_fd", "old_path", "old_path_len", "new_fd", "new_path", "new_path_len"] }],
+    ["path_filestat_get", { returnName: "err", params: ["fd", "flags", "path", "path_len", "buf"] }],
+    // WASI environment / process / random
+    ["environ_get", { returnName: "err", params: ["environ", "environ_buf"] }],
+    ["environ_sizes_get", { returnName: "err", params: ["environ_count", "environ_buf_size"] }],
+    ["args_get", { returnName: "err", params: ["argv", "argv_buf"] }],
+    ["args_sizes_get", { returnName: "err", params: ["argc", "argv_buf_size"] }],
+    ["clock_time_get", { returnName: "err", params: ["clock_id", "precision", "time"] }],
+    ["clock_res_get", { returnName: "err", params: ["clock_id", "resolution"] }],
+    ["proc_exit", { returnName: null, params: ["rval"] }],
+    ["proc_raise", { returnName: "err", params: ["sig"] }],
+    ["random_get", { returnName: "err", params: ["buf", "buf_len"] }],
+    ["poll_oneoff", { returnName: "err", params: ["in_subs", "out_events", "nsubscriptions", "nevents"] }],
+    ["sched_yield", { returnName: "err", params: [] }],
+    ["sock_accept", { returnName: "err", params: ["fd", "flags", "connection"] }],
+    ["sock_recv", { returnName: "err", params: ["fd", "ri_data", "ri_data_len", "ri_flags", "ro_datalen", "ro_flags"] }],
+    ["sock_send", { returnName: "err", params: ["fd", "si_data", "si_data_len", "si_flags", "so_datalen"] }],
+    ["sock_shutdown", { returnName: "err", params: ["fd", "how"] }],
+    // ─── Emscripten Runtime ───
+    ["emscripten_memcpy_js", { returnName: "dst", params: ["dst", "src", "n"] }],
+    ["emscripten_memcpy_big", { returnName: "dst", params: ["dst", "src", "n"] }],
+    ["emscripten_resize_heap", { returnName: "ok", params: ["size"] }],
+    ["emscripten_get_heap_max", { returnName: "size", params: [] }],
+    ["emscripten_get_sbrk_ptr", { returnName: "ptr", params: [] }],
+    ["emscripten_notify_memory_growth", { returnName: null, params: ["mem_index"] }],
+    ["emscripten_stack_init", { returnName: null, params: [] }],
+    ["emscripten_stack_get_free", { returnName: "size", params: [] }],
+    ["emscripten_stack_get_base", { returnName: "ptr", params: [] }],
+    ["emscripten_stack_get_end", { returnName: "ptr", params: [] }],
+    ["emscripten_stack_get_current", { returnName: "ptr", params: [] }],
+    ["_emscripten_stack_restore", { returnName: null, params: ["ptr"] }],
+    ["_emscripten_stack_alloc", { returnName: "ptr", params: ["size"] }],
+    ["emscripten_run_script", { returnName: null, params: ["script"] }],
+    ["emscripten_run_script_int", { returnName: "val", params: ["script"] }],
+    ["emscripten_set_main_loop", { returnName: null, params: ["func", "fps", "simulate_infinite_loop"] }],
+    ["emscripten_get_now", { returnName: "ms", params: [] }],
+    ["emscripten_sleep", { returnName: null, params: ["ms"] }],
+    // C++ exceptions (Emscripten and libc++)
+    ["__cxa_allocate_exception", { returnName: "ex", params: ["size"] }],
+    ["__cxa_throw", { returnName: null, params: ["ex", "type", "destructor"] }],
+    ["__cxa_begin_catch", { returnName: "ex", params: ["ex"] }],
+    ["__cxa_end_catch", { returnName: null, params: [] }],
+    ["__cxa_rethrow", { returnName: null, params: [] }],
+    ["__cxa_pure_virtual", { returnName: null, params: [] }],
+    ["__cxa_guard_acquire", { returnName: "acquired", params: ["guard"] }],
+    ["__cxa_guard_release", { returnName: null, params: ["guard"] }],
+    ["__cxa_demangle", { returnName: "name", params: ["mangled", "buf", "len", "status"] }],
+    // setjmp/longjmp
+    ["setjmp", { returnName: "val", params: ["env"] }],
+    ["longjmp", { returnName: null, params: ["env", "val"] }],
+    // ─── wasm-bindgen / Rust WASM ───
+    ["__wbindgen_malloc", { returnName: "buf", params: ["size"] }],
+    ["__wbindgen_realloc", { returnName: "buf", params: ["ptr", "old_size", "new_size"] }],
+    ["__wbindgen_free", { returnName: null, params: ["ptr", "size"] }],
+    ["__wbindgen_exn_store", { returnName: null, params: ["idx"] }],
+    ["__wbindgen_add_to_stack_pointer", { returnName: "ptr", params: ["n"] }],
+    ["__wbindgen_string_new", { returnName: "str", params: ["ptr", "len"] }],
+    ["__wbindgen_object_clone_ref", { returnName: "obj", params: ["idx"] }],
+    ["__wbindgen_object_drop_ref", { returnName: null, params: ["idx"] }],
+    ["__wbindgen_cb_drop", { returnName: "dropped", params: ["idx"] }],
+    ["__wbindgen_json_parse", { returnName: "val", params: ["ptr", "len"] }],
+    ["__wbindgen_jsval_eq", { returnName: "equal", params: ["a", "b"] }],
+    ["__wbindgen_is_null", { returnName: "ok", params: ["v"] }],
+    ["__wbindgen_is_undefined", { returnName: "ok", params: ["v"] }],
+    ["__wbindgen_is_function", { returnName: "ok", params: ["v"] }],
+    ["__wbindgen_number_new", { returnName: "num", params: ["n"] }],
+    // Rust runtime
+    ["__rust_alloc", { returnName: "buf", params: ["size", "align"] }],
+    ["__rust_dealloc", { returnName: null, params: ["ptr", "size", "align"] }],
+    ["__rust_realloc", { returnName: "buf", params: ["ptr", "old_size", "align", "new_size"] }],
+    ["__rust_alloc_zeroed", { returnName: "buf", params: ["size", "align"] }],
+    // ─── Go WASM Runtime ───
+    ["runtime.wasmExit", { returnName: null, params: ["code"] }],
+    ["runtime.wasmWrite", { returnName: null, params: ["fd", "p", "n"] }],
+    ["runtime.nanotime1", { returnName: "ns", params: [] }],
+    ["runtime.walltime", { returnName: "sec", params: [] }],
+    ["runtime.scheduleTimeoutEvent", { returnName: "id", params: ["delay"] }],
+    ["runtime.clearTimeoutEvent", { returnName: null, params: ["id"] }],
+    ["runtime.getRandomData", { returnName: null, params: ["buf"] }],
+    ["syscall/js.valueGet", { returnName: "ref", params: ["v", "p", "len"] }],
+    ["syscall/js.valueSet", { returnName: null, params: ["v", "p", "len", "x"] }],
+    ["syscall/js.valueCall", { returnName: "ref", params: ["v", "m", "ml", "args", "al", "err"] }],
+    ["syscall/js.valueNew", { returnName: "ref", params: ["v", "args", "al", "err"] }],
+    ["syscall/js.valueLength", { returnName: "len", params: ["v"] }],
+    ["syscall/js.copyBytesToGo", { returnName: "n", params: ["dst", "dl", "src"] }],
+    ["syscall/js.copyBytesToJS", { returnName: "n", params: ["dst", "src", "sl"] }],
+    // ─── AssemblyScript Runtime ───
+    ["__new", { returnName: "ptr", params: ["size", "id"] }],
+    ["__pin", { returnName: "ptr", params: ["ptr"] }],
+    ["__unpin", { returnName: null, params: ["ptr"] }],
+    ["__collect", { returnName: null, params: [] }],
+    // ─── C++ operators (demangled names) ───
+    ["operator new", { returnName: "obj", params: ["size"] }],
+    ["operator new[]", { returnName: "arr", params: ["size"] }],
+    ["operator delete", { returnName: null, params: ["ptr"] }],
+    ["operator delete[]", { returnName: null, params: ["ptr"] }]
+  ]);
+  function lookupKnownFunction(functionName) {
+    const exact = KNOWN_FUNCTIONS.get(functionName);
+    if (exact) {
+      return exact;
+    }
+    const stripped = functionName.replace(/^(__?|_?\$|dlsym_|wasm_)/, "");
+    const strippedResult = KNOWN_FUNCTIONS.get(stripped);
+    if (strippedResult) {
+      return strippedResult;
+    }
+    if (functionName.startsWith("__wbg_")) {
+      const rest = functionName.slice(6).replace(/_[0-9a-f]+$/, "");
+      if (rest.length > 0) {
+        return { returnName: rest.slice(0, MAX_GENERATED_NAME_LENGTH), params: [] };
+      }
+    }
+    const getMatch = functionName.match(/^(?:get|fetch|read|load)_(.+)/);
+    if (getMatch) {
+      return { returnName: getMatch[1].slice(0, MAX_GENERATED_NAME_LENGTH), params: [] };
+    }
+    const createMatch = functionName.match(/^(?:create|new|alloc|make)_(.+)/);
+    if (createMatch) {
+      return { returnName: createMatch[1].slice(0, MAX_GENERATED_NAME_LENGTH), params: [] };
+    }
+    const sizeMatch = functionName.match(/^(.+)_(?:count|size|len|length)$/);
+    if (sizeMatch) {
+      return { returnName: "count", params: [] };
+    }
+    const boolMatch = functionName.match(/^(?:is|has|can|check)_(.+)/);
+    if (boolMatch) {
+      return { returnName: "ok", params: [] };
+    }
+    const parseMatch = functionName.match(/^(?:parse|decode)_(.+)/);
+    if (parseMatch) {
+      return { returnName: parseMatch[1].slice(0, MAX_GENERATED_NAME_LENGTH), params: [] };
+    }
+    return null;
+  }
+
+  // src/decompiler/SsaLowering.ts
+  var MIN_STRING_ADDRESS = 256;
+  function lowerSsaToStatements(node, ssaFunc, names) {
+    const defMap = buildDefMap2(ssaFunc);
+    const useCount = buildUseCount(ssaFunc);
+    const useSiteContext = buildUseSiteContext(ssaFunc);
+    const exprCache = /* @__PURE__ */ new Map();
+    const resolvedNames = /* @__PURE__ */ new Map();
+    const nameUsageCount = /* @__PURE__ */ new Map();
+    for (const block of ssaFunc.blocks) {
+      for (const instr of block.instructions) {
+        const result = getResult(instr);
+        if (!result || resolvedNames.has(result.id)) {
+          continue;
+        }
+        const baseName = result.name;
+        if (baseName.startsWith("local") || baseName.startsWith("param") || baseName.startsWith("phi") || baseName.startsWith("neg")) {
+          continue;
+        }
+        const uses = useCount.get(result.id) || 0;
+        const alwaysInline = instr.kind === "const" || instr.kind === "global_get" || instr.kind === "compare" || instr.kind === "unary";
+        if ((uses <= 1 || alwaysInline) && canInline(instr)) {
+          continue;
+        }
+        const candidateName = computeVarName(result);
+        if (candidateName.startsWith("global_") || candidateName.startsWith("__")) {
+          resolvedNames.set(result.id, candidateName);
+          continue;
+        }
+        const usedCount = nameUsageCount.get(candidateName) || 0;
+        const finalName = usedCount === 0 ? candidateName : `${candidateName}${usedCount + 1}`;
+        nameUsageCount.set(candidateName, usedCount + 1);
+        resolvedNames.set(result.id, finalName);
+      }
+    }
+    const usedInSelect = /* @__PURE__ */ new Set();
+    for (const block of ssaFunc.blocks) {
+      for (const instr of block.instructions) {
+        if (instr.kind === "select") {
+          for (const operand of [instr.condition, instr.trueVal, instr.falseVal]) {
+            if (isVariable2(operand)) {
+              usedInSelect.add(operand.id);
+            }
+          }
+        }
+      }
+    }
+    for (const block of ssaFunc.blocks) {
+      for (const instr of block.instructions) {
+        const result = getResult(instr);
+        if (!result) {
+          continue;
+        }
+        if ((instr.kind === "call" || instr.kind === "call_indirect") && usedInSelect.has(result.id)) {
+          continue;
+        }
+        const uses = useCount.get(result.id) || 0;
+        const alwaysInline = instr.kind === "const" || instr.kind === "global_get" || instr.kind === "compare" || instr.kind === "unary";
+        if ((uses <= 1 || alwaysInline) && canInline(instr)) {
+          const expr = instrToExpression(instr);
+          if (expr) {
+            exprCache.set(result.id, expr);
+          }
+        }
+      }
+    }
+    function resolveValue(value) {
+      if (isConst2(value)) {
+        const numVal = Number(value.value);
+        if (names.resolveAddress && numVal > MIN_STRING_ADDRESS) {
+          const resolved = names.resolveAddress(numVal);
+          if (resolved) {
+            return { kind: "string_literal", value: resolved, address: numVal };
+          }
+        }
+        return { kind: "const", value: value.value, type: value.type };
+      }
+      if (isVariable2(value)) {
+        const cached = exprCache.get(value.id);
+        if (cached) {
+          return cached;
+        }
+        const def = defMap.get(value.id);
+        if (def && def.kind === "const") {
+          const constVal = Number(def.value);
+          if (names.resolveAddress && constVal > MIN_STRING_ADDRESS) {
+            const resolved = names.resolveAddress(constVal);
+            if (resolved) {
+              return { kind: "string_literal", value: resolved, address: constVal };
+            }
+          }
+          return { kind: "const", value: def.value, type: def.type };
+        }
+        return { kind: "var", name: resolveVarName(value), type: value.type };
+      }
+      return { kind: "const", value: 0, type: "i32" };
+    }
+    function resolveVarName(variable) {
+      const resolved = resolvedNames.get(variable.id);
+      if (resolved) {
+        return resolved;
+      }
+      return computeVarName(variable);
+    }
+    function computeVarName(variable) {
+      const baseName = variable.name;
+      const localMatch = baseName.match(/^(?:local|param)(\d+)/);
+      if (localMatch) {
+        return names.localName(parseInt(localMatch[1], 10));
+      }
+      const phiMatch = baseName.match(/^phi_(\d+)/);
+      if (phiMatch) {
+        return names.localName(parseInt(phiMatch[1], 10));
+      }
+      const negMatch = baseName.match(/^neg_(\d+)/);
+      if (negMatch) {
+        return `neg_${negMatch[1]}`;
+      }
+      const def = defMap.get(variable.id);
+      if (def) {
+        if (def.kind === "call" && def.target >= 0) {
+          const rawName = names.functionName(def.target);
+          const known = lookupKnownFunction(rawName);
+          if (known && known.returnName) {
+            return known.returnName;
+          }
+          return "val";
+        }
+        if (def.kind === "call_indirect") {
+          return "val";
+        }
+        if (def.kind === "load") {
+          return "val";
+        }
+        if (def.kind === "global_get") {
+          return names.globalName(def.globalIndex);
+        }
+        if (def.kind === "const") {
+          const constValue = Number(def.value);
+          if (constValue === 0 || constValue === 1) {
+            return "ok";
+          }
+        }
+      }
+      const contexts = useSiteContext.get(variable.id);
+      if (contexts && contexts.has("address")) {
+        return "ptr";
+      }
+      return "val";
+    }
+    function instrToExpression(instr) {
+      switch (instr.kind) {
+        case "const":
+          return resolveValue({ kind: "const", value: instr.value, type: instr.type });
+        case "binary":
+          return { kind: "binary", op: instr.op, left: resolveValue(instr.left), right: resolveValue(instr.right) };
+        case "unary":
+          return { kind: "unary", op: instr.op, operand: resolveValue(instr.operand) };
+        case "compare":
+          return { kind: "compare", op: instr.op, left: resolveValue(instr.left), right: resolveValue(instr.right) };
+        case "load":
+          return { kind: "load", address: resolveValue(instr.address), offset: instr.offset, loadType: instr.loadType };
+        case "convert":
+          return { kind: "convert", op: instr.op, operand: resolveValue(instr.operand) };
+        case "select":
+          return { kind: "select", condition: resolveValue(instr.condition), trueVal: resolveValue(instr.trueVal), falseVal: resolveValue(instr.falseVal) };
+        case "global_get":
+          return { kind: "global", name: names.globalName(instr.globalIndex) };
+        case "assign":
+          return resolveValue(instr.value);
+        case "call":
+          if (instr.result) {
+            const funcName = instr.target >= 0 ? names.functionName(instr.target) : instr.target === -1 ? "memory.size" : "memory.grow";
+            return { kind: "call", name: funcName, args: instr.args.map((a) => resolveValue(a)) };
+          }
+          return null;
+        case "call_indirect":
+          if (instr.result) {
+            return { kind: "call_indirect", tableIndex: resolveValue(instr.tableIndex), args: instr.args.map((a) => resolveValue(a)) };
+          }
+          return null;
+        default:
+          return null;
+      }
+    }
+    function instrToStatement(instr) {
+      const result = getResult(instr);
+      if (result && exprCache.has(result.id)) {
+        return null;
+      }
+      switch (instr.kind) {
+        case "assign": {
+          const targetName = resolveVarName(instr.result);
+          return { kind: "assign", target: targetName, type: instr.result.type, value: resolveValue(instr.value) };
+        }
+        case "const": {
+          const targetName = resolveVarName(instr.result);
+          return { kind: "assign", target: targetName, type: instr.type, value: { kind: "const", value: instr.value, type: instr.type } };
+        }
+        case "binary": {
+          const targetName = resolveVarName(instr.result);
+          return { kind: "assign", target: targetName, type: instr.result.type, value: { kind: "binary", op: instr.op, left: resolveValue(instr.left), right: resolveValue(instr.right) } };
+        }
+        case "unary": {
+          const targetName = resolveVarName(instr.result);
+          return { kind: "assign", target: targetName, type: instr.result.type, value: { kind: "unary", op: instr.op, operand: resolveValue(instr.operand) } };
+        }
+        case "compare": {
+          const targetName = resolveVarName(instr.result);
+          return { kind: "assign", target: targetName, type: "i32", value: { kind: "compare", op: instr.op, left: resolveValue(instr.left), right: resolveValue(instr.right) } };
+        }
+        case "load": {
+          const targetName = resolveVarName(instr.result);
+          return { kind: "assign", target: targetName, type: instr.result.type, value: { kind: "load", address: resolveValue(instr.address), offset: instr.offset, loadType: instr.loadType } };
+        }
+        case "store":
+          return { kind: "store", address: resolveValue(instr.address), offset: instr.offset, storeType: instr.storeType, value: resolveValue(instr.value) };
+        case "call": {
+          const funcName = instr.target >= 0 ? names.functionName(instr.target) : instr.target === -1 ? "memory.size" : "memory.grow";
+          let resultName = instr.result ? resolveVarName(instr.result) : null;
+          return { kind: "call", name: funcName, args: instr.args.map((a) => resolveValue(a)), result: resultName };
+        }
+        case "call_indirect": {
+          let resultName = instr.result ? resolveVarName(instr.result) : null;
+          return { kind: "call_indirect", tableIndex: resolveValue(instr.tableIndex), args: instr.args.map((a) => resolveValue(a)), result: resultName };
+        }
+        case "convert": {
+          const targetName = resolveVarName(instr.result);
+          return { kind: "assign", target: targetName, type: instr.result.type, value: { kind: "convert", op: instr.op, operand: resolveValue(instr.operand) } };
+        }
+        case "select": {
+          const targetName = resolveVarName(instr.result);
+          return { kind: "assign", target: targetName, type: instr.result.type, value: { kind: "select", condition: resolveValue(instr.condition), trueVal: resolveValue(instr.trueVal), falseVal: resolveValue(instr.falseVal) } };
+        }
+        case "global_get": {
+          const targetName = resolveVarName(instr.result);
+          return { kind: "assign", target: targetName, type: instr.result.type, value: { kind: "global", name: names.globalName(instr.globalIndex) } };
+        }
+        case "global_set":
+          return { kind: "global_set", name: names.globalName(instr.globalIndex), value: resolveValue(instr.value) };
+        case "return":
+          return { kind: "return", value: instr.value ? resolveValue(instr.value) : null };
+        case "unreachable":
+          return { kind: "unreachable" };
+        case "phi":
+        case "branch":
+        case "branch_if":
+        case "branch_table":
+          return null;
+        default:
+          return null;
+      }
+    }
+    function lowerNode(structuredNode) {
+      switch (structuredNode.kind) {
+        case "sequence":
+          return { kind: "sequence", children: structuredNode.children.map((c) => lowerNode(c)) };
+        case "block": {
+          const statements = [];
+          for (const instr of structuredNode.body) {
+            const stmt = instrToStatement(instr);
+            if (stmt) {
+              statements.push(stmt);
+            }
+          }
+          return { kind: "block", body: statements };
+        }
+        case "if":
+          return {
+            kind: "if",
+            condition: resolveValue(structuredNode.condition),
+            thenBody: lowerNode(structuredNode.thenBody),
+            elseBody: structuredNode.elseBody ? lowerNode(structuredNode.elseBody) : null
+          };
+        case "while":
+          return {
+            kind: "while",
+            condition: structuredNode.condition ? resolveValue(structuredNode.condition) : null,
+            body: lowerNode(structuredNode.body)
+          };
+        case "do_while":
+          return {
+            kind: "do_while",
+            body: lowerNode(structuredNode.body),
+            condition: resolveValue(structuredNode.condition)
+          };
+        case "switch":
+          return {
+            kind: "switch",
+            selector: resolveValue(structuredNode.selector),
+            cases: structuredNode.cases.map((c) => ({ values: c.values, body: lowerNode(c.body) })),
+            defaultBody: lowerNode(structuredNode.defaultBody)
+          };
+        case "break":
+          return { kind: "break" };
+        case "continue":
+          return { kind: "continue" };
+        case "return":
+          return { kind: "return", value: structuredNode.value ? resolveValue(structuredNode.value) : null };
+        case "unreachable":
+          return { kind: "unreachable" };
+        case "labeled_block":
+          return { kind: "labeled_block", label: structuredNode.label, body: lowerNode(structuredNode.body) };
+        case "labeled_break":
+          return { kind: "labeled_break", label: structuredNode.label };
+        case "labeled_continue":
+          return { kind: "labeled_continue", label: structuredNode.label };
+      }
+    }
+    return reduceNesting2(cleanupLowered(detectForLoops(hoistCommonAssigns(eliminateDeadAssigns(lowerNode(node))))));
+  }
+  function isConst2(value) {
+    return "kind" in value && value.kind === "const";
+  }
+  function isVariable2(value) {
+    return "id" in value && !("kind" in value);
+  }
+  function getResult(instr) {
+    switch (instr.kind) {
+      case "phi":
+      case "assign":
+      case "const":
+      case "binary":
+      case "unary":
+      case "compare":
+      case "load":
+      case "convert":
+      case "select":
+      case "global_get":
+        return instr.result;
+      case "call":
+      case "call_indirect":
+        return instr.result || null;
+      default:
+        return null;
+    }
+  }
+  function canInline(instr) {
+    if (instr.kind === "assign") {
+      if (instr.result.name.startsWith("local") || instr.result.name.startsWith("phi")) {
+        return false;
+      }
+      return true;
+    }
+    if (instr.kind === "call" || instr.kind === "call_indirect") {
+      return true;
+    }
+    return instr.kind === "const" || instr.kind === "binary" || instr.kind === "unary" || instr.kind === "compare" || instr.kind === "convert" || instr.kind === "global_get" || instr.kind === "load" || instr.kind === "select";
+  }
+  function buildDefMap2(ssaFunc) {
+    const defMap = /* @__PURE__ */ new Map();
+    for (const block of ssaFunc.blocks) {
+      for (const instr of block.instructions) {
+        const result = getResult(instr);
+        if (result) {
+          defMap.set(result.id, instr);
+        }
+      }
+    }
+    return defMap;
+  }
+  function buildUseCount(ssaFunc) {
+    const useCount = /* @__PURE__ */ new Map();
+    function count(value) {
+      if (isVariable2(value)) {
+        useCount.set(value.id, (useCount.get(value.id) || 0) + 1);
+      }
+    }
+    for (const block of ssaFunc.blocks) {
+      for (const instr of block.instructions) {
+        if (instr.kind === "phi") {
+          continue;
+        }
+        visitOperands(instr, count);
+      }
+    }
+    return useCount;
+  }
+  function buildUseSiteContext(ssaFunc) {
+    const contextMap = /* @__PURE__ */ new Map();
+    function addContext(value, context) {
+      if (isVariable2(value)) {
+        let contexts = contextMap.get(value.id);
+        if (!contexts) {
+          contexts = /* @__PURE__ */ new Set();
+          contextMap.set(value.id, contexts);
+        }
+        contexts.add(context);
+      }
+    }
+    for (const block of ssaFunc.blocks) {
+      for (const instr of block.instructions) {
+        if (instr.kind === "load") {
+          addContext(instr.address, "address");
+        } else if (instr.kind === "store") {
+          addContext(instr.address, "address");
+        }
+      }
+    }
+    return contextMap;
+  }
+  function visitOperands(instr, visitor) {
+    switch (instr.kind) {
+      case "phi":
+        for (const input of instr.inputs) {
+          visitor(input.value);
+        }
+        break;
+      case "assign":
+        visitor(instr.value);
+        break;
+      case "binary":
+        visitor(instr.left);
+        visitor(instr.right);
+        break;
+      case "unary":
+        visitor(instr.operand);
+        break;
+      case "compare":
+        visitor(instr.left);
+        visitor(instr.right);
+        break;
+      case "load":
+        visitor(instr.address);
+        break;
+      case "store":
+        visitor(instr.address);
+        visitor(instr.value);
+        break;
+      case "call":
+        for (const arg of instr.args) {
+          visitor(arg);
+        }
+        break;
+      case "call_indirect":
+        visitor(instr.tableIndex);
+        for (const arg of instr.args) {
+          visitor(arg);
+        }
+        break;
+      case "convert":
+        visitor(instr.operand);
+        break;
+      case "select":
+        visitor(instr.condition);
+        visitor(instr.trueVal);
+        visitor(instr.falseVal);
+        break;
+      case "global_set":
+        visitor(instr.value);
+        break;
+      case "branch_if":
+        visitor(instr.condition);
+        break;
+      case "branch_table":
+        visitor(instr.selector);
+        break;
+      case "return":
+        if (instr.value) {
+          visitor(instr.value);
+        }
+        break;
+    }
+  }
+  function hoistCommonAssigns(node) {
+    switch (node.kind) {
+      case "sequence": {
+        const children = node.children.map((child) => hoistCommonAssigns(child));
+        const result = [];
+        for (const child of children) {
+          if (child.kind === "if" && child.elseBody !== null) {
+            const ifWithElse = child;
+            const hoisted = tryHoistFromBranches(ifWithElse);
+            if (hoisted) {
+              for (const pre of hoisted.hoisted) {
+                result.push(pre);
+              }
+              result.push(hoisted.remaining);
+              continue;
+            }
+          }
+          result.push(child);
+        }
+        if (result.length === 1) {
+          return result[0];
+        }
+        return { kind: "sequence", children: result };
+      }
+      case "if": {
+        const thenBody = hoistCommonAssigns(node.thenBody);
+        const elseBody = node.elseBody ? hoistCommonAssigns(node.elseBody) : null;
+        const ifNode = { kind: "if", condition: node.condition, thenBody, elseBody };
+        if (elseBody !== null) {
+          const ifWithElse = ifNode;
+          const hoisted = tryHoistFromBranches(ifWithElse);
+          if (hoisted) {
+            const parts = [...hoisted.hoisted];
+            if (!isEmptyLowered(hoisted.remaining)) {
+              parts.push(hoisted.remaining);
+            }
+            if (parts.length === 1) {
+              return parts[0];
+            }
+            return { kind: "sequence", children: parts };
+          }
+        }
+        return ifNode;
+      }
+      case "while":
+        return { kind: "while", condition: node.condition, body: hoistCommonAssigns(node.body) };
+      case "do_while":
+        return { kind: "do_while", body: hoistCommonAssigns(node.body), condition: node.condition };
+      case "for":
+        return { kind: "for", init: node.init, condition: node.condition, increment: node.increment, body: hoistCommonAssigns(node.body) };
+      case "labeled_block":
+        return { kind: "labeled_block", label: node.label, body: hoistCommonAssigns(node.body) };
+      case "switch":
+        return {
+          kind: "switch",
+          selector: node.selector,
+          cases: node.cases.map((caseEntry) => ({ values: caseEntry.values, body: hoistCommonAssigns(caseEntry.body) })),
+          defaultBody: hoistCommonAssigns(node.defaultBody)
+        };
+      default:
+        return node;
+    }
+  }
+  function tryHoistFromBranches(ifNode) {
+    const hoisted = [];
+    let thenBody = ifNode.thenBody;
+    let elseBody = ifNode.elseBody;
+    const thenFirstAssigns = collectFirstAssignPerVar(thenBody);
+    const elseFirstAssigns = collectFirstAssignPerVar(elseBody);
+    for (const [target, thenStmt] of thenFirstAssigns) {
+      const elseStmt = elseFirstAssigns.get(target);
+      if (!elseStmt) {
+        continue;
+      }
+      if (!expressionsEqual(thenStmt.value, elseStmt.value)) {
+        continue;
+      }
+      hoisted.push({ kind: "block", body: [thenStmt] });
+      thenBody = removeFirstAssignTo(thenBody, target);
+      elseBody = removeFirstAssignTo(elseBody, target);
+    }
+    const thenOnlyAssigns = collectUniqueAssigns(thenBody);
+    const elseOnlyAssigns = collectUniqueAssigns(elseBody);
+    for (const [target, elseStmt] of elseOnlyAssigns) {
+      const thenStmt = thenOnlyAssigns.get(target);
+      if (!thenStmt) {
+        continue;
+      }
+      if (!isSmallConst(thenStmt.value) || !isSmallConst(elseStmt.value)) {
+        continue;
+      }
+      if (expressionsEqual(thenStmt.value, elseStmt.value)) {
+        continue;
+      }
+      const ternary = {
+        kind: "assign",
+        target: thenStmt.target,
+        type: thenStmt.type,
+        value: { kind: "select", condition: ifNode.condition, trueVal: thenStmt.value, falseVal: elseStmt.value }
+      };
+      hoisted.push({ kind: "block", body: [ternary] });
+      thenBody = removeAssignTo(thenBody, target);
+      elseBody = removeAssignTo(elseBody, target);
+    }
+    if (hoisted.length === 0) {
+      return null;
+    }
+    const thenEmpty = isEmptyLowered(thenBody);
+    const elseEmpty = isEmptyLowered(elseBody);
+    if (thenEmpty && elseEmpty) {
+      return { hoisted, remaining: { kind: "sequence", children: [] } };
+    }
+    const remaining = { kind: "if", condition: ifNode.condition, thenBody, elseBody: elseEmpty ? null : elseBody };
+    return { hoisted, remaining };
+  }
+  function collectFirstAssignPerVar(node) {
+    const result = /* @__PURE__ */ new Map();
+    walkAssigns(node, (stmt) => {
+      if (!result.has(stmt.target)) {
+        result.set(stmt.target, stmt);
+      }
+    });
+    return result;
+  }
+  function walkAssigns(node, callback) {
+    if (node.kind === "block") {
+      for (const stmt of node.body) {
+        if (stmt.kind === "assign") {
+          callback(stmt);
+        }
+      }
+    } else if (node.kind === "sequence") {
+      for (const child of node.children) {
+        walkAssigns(child, callback);
+      }
+    }
+  }
+  function collectUniqueAssigns(node) {
+    const all = /* @__PURE__ */ new Map();
+    collectAllAssigns(node, all);
+    const result = /* @__PURE__ */ new Map();
+    for (const [target, entry] of all) {
+      if (entry.count === 1) {
+        result.set(target, entry.stmt);
+      }
+    }
+    return result;
+  }
+  function collectAllAssigns(node, out) {
+    if (node.kind === "block") {
+      for (const stmt of node.body) {
+        if (stmt.kind === "assign") {
+          const existing = out.get(stmt.target);
+          if (existing) {
+            existing.count++;
+          } else {
+            out.set(stmt.target, { stmt, count: 1 });
+          }
+        }
+      }
+    } else if (node.kind === "sequence") {
+      for (const child of node.children) {
+        collectAllAssigns(child, out);
+      }
+    }
+  }
+  function removeFirstAssignTo(node, target) {
+    if (node.kind === "block") {
+      for (let index = 0; index < node.body.length; index++) {
+        if (node.body[index].kind === "assign" && node.body[index].target === target) {
+          const remaining = [...node.body.slice(0, index), ...node.body.slice(index + 1)];
+          if (remaining.length === 0) {
+            return { kind: "sequence", children: [] };
+          }
+          return { kind: "block", body: remaining };
+        }
+      }
+    }
+    if (node.kind === "sequence") {
+      for (let index = 0; index < node.children.length; index++) {
+        const updated = removeFirstAssignTo(node.children[index], target);
+        if (updated !== node.children[index]) {
+          const children = [...node.children.slice(0, index), updated, ...node.children.slice(index + 1)].filter((child) => !isEmptyLowered(child));
+          if (children.length === 0) {
+            return { kind: "sequence", children: [] };
+          }
+          if (children.length === 1) {
+            return children[0];
+          }
+          return { kind: "sequence", children };
+        }
+      }
+    }
+    return node;
+  }
+  function removeAssignTo(node, target) {
+    if (node.kind === "block") {
+      const filtered = node.body.filter((stmt) => !(stmt.kind === "assign" && stmt.target === target));
+      if (filtered.length === 0) {
+        return { kind: "sequence", children: [] };
+      }
+      return { kind: "block", body: filtered };
+    }
+    if (node.kind === "sequence") {
+      const children = node.children.map((child) => removeAssignTo(child, target)).filter((child) => !isEmptyLowered(child));
+      if (children.length === 0) {
+        return { kind: "sequence", children: [] };
+      }
+      if (children.length === 1) {
+        return children[0];
+      }
+      return { kind: "sequence", children };
+    }
+    return node;
+  }
+  function expressionsEqual(expressionA, expressionB) {
+    if (expressionA.kind !== expressionB.kind) {
+      return false;
+    }
+    if (expressionA.kind === "const" && expressionB.kind === "const") {
+      return expressionA.value === expressionB.value;
+    }
+    if (expressionA.kind === "var" && expressionB.kind === "var") {
+      return expressionA.name === expressionB.name;
+    }
+    return false;
+  }
+  function isSmallConst(expression) {
+    return expression.kind === "const" && typeof expression.value === "number" && expression.value >= 0 && expression.value <= 1;
+  }
+  function eliminateDeadAssigns(node) {
+    switch (node.kind) {
+      case "sequence":
+        return { kind: "sequence", children: node.children.map((child) => eliminateDeadAssigns(child)) };
+      case "block": {
+        const filtered = [];
+        for (let index = 0; index < node.body.length; index++) {
+          const current = node.body[index];
+          if (current.kind === "assign" && current.value.kind === "var" && current.value.name === current.target) {
+            continue;
+          }
+          if (current.kind === "assign" && !expressionHasSideEffect(current.value)) {
+            let isDead = false;
+            for (let scanIndex = index + 1; scanIndex < node.body.length; scanIndex++) {
+              const later = node.body[scanIndex];
+              if (later.kind === "assign" && later.target === current.target) {
+                isDead = true;
+                break;
+              }
+              if (statementReadsVariable(later, current.target)) {
+                break;
+              }
+            }
+            if (isDead) {
+              continue;
+            }
+          }
+          filtered.push(current);
+        }
+        return { kind: "block", body: filtered };
+      }
+      case "if":
+        return {
+          kind: "if",
+          condition: node.condition,
+          thenBody: eliminateDeadAssigns(node.thenBody),
+          elseBody: node.elseBody ? eliminateDeadAssigns(node.elseBody) : null
+        };
+      case "while":
+        return { kind: "while", condition: node.condition, body: eliminateDeadAssigns(node.body) };
+      case "do_while":
+        return { kind: "do_while", body: eliminateDeadAssigns(node.body), condition: node.condition };
+      case "labeled_block":
+        return { kind: "labeled_block", label: node.label, body: eliminateDeadAssigns(node.body) };
+      case "switch":
+        return {
+          kind: "switch",
+          selector: node.selector,
+          cases: node.cases.map((caseEntry) => ({ values: caseEntry.values, body: eliminateDeadAssigns(caseEntry.body) })),
+          defaultBody: eliminateDeadAssigns(node.defaultBody)
+        };
+      default:
+        return node;
+    }
+  }
+  function expressionHasSideEffect(expression) {
+    switch (expression.kind) {
+      case "call":
+      case "call_indirect":
+        return true;
+      case "binary":
+        return expressionHasSideEffect(expression.left) || expressionHasSideEffect(expression.right);
+      case "unary":
+        return expressionHasSideEffect(expression.operand);
+      case "compare":
+        return expressionHasSideEffect(expression.left) || expressionHasSideEffect(expression.right);
+      case "select":
+        return expressionHasSideEffect(expression.condition) || expressionHasSideEffect(expression.trueVal) || expressionHasSideEffect(expression.falseVal);
+      case "load":
+        return false;
+      case "convert":
+        return expressionHasSideEffect(expression.operand);
+      case "field_access":
+        return expressionHasSideEffect(expression.base);
+      default:
+        return false;
+    }
+  }
+  function extractConditionVariables(condition) {
+    const variables = [];
+    function collect(expression) {
+      if (expression.kind === "var") {
+        variables.push(expression.name);
+      } else if (expression.kind === "binary" || expression.kind === "compare") {
+        collect(expression.left);
+        collect(expression.right);
+      } else if (expression.kind === "unary") {
+        collect(expression.operand);
+      } else if (expression.kind === "field_access") {
+        collect(expression.base);
+      }
+    }
+    collect(condition);
+    return variables;
+  }
+  function extractAssignTo(node, variableName) {
+    if (node.kind === "block") {
+      for (let statementIndex = node.body.length - 1; statementIndex >= 0; statementIndex--) {
+        const statement = node.body[statementIndex];
+        if (statement.kind === "assign" && statement.target === variableName) {
+          const remainingBody = [...node.body.slice(0, statementIndex), ...node.body.slice(statementIndex + 1)];
+          const remaining = remainingBody.length > 0 ? { kind: "block", body: remainingBody } : null;
+          return { statement, remaining };
+        }
+        if (statementReadsVariable(statement, variableName)) {
+          break;
+        }
+      }
+    }
+    if (node.kind === "sequence" && node.children.length > 0) {
+      const lastChild = node.children[node.children.length - 1];
+      const fromLast = extractAssignTo(lastChild, variableName);
+      if (fromLast) {
+        const newChildren = fromLast.remaining ? [...node.children.slice(0, -1), fromLast.remaining] : node.children.slice(0, -1);
+        const remaining = newChildren.length > 0 ? { kind: "sequence", children: newChildren } : null;
+        return { statement: fromLast.statement, remaining };
+      }
+    }
+    return null;
+  }
+  function removeTrailingContinue(node) {
+    if (node.kind === "sequence" && node.children.length > 0) {
+      const lastIndex = node.children.length - 1;
+      if (node.children[lastIndex].kind === "continue") {
+        if (node.children.length === 1) {
+          return { kind: "sequence", children: [] };
+        }
+        return { kind: "sequence", children: node.children.slice(0, -1) };
+      }
+      const lastCleaned = removeTrailingContinue(node.children[lastIndex]);
+      if (lastCleaned !== node.children[lastIndex]) {
+        return { kind: "sequence", children: [...node.children.slice(0, -1), lastCleaned] };
+      }
+    }
+    if (node.kind === "continue") {
+      return { kind: "sequence", children: [] };
+    }
+    return node;
+  }
+  function statementReadsVariable(statement, variableName) {
+    switch (statement.kind) {
+      case "assign":
+        return expressionReferences(statement.value, variableName);
+      case "store":
+        return expressionReferences(statement.address, variableName) || expressionReferences(statement.value, variableName);
+      case "call":
+        return statement.args.some((arg) => expressionReferences(arg, variableName));
+      case "call_indirect":
+        return expressionReferences(statement.tableIndex, variableName) || statement.args.some((arg) => expressionReferences(arg, variableName));
+      case "global_set":
+        return expressionReferences(statement.value, variableName);
+      case "return":
+        return statement.value ? expressionReferences(statement.value, variableName) : false;
+      case "expr":
+        return expressionReferences(statement.value, variableName);
+      default:
+        return false;
+    }
+  }
+  function reduceNesting2(node) {
+    switch (node.kind) {
+      case "sequence": {
+        const children = node.children.map((child) => reduceNesting2(child));
+        const flattened = flattenGuardClauses(children, false);
+        if (flattened.length === 1) {
+          return flattened[0];
+        }
+        return { kind: "sequence", children: flattened };
+      }
+      case "if": {
+        const thenBody = reduceNesting2(node.thenBody);
+        const elseBody = node.elseBody ? reduceNesting2(node.elseBody) : null;
+        if (!elseBody && thenBody.kind === "if" && !thenBody.elseBody) {
+          const merged = { kind: "binary", op: "&&", left: node.condition, right: thenBody.condition };
+          return { kind: "if", condition: merged, thenBody: thenBody.thenBody, elseBody: null };
+        }
+        return { kind: "if", condition: node.condition, thenBody, elseBody };
+      }
+      case "while": {
+        const body = reduceNesting2(node.body);
+        const reduced = reduceLoopBody(body);
+        return { kind: "while", condition: node.condition, body: reduced };
+      }
+      case "do_while": {
+        const body = reduceNesting2(node.body);
+        return { kind: "do_while", body: reduceLoopBody(body), condition: node.condition };
+      }
+      case "for":
+        return { kind: "for", init: node.init, condition: node.condition, increment: node.increment, body: reduceNesting2(node.body) };
+      case "labeled_block":
+        return { kind: "labeled_block", label: node.label, body: reduceNesting2(node.body) };
+      case "switch":
+        return {
+          kind: "switch",
+          selector: node.selector,
+          cases: node.cases.map((caseEntry) => ({ values: caseEntry.values, body: reduceNesting2(caseEntry.body) })),
+          defaultBody: reduceNesting2(node.defaultBody)
+        };
+      default:
+        return node;
+    }
+  }
+  function reduceLoopBody(body) {
+    const children = getChildren(body);
+    if (children.length === 1 && children[0].kind === "if" && !children[0].elseBody) {
+      const guardCondition = negateExpression(children[0].condition);
+      const guardClause = { kind: "if", condition: guardCondition, thenBody: { kind: "continue" }, elseBody: null };
+      const innerChildren = getChildren(children[0].thenBody);
+      return { kind: "sequence", children: [guardClause, ...innerChildren] };
+    }
+    return body;
+  }
+  function flattenGuardClauses(children, insideLoop) {
+    const result = [];
+    for (let index = 0; index < children.length; index++) {
+      const child = children[index];
+      if (child.kind === "if" && !child.elseBody && index === children.length - 1) {
+        const innerChildren = getChildren(child.thenBody);
+        if (innerChildren.length >= 2) {
+          const guardCondition = negateExpression(child.condition);
+          const exitKind = { kind: "return", value: null };
+          result.push({ kind: "if", condition: guardCondition, thenBody: exitKind, elseBody: null });
+          result.push(...innerChildren);
+          continue;
+        }
+      }
+      result.push(child);
+    }
+    return result;
+  }
+  function getChildren(node) {
+    if (node.kind === "sequence") {
+      return node.children;
+    }
+    return [node];
+  }
+  function cleanupLowered(node) {
+    switch (node.kind) {
+      case "sequence": {
+        const cleaned = [];
+        for (const child of node.children) {
+          const result = cleanupLowered(child);
+          if (!isEmptyLowered(result)) {
+            cleaned.push(result);
+          }
+        }
+        if (cleaned.length === 0) {
+          return { kind: "sequence", children: [] };
+        }
+        if (cleaned.length === 1) {
+          return cleaned[0];
+        }
+        return { kind: "sequence", children: cleaned };
+      }
+      case "if": {
+        const thenBody = cleanupLowered(node.thenBody);
+        const elseBody = node.elseBody ? cleanupLowered(node.elseBody) : null;
+        if (isEmptyLowered(thenBody) && elseBody && !isEmptyLowered(elseBody)) {
+          return { kind: "if", condition: negateExpression(node.condition), thenBody: elseBody, elseBody: null };
+        }
+        if (isEmptyLowered(thenBody) && (!elseBody || isEmptyLowered(elseBody))) {
+          return { kind: "sequence", children: [] };
+        }
+        if (elseBody && isEmptyLowered(elseBody)) {
+          return { kind: "if", condition: node.condition, thenBody, elseBody: null };
+        }
+        return { kind: "if", condition: node.condition, thenBody, elseBody };
+      }
+      case "while":
+        return { kind: "while", condition: node.condition, body: removeTrailingContinue(cleanupLowered(node.body)) };
+      case "do_while":
+        return { kind: "do_while", body: removeTrailingContinue(cleanupLowered(node.body)), condition: node.condition };
+      case "labeled_block":
+        return { kind: "labeled_block", label: node.label, body: cleanupLowered(node.body) };
+      case "switch":
+        return {
+          kind: "switch",
+          selector: node.selector,
+          cases: node.cases.map((caseEntry) => ({ values: caseEntry.values, body: cleanupLowered(caseEntry.body) })),
+          defaultBody: cleanupLowered(node.defaultBody)
+        };
+      default:
+        return node;
+    }
+  }
+  function isEmptyLowered(node) {
+    if (node.kind === "sequence" && node.children.length === 0) {
+      return true;
+    }
+    if (node.kind === "block" && node.body.length === 0) {
+      return true;
+    }
+    return false;
+  }
+  function negateExpression(expression) {
+    if (expression.kind === "compare") {
+      const inverted = COMPARE_INVERT[expression.op];
+      if (inverted) {
+        return { kind: "compare", op: inverted, left: expression.left, right: expression.right };
+      }
+    }
+    if (expression.kind === "unary" && expression.op === "!") {
+      return expression.operand;
+    }
+    return { kind: "unary", op: "!", operand: expression };
+  }
+  function detectForLoops(node) {
+    switch (node.kind) {
+      case "sequence": {
+        const transformed = node.children.map((child) => detectForLoops(child));
+        const result = [];
+        for (let index = 0; index < transformed.length; index++) {
+          const current = transformed[index];
+          const next = transformed[index + 1];
+          if (next && next.kind === "while" && next.condition) {
+            const conditionVars = extractConditionVariables(next.condition);
+            let matched = false;
+            for (const counterName of conditionVars) {
+              const incrementStatement = extractTrailingIncrement(next.body, counterName);
+              if (!incrementStatement) {
+                continue;
+              }
+              const initResult = extractAssignTo(current, counterName);
+              if (!initResult) {
+                continue;
+              }
+              const bodyWithoutIncrement = removeIncrementAndContinue(next.body, counterName);
+              if (initResult.remaining) {
+                result.push(initResult.remaining);
+              }
+              result.push(detectForLoops({
+                kind: "for",
+                init: initResult.statement,
+                condition: next.condition,
+                increment: incrementStatement,
+                body: detectForLoops(bodyWithoutIncrement)
+              }));
+              index++;
+              matched = true;
+              break;
+            }
+            if (matched) {
+              continue;
+            }
+          }
+          result.push(current);
+        }
+        if (result.length === 1) {
+          return result[0];
+        }
+        return { kind: "sequence", children: result };
+      }
+      case "if":
+        return {
+          kind: "if",
+          condition: node.condition,
+          thenBody: detectForLoops(node.thenBody),
+          elseBody: node.elseBody ? detectForLoops(node.elseBody) : null
+        };
+      case "while":
+        return { kind: "while", condition: node.condition, body: detectForLoops(node.body) };
+      case "do_while":
+        return { kind: "do_while", body: detectForLoops(node.body), condition: node.condition };
+      case "labeled_block":
+        return { kind: "labeled_block", label: node.label, body: detectForLoops(node.body) };
+      case "switch":
+        return {
+          kind: "switch",
+          selector: node.selector,
+          cases: node.cases.map((caseEntry) => ({ values: caseEntry.values, body: detectForLoops(caseEntry.body) })),
+          defaultBody: detectForLoops(node.defaultBody)
+        };
+      default:
+        return node;
+    }
+  }
+  function extractTrailingIncrement(node, variableName) {
+    if (node.kind === "block" && node.body.length > 0) {
+      const lastStatement = node.body[node.body.length - 1];
+      if (lastStatement.kind === "assign" && lastStatement.target === variableName) {
+        return lastStatement;
+      }
+    }
+    if (node.kind === "sequence" && node.children.length > 0) {
+      let lastIndex = node.children.length - 1;
+      while (lastIndex >= 0 && (node.children[lastIndex].kind === "continue" || node.children[lastIndex].kind === "break")) {
+        lastIndex--;
+      }
+      if (lastIndex >= 0) {
+        return extractTrailingIncrement(node.children[lastIndex], variableName);
+      }
+    }
+    return null;
+  }
+  function removeIncrementAndContinue(node, variableName) {
+    if (node.kind === "sequence") {
+      const filtered = [];
+      for (const child of node.children) {
+        if (child.kind === "continue") {
+          continue;
+        }
+        if (child.kind === "block") {
+          const withoutIncrement = removeTrailingAssignTo(child, variableName);
+          if (withoutIncrement) {
+            filtered.push(withoutIncrement);
+          }
+        } else {
+          filtered.push(child);
+        }
+      }
+      if (filtered.length === 0) {
+        return { kind: "sequence", children: [] };
+      }
+      if (filtered.length === 1) {
+        return filtered[0];
+      }
+      return { kind: "sequence", children: filtered };
+    }
+    if (node.kind === "block") {
+      return removeTrailingAssignTo(node, variableName) || { kind: "sequence", children: [] };
+    }
+    return node;
+  }
+  function removeTrailingAssignTo(node, variableName) {
+    const lastStatement = node.body[node.body.length - 1];
+    if (lastStatement && lastStatement.kind === "assign" && lastStatement.target === variableName) {
+      if (node.body.length <= 1) {
+        return null;
+      }
+      return { kind: "block", body: node.body.slice(0, -1) };
+    }
+    return node;
+  }
+  function expressionReferences(expression, variableName) {
+    switch (expression.kind) {
+      case "var":
+        return expression.name === variableName;
+      case "binary":
+        return expressionReferences(expression.left, variableName) || expressionReferences(expression.right, variableName);
+      case "unary":
+        return expressionReferences(expression.operand, variableName);
+      case "compare":
+        return expressionReferences(expression.left, variableName) || expressionReferences(expression.right, variableName);
+      case "call":
+        return expression.args.some((arg) => expressionReferences(arg, variableName));
+      case "select":
+        return expressionReferences(expression.condition, variableName) || expressionReferences(expression.trueVal, variableName) || expressionReferences(expression.falseVal, variableName);
+      case "load":
+        return expressionReferences(expression.address, variableName);
+      case "convert":
+        return expressionReferences(expression.operand, variableName);
+      case "field_access":
+        return expressionReferences(expression.base, variableName);
+      default:
+        return false;
+    }
+  }
+
+  // src/decompiler/LoweredEmitter.ts
+  var WASM_TO_C_TYPE = {
+    "i32": "int",
+    "i64": "long",
+    "f32": "float",
+    "f64": "double",
+    "v128": "v128",
+    "funcref": "funcref",
+    "externref": "externref"
+  };
+  var PRECEDENCE = {
+    "?:": 1,
+    "||": 2,
+    "&&": 3,
+    "|": 4,
+    "^": 5,
+    "&": 6,
+    "==": 7,
+    "!=": 7,
+    "<": 8,
+    ">": 8,
+    "<=": 8,
+    ">=": 8,
+    "<u": 8,
+    ">u": 8,
+    "<=u": 8,
+    ">=u": 8,
+    "<<": 9,
+    ">>": 9,
+    ">>>": 9,
+    "+": 10,
+    "-": 10,
+    "*": 11,
+    "/": 11,
+    "%": 11,
+    "/u": 11,
+    "%u": 11,
+    "unary": 12
+  };
+  function cType(wasmType) {
+    return WASM_TO_C_TYPE[wasmType] || wasmType;
+  }
+  var LOAD_TYPE_CAST = {
+    "i32.load8_s": "byte",
+    "i32.load8_u": "ubyte",
+    "i32.load16_s": "short",
+    "i32.load16_u": "ushort",
+    "i64.load8_s": "byte",
+    "i64.load8_u": "ubyte",
+    "i64.load16_s": "short",
+    "i64.load16_u": "ushort",
+    "i64.load32_s": "int",
+    "i64.load32_u": "uint"
+  };
+  var UNSIGNED_OPS = {
+    "<u": "<",
+    ">u": ">",
+    "<=u": "<=",
+    ">=u": ">=",
+    "/u": "/",
+    "%u": "%"
+  };
+  function emitLowered(node, funcSignature, paramNames) {
+    const lines = [];
+    let indent = 0;
+    function emit(text) {
+      lines.push("  ".repeat(indent) + text);
+    }
+    emit(`${funcSignature} {`);
+    indent++;
+    const declaredVars = /* @__PURE__ */ new Set();
+    collectAssignTargets(node, declaredVars);
+    const varTypes = /* @__PURE__ */ new Map();
+    collectAssignTypes(node, varTypes);
+    for (const varName of declaredVars) {
+      if (!paramNames.has(varName)) {
+        const varType = cType(varTypes.get(varName) || "i32");
+        emit(`${varType} ${varName};`);
+      }
+    }
+    const hasNonParamDeclarations = [...declaredVars].some((varName) => !paramNames.has(varName));
+    if (hasNonParamDeclarations) {
+      emit("");
+    }
+    emitNode(node);
+    if (funcSignature.startsWith("void ") && lines.length > 0 && lines[lines.length - 1].trim() === "return;") {
+      lines.pop();
+    }
+    indent--;
+    emit("}");
+    return lines.join("\n");
+    function emitNode(loweredNode) {
+      switch (loweredNode.kind) {
+        case "sequence":
+          for (const child of loweredNode.children) {
+            emitNode(child);
+            if (alwaysTerminates(child)) {
+              break;
+            }
+          }
+          break;
+        case "block":
+          for (const stmt of loweredNode.body) {
+            emitStatement(stmt);
+            if (stmt.kind === "return" || stmt.kind === "unreachable") {
+              break;
+            }
+          }
+          break;
+        case "if": {
+          const condStr = formatExpression(loweredNode.condition, 0);
+          const hasThen = !isEmptyLowered2(loweredNode.thenBody);
+          const hasElse = loweredNode.elseBody && !isEmptyLowered2(loweredNode.elseBody);
+          if (!hasThen && !hasElse) {
+            break;
+          }
+          emit(`if (${condStr}) {`);
+          indent++;
+          emitNode(loweredNode.thenBody);
+          indent--;
+          if (hasElse) {
+            if (loweredNode.elseBody.kind === "if") {
+              const elseCond = formatExpression(loweredNode.elseBody.condition, 0);
+              emit(`} else if (${elseCond}) {`);
+              indent++;
+              emitNode(loweredNode.elseBody.thenBody);
+              indent--;
+              if (loweredNode.elseBody.elseBody && !isEmptyLowered2(loweredNode.elseBody.elseBody)) {
+                emit(`} else {`);
+                indent++;
+                emitNode(loweredNode.elseBody.elseBody);
+                indent--;
+              }
+              emit("}");
+            } else {
+              emit(`} else {`);
+              indent++;
+              emitNode(loweredNode.elseBody);
+              indent--;
+              emit("}");
+            }
+          } else {
+            emit("}");
+          }
+          break;
+        }
+        case "while":
+          if (loweredNode.condition) {
+            emit(`while (${formatExpression(loweredNode.condition, 0)}) {`);
+          } else {
+            emit(`while (true) {`);
+          }
+          indent++;
+          emitNode(loweredNode.body);
+          indent--;
+          emit("}");
+          break;
+        case "do_while":
+          emit("do {");
+          indent++;
+          emitNode(loweredNode.body);
+          indent--;
+          emit(`} while (${formatExpression(loweredNode.condition, 0)});`);
+          break;
+        case "for": {
+          const initStr = formatStatementInline(loweredNode.init);
+          const condStr = formatExpression(loweredNode.condition, 0);
+          const incrStr = formatStatementInline(loweredNode.increment);
+          emit(`for (${initStr}; ${condStr}; ${incrStr}) {`);
+          indent++;
+          emitNode(loweredNode.body);
+          indent--;
+          emit("}");
+          break;
+        }
+        case "switch":
+          emit(`switch (${formatExpression(loweredNode.selector, 0)}) {`);
+          indent++;
+          for (const caseEntry of loweredNode.cases) {
+            for (const val of caseEntry.values) {
+              emit(`case ${val}:`);
+            }
+            indent++;
+            emitNode(caseEntry.body);
+            if (!alwaysTerminates(caseEntry.body)) {
+              emit("break;");
+            }
+            indent--;
+          }
+          if (!isEmptyLowered2(loweredNode.defaultBody)) {
+            emit("default:");
+            indent++;
+            emitNode(loweredNode.defaultBody);
+            indent--;
+          }
+          indent--;
+          emit("}");
+          break;
+        case "break":
+          emit("break;");
+          break;
+        case "continue":
+          emit("continue;");
+          break;
+        case "return":
+          if (loweredNode.value) {
+            emit(`return ${formatExpression(loweredNode.value, 0)};`);
+          } else {
+            emit("return;");
+          }
+          break;
+        case "unreachable":
+          emit("unreachable();");
+          break;
+        case "labeled_block":
+          emit(`${loweredNode.label}: {`);
+          indent++;
+          emitNode(loweredNode.body);
+          indent--;
+          emit("}");
+          break;
+        case "labeled_break":
+          emit(`break ${loweredNode.label};`);
+          break;
+        case "labeled_continue":
+          emit(`continue ${loweredNode.label};`);
+          break;
+      }
+    }
+    function emitStatement(stmt) {
+      switch (stmt.kind) {
+        case "assign":
+          emit(`${stmt.target} = ${formatExpression(stmt.value, 0)};`);
+          break;
+        case "store": {
+          if (stmt.address.kind === "field_access") {
+            const base = formatExpression(stmt.address.base, 100);
+            emit(`${base}[${stmt.address.offset}] = ${formatExpression(stmt.value, 0)};`);
+          } else {
+            const addr = formatExpression(stmt.address, 0);
+            const offsetStr = stmt.offset > 0 ? addr === "0" ? String(stmt.offset) : `${addr} + ${stmt.offset}` : addr;
+            emit(`memory[${offsetStr}] = ${formatExpression(stmt.value, 0)};`);
+          }
+          break;
+        }
+        case "call":
+          if (stmt.result) {
+            emit(`${stmt.result} = ${stmt.name}(${stmt.args.map((a) => formatExpression(a, 0)).join(", ")});`);
+          } else {
+            emit(`${stmt.name}(${stmt.args.map((a) => formatExpression(a, 0)).join(", ")});`);
+          }
+          break;
+        case "call_indirect": {
+          const tableIdx = formatExpression(stmt.tableIndex, 0);
+          const argsStr = stmt.args.map((a) => formatExpression(a, 0)).join(", ");
+          if (stmt.result) {
+            emit(`${stmt.result} = table[${tableIdx}](${argsStr});`);
+          } else {
+            emit(`table[${tableIdx}](${argsStr});`);
+          }
+          break;
+        }
+        case "global_set":
+          emit(`${stmt.name} = ${formatExpression(stmt.value, 0)};`);
+          break;
+        case "return":
+          if (stmt.value) {
+            emit(`return ${formatExpression(stmt.value, 0)};`);
+          } else {
+            emit("return;");
+          }
+          break;
+        case "unreachable":
+          emit("unreachable();");
+          break;
+        case "expr":
+          emit(`${formatExpression(stmt.value, 0)};`);
+          break;
+      }
+    }
+    function formatExpression(expr, parentPrec) {
+      switch (expr.kind) {
+        case "var":
+          return expr.name;
+        case "const":
+          return String(expr.value);
+        case "string_literal":
+          return expr.value;
+        case "global":
+          return expr.name;
+        case "binary": {
+          if (expr.op === "[]") {
+            return `${formatExpression(expr.left, 100)}[${formatExpression(expr.right, 0)}]`;
+          }
+          if (expr.op === "<<" && expr.right.kind === "const" && typeof expr.right.value === "number" && expr.right.value >= 1 && expr.right.value <= 3) {
+            const multiplier = 1 << expr.right.value;
+            const prec2 = PRECEDENCE["*"] || 10;
+            const left2 = formatExpression(expr.left, prec2);
+            return maybeWrap(`${left2} * ${multiplier}`, prec2, parentPrec);
+          }
+          const unsigned = UNSIGNED_OPS[expr.op];
+          if (unsigned) {
+            const left2 = `(unsigned)${formatExpression(expr.left, PRECEDENCE["unary"])}`;
+            const right2 = `(unsigned)${formatExpression(expr.right, PRECEDENCE["unary"])}`;
+            return maybeWrap(`${left2} ${unsigned} ${right2}`, PRECEDENCE[expr.op] || 10, parentPrec);
+          }
+          const prec = PRECEDENCE[expr.op] || 10;
+          const left = formatExpression(expr.left, prec);
+          const right = formatExpression(expr.right, prec + 1);
+          return maybeWrap(`${left} ${expr.op} ${right}`, prec, parentPrec);
+        }
+        case "compare": {
+          const unsigned = UNSIGNED_OPS[expr.op];
+          if (unsigned) {
+            const left2 = `(unsigned)${formatExpression(expr.left, PRECEDENCE["unary"])}`;
+            const right2 = `(unsigned)${formatExpression(expr.right, PRECEDENCE["unary"])}`;
+            return maybeWrap(`${left2} ${unsigned} ${right2}`, PRECEDENCE[expr.op] || 8, parentPrec);
+          }
+          const prec = PRECEDENCE[expr.op] || 8;
+          const left = formatExpression(expr.left, prec);
+          const right = formatExpression(expr.right, prec + 1);
+          return maybeWrap(`${left} ${expr.op} ${right}`, prec, parentPrec);
+        }
+        case "unary": {
+          const operand = formatExpression(expr.operand, PRECEDENCE["unary"]);
+          if (expr.op === "!") {
+            return maybeWrap(`!${operand}`, PRECEDENCE["unary"], parentPrec);
+          }
+          if (expr.op === "neg" || expr.op === "-") {
+            return maybeWrap(`-${operand}`, PRECEDENCE["unary"], parentPrec);
+          }
+          return `${expr.op}(${formatExpression(expr.operand, 0)})`;
+        }
+        case "load": {
+          if (expr.address.kind === "field_access") {
+            const base = formatExpression(expr.address.base, 100);
+            const fieldAccess = `${base}[${expr.address.offset}]`;
+            const loadCast2 = LOAD_TYPE_CAST[expr.loadType];
+            if (loadCast2) {
+              return `(${loadCast2})${fieldAccess}`;
+            }
+            return fieldAccess;
+          }
+          const addr = formatExpression(expr.address, 0);
+          const offsetStr = expr.offset > 0 ? addr === "0" ? String(expr.offset) : `${addr} + ${expr.offset}` : addr;
+          const loadCast = LOAD_TYPE_CAST[expr.loadType];
+          if (loadCast) {
+            return `(${loadCast})memory[${offsetStr}]`;
+          }
+          return `memory[${offsetStr}]`;
+        }
+        case "call":
+          return `${expr.name}(${expr.args.map((a) => formatExpression(a, 0)).join(", ")})`;
+        case "call_indirect":
+          return `table[${formatExpression(expr.tableIndex, 0)}](${expr.args.map((a) => formatExpression(a, 0)).join(", ")})`;
+        case "select":
+          return maybeWrap(
+            `${formatExpression(expr.condition, PRECEDENCE["?:"])} ? ${formatExpression(expr.trueVal, PRECEDENCE["?:"])} : ${formatExpression(expr.falseVal, PRECEDENCE["?:"])}`,
+            PRECEDENCE["?:"],
+            parentPrec
+          );
+        case "convert": {
+          const operand = formatExpression(expr.operand, PRECEDENCE["unary"]);
+          if (expr.op.startsWith("(")) {
+            return `${expr.op}${operand}`;
+          }
+          return `${expr.op}(${formatExpression(expr.operand, 0)})`;
+        }
+        case "field_access": {
+          const base = formatExpression(expr.base, 100);
+          return `${base}[${expr.offset}]`;
+        }
+      }
+    }
+    function formatStatementInline(stmt) {
+      if (stmt.kind === "assign") {
+        return `${stmt.target} = ${formatExpression(stmt.value, 0)}`;
+      }
+      return "";
+    }
+    function maybeWrap(text, exprPrec, parentPrec) {
+      return exprPrec < parentPrec ? `(${text})` : text;
+    }
+  }
+  function isEmptyLowered2(node) {
+    if (node.kind === "sequence" && node.children.length === 0) {
+      return true;
+    }
+    if (node.kind === "block" && node.body.length === 0) {
+      return true;
+    }
+    return false;
+  }
+  function collectAssignTargets(node, targets) {
+    switch (node.kind) {
+      case "sequence":
+        for (const child of node.children) {
+          collectAssignTargets(child, targets);
+        }
+        break;
+      case "block":
+        for (const stmt of node.body) {
+          if (stmt.kind === "assign") {
+            targets.add(stmt.target);
+          }
+          if (stmt.kind === "call" && stmt.result) {
+            targets.add(stmt.result);
+          }
+          if (stmt.kind === "call_indirect" && stmt.result) {
+            targets.add(stmt.result);
+          }
+        }
+        break;
+      case "if":
+        collectAssignTargets(node.thenBody, targets);
+        if (node.elseBody) {
+          collectAssignTargets(node.elseBody, targets);
+        }
+        break;
+      case "while":
+        collectAssignTargets(node.body, targets);
+        break;
+      case "do_while":
+        collectAssignTargets(node.body, targets);
+        break;
+      case "labeled_block":
+        collectAssignTargets(node.body, targets);
+        break;
+      case "for":
+        if (node.init.kind === "assign") {
+          targets.add(node.init.target);
+        }
+        if (node.increment.kind === "assign") {
+          targets.add(node.increment.target);
+        }
+        collectAssignTargets(node.body, targets);
+        break;
+      case "switch":
+        for (const c of node.cases) {
+          collectAssignTargets(c.body, targets);
+        }
+        collectAssignTargets(node.defaultBody, targets);
+        break;
+    }
+  }
+  function collectAssignTypes(node, types) {
+    switch (node.kind) {
+      case "sequence":
+        for (const child of node.children) {
+          collectAssignTypes(child, types);
+        }
+        break;
+      case "block":
+        for (const stmt of node.body) {
+          if (stmt.kind === "assign" && !types.has(stmt.target)) {
+            types.set(stmt.target, stmt.type);
+          }
+        }
+        break;
+      case "if":
+        collectAssignTypes(node.thenBody, types);
+        if (node.elseBody) {
+          collectAssignTypes(node.elseBody, types);
+        }
+        break;
+      case "while":
+        collectAssignTypes(node.body, types);
+        break;
+      case "do_while":
+        collectAssignTypes(node.body, types);
+        break;
+      case "for":
+        if (node.init.kind === "assign" && !types.has(node.init.target)) {
+          types.set(node.init.target, node.init.type);
+        }
+        if (node.increment.kind === "assign" && !types.has(node.increment.target)) {
+          types.set(node.increment.target, node.increment.type);
+        }
+        collectAssignTypes(node.body, types);
+        break;
+      case "labeled_block":
+        collectAssignTypes(node.body, types);
+        break;
+      case "switch":
+        for (const c of node.cases) {
+          collectAssignTypes(c.body, types);
+        }
+        collectAssignTypes(node.defaultBody, types);
+        break;
+    }
+  }
+  function alwaysTerminates(node) {
+    switch (node.kind) {
+      case "return":
+      case "break":
+      case "continue":
+      case "unreachable":
+      case "labeled_break":
+      case "labeled_continue":
+        return true;
+      case "sequence":
+        return node.children.length > 0 && alwaysTerminates(node.children[node.children.length - 1]);
+      case "block":
+        return node.body.length > 0 && node.body[node.body.length - 1].kind === "return";
+      case "if":
+        return node.elseBody !== null && alwaysTerminates(node.thenBody) && alwaysTerminates(node.elseBody);
+      default:
+        return false;
+    }
+  }
+
+  // src/decompiler/MemoryPatterns.ts
+  function annotateMemoryPatterns(node) {
+    const baseOffsets = /* @__PURE__ */ new Map();
+    collectMemoryBases(node, baseOffsets);
+    const structBases = /* @__PURE__ */ new Set();
+    for (const [baseName, offsets] of baseOffsets) {
+      if (offsets.size >= 2) {
+        structBases.add(baseName);
+      }
+    }
+    return transformNode(node, structBases);
+  }
+  function collectMemoryBases(node, bases) {
+    function collectFromExpr(expression) {
+      if (expression.kind === "load") {
+        collectFromExpr(expression.address);
+        recordBase(expression.address, expression.offset);
+      } else if (expression.kind === "binary") {
+        collectFromExpr(expression.left);
+        collectFromExpr(expression.right);
+      } else if (expression.kind === "unary") {
+        collectFromExpr(expression.operand);
+      } else if (expression.kind === "compare") {
+        collectFromExpr(expression.left);
+        collectFromExpr(expression.right);
+      } else if (expression.kind === "select") {
+        collectFromExpr(expression.condition);
+        collectFromExpr(expression.trueVal);
+        collectFromExpr(expression.falseVal);
+      } else if (expression.kind === "call") {
+        for (const arg of expression.args) {
+          collectFromExpr(arg);
+        }
+      } else if (expression.kind === "convert") {
+        collectFromExpr(expression.operand);
+      } else if (expression.kind === "field_access") {
+        collectFromExpr(expression.base);
+      }
+    }
+    function recordBase(address, instrOffset) {
+      if (address.kind === "binary" && address.op === "+" && address.left.kind === "var" && address.right.kind === "const") {
+        const baseName = address.left.name;
+        const offset = Number(address.right.value) + instrOffset;
+        if (!bases.has(baseName)) {
+          bases.set(baseName, /* @__PURE__ */ new Set());
+        }
+        bases.get(baseName).add(offset);
+      }
+      if (address.kind === "var" && instrOffset > 0) {
+        const baseName = address.name;
+        if (!bases.has(baseName)) {
+          bases.set(baseName, /* @__PURE__ */ new Set());
+        }
+        bases.get(baseName).add(instrOffset);
+        bases.get(baseName).add(0);
+      }
+    }
+    function collectFromStmt(statement) {
+      switch (statement.kind) {
+        case "assign":
+          collectFromExpr(statement.value);
+          break;
+        case "store":
+          collectFromExpr(statement.address);
+          collectFromExpr(statement.value);
+          recordBase(statement.address, statement.offset);
+          break;
+        case "call":
+          for (const arg of statement.args) {
+            collectFromExpr(arg);
+          }
+          break;
+        case "call_indirect":
+          collectFromExpr(statement.tableIndex);
+          for (const arg of statement.args) {
+            collectFromExpr(arg);
+          }
+          break;
+        case "global_set":
+          collectFromExpr(statement.value);
+          break;
+        case "return":
+          if (statement.value) {
+            collectFromExpr(statement.value);
+          }
+          break;
+      }
+    }
+    switch (node.kind) {
+      case "sequence":
+        for (const child of node.children) {
+          collectMemoryBases(child, bases);
+        }
+        break;
+      case "block":
+        for (const statement of node.body) {
+          collectFromStmt(statement);
+        }
+        break;
+      case "if":
+        collectMemoryBases(node.thenBody, bases);
+        if (node.elseBody) {
+          collectMemoryBases(node.elseBody, bases);
+        }
+        break;
+      case "while":
+        collectMemoryBases(node.body, bases);
+        break;
+      case "do_while":
+        collectMemoryBases(node.body, bases);
+        break;
+      case "for":
+        collectMemoryBases(node.body, bases);
+        break;
+      case "switch":
+        for (const c of node.cases) {
+          collectMemoryBases(c.body, bases);
+        }
+        collectMemoryBases(node.defaultBody, bases);
+        break;
+      case "labeled_block":
+        collectMemoryBases(node.body, bases);
+        break;
+    }
+  }
+  function transformNode(node, structBases) {
+    const xNode = (childNode) => transformNode(childNode, structBases);
+    const xExpr = (expression) => transformExpr(expression, structBases);
+    const xStmt = (statement) => transformStatement(statement, structBases);
+    switch (node.kind) {
+      case "sequence":
+        return { kind: "sequence", children: node.children.map(xNode) };
+      case "block":
+        return { kind: "block", body: node.body.map(xStmt) };
+      case "if":
+        return { kind: "if", condition: xExpr(node.condition), thenBody: xNode(node.thenBody), elseBody: node.elseBody ? xNode(node.elseBody) : null };
+      case "while":
+        return { kind: "while", condition: node.condition ? xExpr(node.condition) : null, body: xNode(node.body) };
+      case "do_while":
+        return { kind: "do_while", body: xNode(node.body), condition: xExpr(node.condition) };
+      case "for":
+        return { kind: "for", init: xStmt(node.init), condition: xExpr(node.condition), increment: xStmt(node.increment), body: xNode(node.body) };
+      case "switch":
+        return { kind: "switch", selector: xExpr(node.selector), cases: node.cases.map((c) => ({ values: c.values, body: xNode(c.body) })), defaultBody: xNode(node.defaultBody) };
+      case "labeled_block":
+        return { kind: "labeled_block", label: node.label, body: xNode(node.body) };
+      default:
+        return node;
+    }
+  }
+  function transformStatement(statement, structBases) {
+    const xExpr = (expression) => transformExpr(expression, structBases);
+    switch (statement.kind) {
+      case "assign":
+        return { kind: "assign", target: statement.target, type: statement.type, value: xExpr(statement.value) };
+      case "store": {
+        const address = xExpr(statement.address);
+        const value = xExpr(statement.value);
+        const structStore = tryStructAccess(address, statement.offset, structBases);
+        if (structStore) {
+          return { kind: "store", address: structStore, offset: 0, storeType: statement.storeType, value };
+        }
+        return { kind: "store", address, offset: statement.offset, storeType: statement.storeType, value };
+      }
+      case "call":
+        return { kind: "call", name: statement.name, args: statement.args.map(xExpr), result: statement.result };
+      case "call_indirect":
+        return { kind: "call_indirect", tableIndex: xExpr(statement.tableIndex), args: statement.args.map(xExpr), result: statement.result };
+      case "global_set":
+        return { kind: "global_set", name: statement.name, value: xExpr(statement.value) };
+      case "return":
+        return { kind: "return", value: statement.value ? xExpr(statement.value) : null };
+      default:
+        return statement;
+    }
+  }
+  function tryStructAccess(address, instrOffset, structBases) {
+    if (address.kind === "binary" && address.op === "+" && address.left.kind === "var" && address.right.kind === "const") {
+      if (structBases.has(address.left.name)) {
+        const totalOffset = Number(address.right.value) + instrOffset;
+        return { kind: "field_access", base: address.left, offset: totalOffset };
+      }
+    }
+    if (address.kind === "var" && instrOffset > 0 && structBases.has(address.name)) {
+      return { kind: "field_access", base: address, offset: instrOffset };
+    }
+    return null;
+  }
+  function transformExpr(expression, structBases) {
+    const xExpr = (childExpr) => transformExpr(childExpr, structBases);
+    switch (expression.kind) {
+      case "load": {
+        const address = xExpr(expression.address);
+        const structAccess = tryStructAccess(address, expression.offset, structBases);
+        if (structAccess) {
+          return { kind: "load", address: structAccess, offset: 0, loadType: expression.loadType };
+        }
+        if (address.kind === "binary" && address.op === "+") {
+          const right = address.right;
+          if (right.kind === "binary" && right.op === "<<" && right.right.kind === "const") {
+            const shift = Number(right.right.value);
+            if (shift >= 1 && shift <= 3) {
+              return { kind: "load", address: { kind: "binary", op: "[]", left: address.left, right: right.left }, offset: expression.offset, loadType: expression.loadType };
+            }
+          }
+          if (right.kind === "binary" && right.op === "*" && right.right.kind === "const") {
+            const elementSize = Number(right.right.value);
+            if (elementSize === 4 || elementSize === 8 || elementSize === 2) {
+              return { kind: "load", address: { kind: "binary", op: "[]", left: address.left, right: right.left }, offset: expression.offset, loadType: expression.loadType };
+            }
+          }
+        }
+        return { kind: "load", address, offset: expression.offset, loadType: expression.loadType };
+      }
+      case "binary":
+        return { kind: "binary", op: expression.op, left: xExpr(expression.left), right: xExpr(expression.right) };
+      case "unary":
+        return { kind: "unary", op: expression.op, operand: xExpr(expression.operand) };
+      case "compare":
+        return { kind: "compare", op: expression.op, left: xExpr(expression.left), right: xExpr(expression.right) };
+      case "select":
+        return { kind: "select", condition: xExpr(expression.condition), trueVal: xExpr(expression.trueVal), falseVal: xExpr(expression.falseVal) };
+      case "convert":
+        return { kind: "convert", op: expression.op, operand: xExpr(expression.operand) };
+      case "call":
+        return { kind: "call", name: expression.name, args: expression.args.map(xExpr) };
+      case "call_indirect":
+        return { kind: "call_indirect", tableIndex: xExpr(expression.tableIndex), args: expression.args.map(xExpr) };
+      case "field_access":
+        return { kind: "field_access", base: xExpr(expression.base), offset: expression.offset };
+      default:
+        return expression;
+    }
+  }
+
+  // src/decompiler/Decompiler.ts
+  function createNameResolver(moduleInfo, functionNameProvider, localNameProvider) {
+    const nameSection = moduleInfo.nameSection;
+    return {
+      functionName(globalIndex) {
+        if (nameSection?.functionNames?.has(globalIndex)) {
+          const rawName = nameSection.functionNames.get(globalIndex);
+          return { name: demangleName(rawName), source: "name-section" };
+        }
+        if (functionNameProvider) {
+          const externalName = functionNameProvider(globalIndex);
+          if (externalName) {
+            return { name: demangleName(externalName), source: "dwarf" };
+          }
+        }
+        return { name: `func_${globalIndex}`, source: "generated" };
+      },
+      localName(funcGlobalIndex, localIndex) {
+        if (nameSection?.localNames?.has(funcGlobalIndex)) {
+          const locals = nameSection.localNames.get(funcGlobalIndex);
+          if (locals.has(localIndex)) {
+            return { name: locals.get(localIndex), source: "name-section" };
+          }
+        }
+        if (localNameProvider) {
+          const dwarfName = localNameProvider(funcGlobalIndex, localIndex);
+          if (dwarfName) {
+            return { name: dwarfName, source: "dwarf" };
+          }
+        }
+        return { name: `var${localIndex}`, source: "generated" };
+      },
+      globalName(globalIndex) {
+        if (nameSection?.globalNames?.has(globalIndex)) {
+          return { name: nameSection.globalNames.get(globalIndex), source: "name-section" };
+        }
+        return { name: `global_${globalIndex}`, source: "generated" };
+      },
+      typeName(_typeIndex) {
+        return null;
+      }
+    };
+  }
+  function typeStr(valueType) {
+    if (typeof valueType === "object" && "name" in valueType) {
+      return WASM_TO_C_TYPE[valueType.name] || valueType.name;
+    }
+    const wasmNames = {
+      [-1]: "i32",
+      [-2]: "i64",
+      [-3]: "f32",
+      [-4]: "f64",
+      [-5]: "v128",
+      127: "i32",
+      126: "i64",
+      125: "f32",
+      124: "f64",
+      123: "v128"
+    };
+    const wasmType = wasmNames[valueType] || "i32";
+    return WASM_TO_C_TYPE[wasmType] || wasmType;
+  }
+  function flattenTypes2(moduleInfo) {
+    const flat = [];
+    for (const typeEntry of moduleInfo.types) {
+      if (typeEntry.kind === "rec") {
+        for (const inner of typeEntry.types) {
+          flat.push(inner);
+        }
+      } else {
+        flat.push(typeEntry);
+      }
+    }
+    return flat;
+  }
+  function decompileFunction(moduleInfo, localFuncIndex, nameResolver) {
+    const importedFuncCount = moduleInfo.imports.filter((imp) => imp.kind === 0).length;
+    const globalFuncIndex = importedFuncCount + localFuncIndex;
+    const func = moduleInfo.functions[localFuncIndex];
+    const flatTypes = flattenTypes2(moduleInfo);
+    const funcTypeEntry = flatTypes[func.typeIndex];
+    if (!funcTypeEntry || funcTypeEntry.kind !== "func") {
+      return "// Could not determine function type";
+    }
+    const funcNameRes = nameResolver.functionName(globalFuncIndex);
+    const returnType = funcTypeEntry.returnTypes.length === 0 ? "void" : funcTypeEntry.returnTypes.map((returnT) => typeStr(returnT)).join(", ");
+    const params = [];
+    for (let paramIndex = 0; paramIndex < funcTypeEntry.parameterTypes.length; paramIndex++) {
+      const paramNameRes = nameResolver.localName(globalFuncIndex, paramIndex);
+      params.push(`${typeStr(funcTypeEntry.parameterTypes[paramIndex])} ${paramNameRes.name}`);
+    }
+    const signature = `${returnType} ${funcNameRes.name}(${params.join(", ")})`;
+    try {
+      const instructions = func.instructions || InstructionDecoder.decodeFunctionBody(func.body);
+      const cfg = buildControlFlowGraph(instructions);
+      const ssaFunc = buildSsa(cfg, moduleInfo, localFuncIndex);
+      optimizeSsa(ssaFunc);
+      const dominance = computeDominance(ssaFunc);
+      const structured = structureFunction(ssaFunc, dominance, cfg.blockEndTargets);
+      const nameProvider = {
+        functionName(globalIdx) {
+          return nameResolver.functionName(globalIdx).name;
+        },
+        localName(localIdx) {
+          return nameResolver.localName(globalFuncIndex, localIdx).name;
+        },
+        globalName(globalIdx) {
+          return nameResolver.globalName(globalIdx).name;
+        },
+        resolveAddress(address) {
+          for (const dataSegment of moduleInfo.data) {
+            if (dataSegment.passive) {
+              continue;
+            }
+            const segmentOffset = getDataSegmentOffset(dataSegment);
+            if (segmentOffset === null) {
+              continue;
+            }
+            if (address >= segmentOffset && address < segmentOffset + dataSegment.data.length) {
+              const localOffset = address - segmentOffset;
+              const stringValue = extractString(dataSegment.data, localOffset);
+              if (stringValue && stringValue.length >= 2) {
+                const displayStr = stringValue.length > 32 ? stringValue.slice(0, 32) + "..." : stringValue;
+                return `"${displayStr}"`;
+              }
+            }
+          }
+          return null;
+        }
+      };
+      const rawLowered = lowerSsaToStatements(structured, ssaFunc, nameProvider);
+      const lowered = annotateMemoryPatterns(rawLowered);
+      const paramNames = /* @__PURE__ */ new Set();
+      for (let paramIndex = 0; paramIndex < funcTypeEntry.parameterTypes.length; paramIndex++) {
+        paramNames.add(nameResolver.localName(globalFuncIndex, paramIndex).name);
+      }
+      return emitLowered(lowered, signature, paramNames);
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      return `${signature} {
+  // Decompilation failed: ${errorMessage}
+}`;
+    }
+  }
+  function getDataSegmentOffset(dataSegment) {
+    if (dataSegment.passive || dataSegment.offsetExpr.length === 0) {
+      return null;
+    }
+    if (dataSegment.offsetExpr.length >= 2 && dataSegment.offsetExpr[0] === 65) {
+      let offset = 0;
+      let shift = 0;
+      let position = 1;
+      let byte;
+      do {
+        if (position >= dataSegment.offsetExpr.length) {
+          return null;
+        }
+        byte = dataSegment.offsetExpr[position++];
+        offset |= (byte & 127) << shift;
+        shift += 7;
+      } while (byte & 128);
+      return offset;
+    }
+    return null;
+  }
+  function extractString(data, offset) {
+    const PRINTABLE_MIN = 32;
+    const PRINTABLE_MAX = 127;
+    let end = offset;
+    while (end < data.length && data[end] !== 0 && data[end] >= PRINTABLE_MIN && data[end] < PRINTABLE_MAX) {
+      end++;
+    }
+    if (end - offset < 2) {
+      return null;
+    }
+    return new TextDecoder().decode(data.slice(offset, end));
+  }
+
+  // src/SourceMapParser.ts
+  var BASE64_CHARS = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+  var BASE64_LOOKUP = new Array(128).fill(-1);
+  for (let charIndex = 0; charIndex < BASE64_CHARS.length; charIndex++) {
+    BASE64_LOOKUP[BASE64_CHARS.charCodeAt(charIndex)] = charIndex;
+  }
+  var VLQ_BASE_SHIFT = 5;
+  var VLQ_BASE = 1 << VLQ_BASE_SHIFT;
+  var VLQ_BASE_MASK = VLQ_BASE - 1;
+  var VLQ_CONTINUATION_BIT = VLQ_BASE;
+  function decodeVlq(encoded, startPosition) {
+    let result = 0;
+    let shift = 0;
+    let position = startPosition;
+    while (position < encoded.length) {
+      const charCode = encoded.charCodeAt(position);
+      const digit = BASE64_LOOKUP[charCode];
+      if (digit === -1) {
+        throw new Error(`Invalid base64 character '${encoded[position]}' at position ${position}`);
+      }
+      position++;
+      const hasContinuation = (digit & VLQ_CONTINUATION_BIT) !== 0;
+      result += (digit & VLQ_BASE_MASK) << shift;
+      shift += VLQ_BASE_SHIFT;
+      if (!hasContinuation) {
+        const isNegative = (result & 1) === 1;
+        const magnitude = result >> 1;
+        return {
+          value: isNegative ? -magnitude : magnitude,
+          charsConsumed: position - startPosition
+        };
+      }
+    }
+    throw new Error("Unexpected end of VLQ-encoded string");
+  }
+  function decodeMappings(mappingsString) {
+    const mappings = [];
+    if (mappingsString.length === 0) {
+      return mappings;
+    }
+    let generatedOffset = 0;
+    let sourceIndex = 0;
+    let sourceLine = 0;
+    let sourceColumn = 0;
+    let nameIndex = 0;
+    const groups = mappingsString.split(";");
+    for (const group of groups) {
+      generatedOffset = 0;
+      if (group.length === 0) {
+        continue;
+      }
+      const segments = group.split(",");
+      for (const segment of segments) {
+        if (segment.length === 0) {
+          continue;
+        }
+        let position = 0;
+        const offsetResult = decodeVlq(segment, position);
+        generatedOffset += offsetResult.value;
+        position += offsetResult.charsConsumed;
+        if (position >= segment.length) {
+          continue;
+        }
+        const sourceResult = decodeVlq(segment, position);
+        sourceIndex += sourceResult.value;
+        position += sourceResult.charsConsumed;
+        const lineResult = decodeVlq(segment, position);
+        sourceLine += lineResult.value;
+        position += lineResult.charsConsumed;
+        const columnResult = decodeVlq(segment, position);
+        sourceColumn += columnResult.value;
+        position += columnResult.charsConsumed;
+        let resolvedNameIndex = null;
+        if (position < segment.length) {
+          const nameResult = decodeVlq(segment, position);
+          nameIndex += nameResult.value;
+          resolvedNameIndex = nameIndex;
+        }
+        mappings.push({
+          generatedOffset,
+          sourceIndex,
+          sourceLine,
+          sourceColumn,
+          nameIndex: resolvedNameIndex
+        });
+      }
+    }
+    mappings.sort((left, right) => left.generatedOffset - right.generatedOffset);
+    return mappings;
+  }
+  function parseSourceMap(json) {
+    const raw = JSON.parse(json);
+    if (raw.version !== 3) {
+      throw new Error(`Unsupported source map version: ${raw.version} (expected 3)`);
+    }
+    if (!Array.isArray(raw.sources)) {
+      throw new Error('Source map is missing the "sources" field');
+    }
+    if (typeof raw.mappings !== "string") {
+      throw new Error('Source map is missing the "mappings" field');
+    }
+    const sourceRoot = raw.sourceRoot ?? "";
+    const sourcesContent = raw.sourcesContent ?? raw.sources.map(() => null);
+    const names = raw.names ?? [];
+    return {
+      sources: raw.sources,
+      sourcesContent,
+      names,
+      mappings: decodeMappings(raw.mappings),
+      sourceRoot
+    };
+  }
+  function lookupMapping(mappings, wasmOffset) {
+    if (mappings.length === 0) {
+      return null;
+    }
+    let low = 0;
+    let high = mappings.length - 1;
+    while (low <= high) {
+      const middle = low + high >>> 1;
+      const middleOffset = mappings[middle].generatedOffset;
+      if (middleOffset === wasmOffset) {
+        return mappings[middle];
+      } else if (middleOffset < wasmOffset) {
+        low = middle + 1;
+      } else {
+        high = middle - 1;
+      }
+    }
+    if (high < 0) {
+      return null;
+    }
+    return mappings[high];
+  }
+
+  // playground/explorer.ts
+  function buildByteRanges(data) {
+    const sections = [];
+    const items = /* @__PURE__ */ new Map();
+    const sectionNames = {
+      1: "Type",
+      2: "Import",
+      3: "Function",
+      4: "Table",
+      5: "Memory",
+      6: "Global",
+      7: "Export",
+      9: "Element",
+      10: "Code",
+      11: "Data",
+      0: "Custom"
+    };
+    const sectionToByteRange = {
+      1: "type",
+      2: "import",
+      3: "function",
+      4: "table",
+      5: "memory",
+      6: "global",
+      7: "export",
+      9: "element",
+      11: "data"
+    };
+    let offset = 8;
+    while (offset < data.length) {
+      const sectionId = data[offset];
+      let sizeOffset = offset + 1;
+      let sectionSize = 0;
+      let shift = 0;
+      while (sizeOffset < data.length) {
+        const byte = data[sizeOffset++];
+        sectionSize |= (byte & 127) << shift;
+        shift += 7;
+        if (!(byte & 128)) {
+          break;
+        }
+      }
+      const sectionStart = sizeOffset;
+      sections.push({
+        sectionId,
+        offset,
+        length: sectionStart + sectionSize - offset,
+        name: sectionNames[sectionId] || `Section ${sectionId}`
+      });
+      if (sectionId === 10) {
+        let pos = sectionStart;
+        let funcCount = 0;
+        shift = 0;
+        while (pos < data.length) {
+          const byte = data[pos++];
+          funcCount |= (byte & 127) << shift;
+          shift += 7;
+          if (!(byte & 128)) {
+            break;
+          }
+        }
+        const funcRanges = [];
+        for (let funcIdx = 0; funcIdx < funcCount && pos < sectionStart + sectionSize; funcIdx++) {
+          let bodySize = 0;
+          shift = 0;
+          while (pos < data.length) {
+            const byte = data[pos++];
+            bodySize |= (byte & 127) << shift;
+            shift += 7;
+            if (!(byte & 128)) {
+              break;
+            }
+          }
+          funcRanges.push({ offset: pos, length: bodySize });
+          pos += bodySize;
+        }
+        items.set("function", funcRanges);
+      }
+      offset = sectionStart + sectionSize;
+    }
+    return {
+      sections,
+      getItem(section, index) {
+        const ranges = items.get(section);
+        if (ranges && index >= 0 && index < ranges.length) {
+          return ranges[index];
+        }
+        return null;
+      }
+    };
+  }
+  var WAT_KEYWORDS = /* @__PURE__ */ new Set([
+    "module",
+    "func",
+    "param",
+    "result",
+    "local",
+    "global",
+    "table",
+    "memory",
+    "type",
+    "import",
+    "export",
+    "start",
+    "elem",
+    "data",
+    "offset",
+    "block",
+    "loop",
+    "if",
+    "else",
+    "end",
+    "br",
+    "br_if",
+    "br_table",
+    "call",
+    "call_indirect",
+    "return",
+    "unreachable",
+    "nop",
+    "drop",
+    "select",
+    "mut",
+    "field",
+    "struct",
+    "array",
+    "rec",
+    "sub",
+    "sub_final",
+    "tag",
+    "ref",
+    "null"
+  ]);
+  var WAT_TYPES = /* @__PURE__ */ new Set([
+    "i32",
+    "i64",
+    "f32",
+    "f64",
+    "v128",
+    "funcref",
+    "externref",
+    "anyref",
+    "eqref",
+    "i31ref",
+    "structref",
+    "arrayref",
+    "nullref",
+    "nullfuncref",
+    "nullexternref",
+    "func",
+    "extern",
+    "any",
+    "eq",
+    "i31",
+    "none",
+    "nofunc",
+    "noextern"
+  ]);
+  function tokenizeWat(source) {
+    const tokens = [];
+    let position = 0;
+    while (position < source.length) {
+      const char = source[position];
+      if (char === " " || char === "	" || char === "\n" || char === "\r") {
+        let end2 = position + 1;
+        while (end2 < source.length && (source[end2] === " " || source[end2] === "	" || source[end2] === "\n" || source[end2] === "\r")) {
+          end2++;
+        }
+        tokens.push({ text: source.slice(position, end2), kind: "plain" });
+        position = end2;
+        continue;
+      }
+      if (char === "(" && position + 1 < source.length && source[position + 1] === ";") {
+        let end2 = position + 2;
+        while (end2 + 1 < source.length && !(source[end2] === ";" && source[end2 + 1] === ")")) {
+          end2++;
+        }
+        end2 = Math.min(end2 + 2, source.length);
+        tokens.push({ text: source.slice(position, end2), kind: "annotation" });
+        position = end2;
+        continue;
+      }
+      if (char === "(" || char === ")") {
+        tokens.push({ text: char, kind: "paren" });
+        position++;
+        continue;
+      }
+      if (char === '"') {
+        let end2 = position + 1;
+        while (end2 < source.length && source[end2] !== '"') {
+          if (source[end2] === "\\") {
+            end2++;
+          }
+          end2++;
+        }
+        end2 = Math.min(end2 + 1, source.length);
+        tokens.push({ text: source.slice(position, end2), kind: "string" });
+        position = end2;
+        continue;
+      }
+      if (char === "$") {
+        let end2 = position + 1;
+        while (end2 < source.length && source[end2] !== " " && source[end2] !== ")" && source[end2] !== "\n" && source[end2] !== "	") {
+          end2++;
+        }
+        tokens.push({ text: source.slice(position, end2), kind: "name" });
+        position = end2;
+        continue;
+      }
+      if (char >= "0" && char <= "9" || char === "-" || char === "+") {
+        const remaining = source.slice(position);
+        const numberMatch = remaining.match(/^-?(?:0x[0-9a-fA-F_]+|[0-9][0-9_]*(?:\.[0-9_]*)?(?:[eE][+-]?[0-9_]+)?|inf|nan(?::0x[0-9a-fA-F_]+)?)/);
+        if (numberMatch) {
+          tokens.push({ text: numberMatch[0], kind: "number" });
+          position += numberMatch[0].length;
+          continue;
+        }
+      }
+      let end = position;
+      while (end < source.length && source[end] !== " " && source[end] !== "	" && source[end] !== "\n" && source[end] !== "(" && source[end] !== ")" && source[end] !== '"') {
+        end++;
+      }
+      const word = source.slice(position, end);
+      if (WAT_KEYWORDS.has(word)) {
+        tokens.push({ text: word, kind: "keyword" });
+      } else if (WAT_TYPES.has(word)) {
+        tokens.push({ text: word, kind: "type" });
+      } else if (/^-?[0-9]/.test(word) || word === "inf" || word === "nan" || word === "-inf") {
+        tokens.push({ text: word, kind: "number" });
+      } else if (/^(i32|i64|f32|f64|v128|memory|local|global|table|ref|struct|array|br|call|select|drop|return|unreachable|nop|block|loop|if|else|end)[._]/.test(word)) {
+        tokens.push({ text: word, kind: "keyword" });
+      } else if (word.startsWith("offset=") || word.startsWith("align=")) {
+        tokens.push({ text: word, kind: "annotation" });
+      } else {
+        tokens.push({ text: word, kind: "plain" });
+      }
+      position = end;
+    }
+    return tokens;
+  }
+  var C_KEYWORDS = /* @__PURE__ */ new Set([
+    "if",
+    "else",
+    "while",
+    "do",
+    "for",
+    "switch",
+    "case",
+    "default",
+    "break",
+    "continue",
+    "return",
+    "void",
+    "const",
+    "sizeof",
+    "unreachable",
+    "table"
+  ]);
+  var C_TYPES = /* @__PURE__ */ new Set([
+    "int",
+    "long",
+    "float",
+    "double",
+    "short",
+    "char",
+    "unsigned",
+    "byte",
+    "ubyte",
+    "ushort",
+    "v128",
+    "funcref",
+    "externref",
+    "anyref",
+    "eqref",
+    "i31ref",
+    "structref",
+    "arrayref"
+  ]);
+  var C_CAST_TYPES = /* @__PURE__ */ new Set([
+    "int",
+    "long",
+    "float",
+    "double",
+    "unsigned",
+    "byte",
+    "ubyte",
+    "short",
+    "ushort"
+  ]);
+  var MULTI_CHAR_OPS = [">>>", ">>=", "<<=", "!=", "==", "<=", ">=", "&&", "||", "<<", ">>", "->"];
+  function renderHighlightedC(container, source, options) {
+    let position = 0;
+    function addSpan(className, text) {
+      const span = document.createElement("span");
+      span.className = className;
+      span.textContent = text;
+      container.appendChild(span);
+      return span;
+    }
+    while (position < source.length) {
+      const char = source[position];
+      if (char === " " || char === "	") {
+        container.appendChild(document.createTextNode(char));
+        position++;
+        continue;
+      }
+      if (char === "/" && position + 1 < source.length && source[position + 1] === "/") {
+        let end = position + 2;
+        while (end < source.length && source[end] !== "\n") {
+          end++;
+        }
+        addSpan("c-comment", source.slice(position, end));
+        position = end;
+        continue;
+      }
+      if (char === "/" && position + 1 < source.length && source[position + 1] === "*") {
+        let end = position + 2;
+        while (end + 1 < source.length && !(source[end] === "*" && source[end + 1] === "/")) {
+          end++;
+        }
+        end = Math.min(end + 2, source.length);
+        addSpan("c-comment", source.slice(position, end));
+        position = end;
+        continue;
+      }
+      if (char === '"') {
+        let end = position + 1;
+        while (end < source.length && source[end] !== '"') {
+          if (source[end] === "\\") {
+            end++;
+          }
+          end++;
+        }
+        end = Math.min(end + 1, source.length);
+        addSpan("c-string", source.slice(position, end));
+        position = end;
+        continue;
+      }
+      if (char >= "0" && char <= "9") {
+        let end = position;
+        if (end + 1 < source.length && source[end] === "0" && source[end + 1] === "x") {
+          end += 2;
+          while (end < source.length && /[0-9a-fA-F]/.test(source[end])) {
+            end++;
+          }
+        } else {
+          while (end < source.length && /[0-9.]/.test(source[end])) {
+            end++;
+          }
+          if (end < source.length && source[end] === "f") {
+            end++;
+          }
+        }
+        addSpan("c-number", source.slice(position, end));
+        position = end;
+        continue;
+      }
+      if (char === "(" && position + 1 < source.length) {
+        let end = position + 1;
+        while (end < source.length && source[end] === " ") {
+          end++;
+        }
+        let wordStart = end;
+        while (end < source.length && /[a-zA-Z]/.test(source[end])) {
+          end++;
+        }
+        const castWord = source.slice(wordStart, end);
+        let fullCast = castWord;
+        let castEnd = end;
+        while (castEnd < source.length && source[castEnd] === " ") {
+          castEnd++;
+        }
+        if (castEnd < source.length && /[a-zA-Z]/.test(source[castEnd])) {
+          let nextWordEnd = castEnd;
+          while (nextWordEnd < source.length && /[a-zA-Z]/.test(source[nextWordEnd])) {
+            nextWordEnd++;
+          }
+          const nextWord = source.slice(castEnd, nextWordEnd);
+          if (C_CAST_TYPES.has(nextWord)) {
+            fullCast = castWord + " " + nextWord;
+            castEnd = nextWordEnd;
+          }
+        }
+        if (C_CAST_TYPES.has(castWord) && castEnd < source.length && source[castEnd] === ")") {
+          addSpan("c-cast", source.slice(position, castEnd + 1));
+          position = castEnd + 1;
+          continue;
+        }
+      }
+      let matchedOp = false;
+      for (const op of MULTI_CHAR_OPS) {
+        if (source.startsWith(op, position)) {
+          addSpan("c-operator", op);
+          position += op.length;
+          matchedOp = true;
+          break;
+        }
+      }
+      if (matchedOp) {
+        continue;
+      }
+      if ("+-*/%=<>!&|^~?:".includes(char)) {
+        addSpan("c-operator", char);
+        position++;
+        continue;
+      }
+      if ("{}[]();,".includes(char)) {
+        if (char === "{" || char === "}") {
+          addSpan("c-brace", char);
+        } else {
+          addSpan("c-punct", char);
+        }
+        position++;
+        continue;
+      }
+      if (/[a-zA-Z_$]/.test(char)) {
+        let end = position;
+        while (end < source.length && /[a-zA-Z0-9_$]/.test(source[end])) {
+          end++;
+        }
+        const word = source.slice(position, end);
+        if (C_KEYWORDS.has(word)) {
+          addSpan("c-keyword", word);
+        } else if (C_TYPES.has(word)) {
+          addSpan("c-type", word);
+        } else if (word === "memory") {
+          addSpan("c-memory", word);
+        } else if (end < source.length && source[end] === "(") {
+          const span = addSpan("c-function", word);
+          if (options?.onFunctionClick) {
+            span.classList.add("c-function-link");
+            const funcName = word;
+            span.addEventListener("click", (event) => {
+              event.stopPropagation();
+              options.onFunctionClick(funcName);
+            });
+          }
+        } else if (word.startsWith("global_")) {
+          addSpan("c-global", word);
+        } else if (word.startsWith("var") || word.startsWith("param")) {
+          addSpan("c-variable", word);
+        } else {
+          addSpan("c-variable", word);
+        }
+        position = end;
+        continue;
+      }
+      container.appendChild(document.createTextNode(char));
+      position++;
+    }
+  }
+  function renderHighlightedWat(container, source) {
+    const tokens = tokenizeWat(source);
+    for (const token of tokens) {
+      if (token.kind === "plain" || token.kind === "paren") {
+        container.appendChild(document.createTextNode(token.text));
+      } else {
+        const span = document.createElement("span");
+        span.className = `wat-${token.kind}`;
+        span.textContent = token.text;
+        container.appendChild(span);
+      }
+    }
+  }
+  function buildInstructionByteClasses(bytes) {
+    const classes = /* @__PURE__ */ new Map();
+    try {
+      const instructions = InstructionDecoder.decodeFunctionBody(bytes);
+      for (const instruction of instructions) {
+        const opcodeEnd = instruction.offset + (instruction.length - (instruction.immediates.values.length > 0 ? 1 : 0));
+        for (let bytePos = instruction.offset; bytePos < instruction.offset + instruction.length; bytePos++) {
+          if (bytePos < instruction.offset + 1 || instruction.opCode.prefix !== void 0 && bytePos < instruction.offset + 2) {
+            classes.set(bytePos, "hex-opcode");
+          } else {
+            classes.set(bytePos, "hex-immediate");
+          }
+        }
+      }
+    } catch (decodeError) {
+    }
+    return classes;
+  }
+  function renderColoredHexDump(container, bytes, baseOffset, byteClasses) {
+    for (let position = 0; position < bytes.length; position += 16) {
+      const address = (baseOffset + position).toString(16).padStart(8, "0");
+      const addressSpan = document.createElement("span");
+      addressSpan.className = "hex-address";
+      addressSpan.textContent = address + "  ";
+      container.appendChild(addressSpan);
+      let asciiPart = "";
+      for (let byteIndex = 0; byteIndex < 16; byteIndex++) {
+        if (byteIndex === 8) {
+          container.appendChild(document.createTextNode(" "));
+        }
+        if (position + byteIndex < bytes.length) {
+          const byteValue = bytes[position + byteIndex];
+          const hexStr = byteValue.toString(16).padStart(2, "0");
+          const cssClass = byteClasses.get(position + byteIndex);
+          if (cssClass) {
+            const span = document.createElement("span");
+            span.className = cssClass;
+            span.textContent = hexStr;
+            container.appendChild(span);
+          } else {
+            container.appendChild(document.createTextNode(hexStr));
+          }
+          container.appendChild(document.createTextNode(" "));
+          asciiPart += byteValue >= 32 && byteValue < 127 ? String.fromCharCode(byteValue) : ".";
+        } else {
+          container.appendChild(document.createTextNode("   "));
+          asciiPart += " ";
+        }
+      }
+      const asciiSpan = document.createElement("span");
+      asciiSpan.className = "hex-ascii";
+      asciiSpan.textContent = " |" + asciiPart + "|";
+      container.appendChild(asciiSpan);
+      container.appendChild(document.createTextNode("\n"));
+    }
+  }
+  var SECTION_NAMES = {
+    0: "Custom",
+    1: "Type",
+    2: "Import",
+    3: "Function",
+    4: "Table",
+    5: "Memory",
+    6: "Global",
+    7: "Export",
+    8: "Start",
+    9: "Element",
+    10: "Code",
+    11: "Data",
+    12: "DataCount",
+    13: "Tag"
+  };
+  var VALUE_TYPE_NAMES = {
+    [-1]: "i32",
+    [-2]: "i64",
+    [-3]: "f32",
+    [-4]: "f64",
+    [-5]: "v128",
+    [-16]: "funcref",
+    [-17]: "externref",
+    [-18]: "anyref",
+    [-19]: "eqref",
+    [-20]: "i31ref",
+    [-21]: "structref",
+    [-22]: "arrayref",
+    [-15]: "nullref",
+    [-13]: "nullfuncref",
+    [-14]: "nullexternref",
+    127: "i32",
+    126: "i64",
+    125: "f32",
+    124: "f64",
+    123: "v128",
+    112: "funcref",
+    111: "externref",
+    110: "anyref",
+    109: "eqref",
+    108: "i31ref",
+    107: "structref",
+    106: "arrayref",
+    113: "nullref",
+    115: "nullfuncref",
+    114: "nullexternref"
+  };
+  var EXPORT_KIND_NAMES = {
+    0: "func",
+    1: "table",
+    2: "memory",
+    3: "global",
+    4: "tag"
+  };
+  function getValueTypeName2(valueType) {
+    if (typeof valueType === "object" && "name" in valueType) {
+      return valueType.name;
+    }
+    return VALUE_TYPE_NAMES[valueType] || `type_${valueType}`;
+  }
+  function formatFuncType(funcType) {
+    const params = funcType.parameterTypes.map((p) => getValueTypeName2(p)).join(", ");
+    const returns = funcType.returnTypes.map((r) => getValueTypeName2(r)).join(", ");
+    return `(${params}) -> (${returns})`;
+  }
+  function formatHexDump(bytes, baseOffset) {
+    const lines = [];
+    for (let position = 0; position < bytes.length; position += 16) {
+      const address = (baseOffset + position).toString(16).padStart(8, "0");
+      const hexParts = [];
+      let asciiPart = "";
+      for (let byteIndex = 0; byteIndex < 16; byteIndex++) {
+        if (position + byteIndex < bytes.length) {
+          const byteValue = bytes[position + byteIndex];
+          hexParts.push(byteValue.toString(16).padStart(2, "0"));
+          asciiPart += byteValue >= 32 && byteValue < 127 ? String.fromCharCode(byteValue) : ".";
+        } else {
+          hexParts.push("  ");
+          asciiPart += " ";
+        }
+      }
+      const hexLeft = hexParts.slice(0, 8).join(" ");
+      const hexRight = hexParts.slice(8).join(" ");
+      lines.push(`${address}  ${hexLeft}  ${hexRight}  |${asciiPart}|`);
+    }
+    return lines.join("\n");
+  }
+  function flattenTypes3(moduleInfo) {
+    const flat = [];
+    for (const typeEntry of moduleInfo.types) {
+      if (typeEntry.kind === "rec") {
+        for (const inner of typeEntry.types) {
+          flat.push(inner);
+        }
+      } else {
+        flat.push(typeEntry);
+      }
+    }
+    return flat;
+  }
+  function buildCallGraph(moduleInfo) {
+    const importedFuncCount = moduleInfo.imports.filter((importEntry) => importEntry.kind === 0).length;
+    const callees = /* @__PURE__ */ new Map();
+    const callers = /* @__PURE__ */ new Map();
+    for (let funcIndex = 0; funcIndex < moduleInfo.functions.length; funcIndex++) {
+      const globalIndex = importedFuncCount + funcIndex;
+      const func = moduleInfo.functions[funcIndex];
+      const instructions = func.instructions || InstructionDecoder.decodeFunctionBody(func.body);
+      const targets = /* @__PURE__ */ new Set();
+      for (const instruction of instructions) {
+        if (instruction.opCode.mnemonic === "call" || instruction.opCode.mnemonic === "return_call") {
+          const targetIndex = instruction.immediates.values[0];
+          targets.add(targetIndex);
+        }
+      }
+      callees.set(globalIndex, targets);
+      for (const target of targets) {
+        if (!callers.has(target)) {
+          callers.set(target, /* @__PURE__ */ new Set());
+        }
+        callers.get(target).add(globalIndex);
+      }
+    }
+    return { callees, callers };
+  }
+  var Explorer = class {
+    constructor(container) {
+      this.moduleInfo = null;
+      this.byteRanges = null;
+      this.rawBytes = null;
+      this.fileName = "";
+      this.selectedNode = null;
+      this.treeContainer = null;
+      this.detailContainer = null;
+      this.breadcrumbBar = null;
+      this.treeNodes = [];
+      this.disassembler = null;
+      this.cachedFullWat = null;
+      this.callGraph = null;
+      this.cachedStrings = null;
+      this.dwarfInfo = void 0;
+      this.dwarfFunctionMap = null;
+      this.nameResolver = null;
+      this.searchQuery = "";
+      this.visibleNodes = [];
+      this.searchInput = null;
+      this.parsedSourceMap = null;
+      this.container = container;
+      this.renderDropZone();
+    }
+    loadSourceMap(json) {
+      this.parsedSourceMap = parseSourceMap(json);
+    }
+    getFunctionName(globalIndex) {
+      if (this.moduleInfo?.nameSection?.functionNames?.has(globalIndex)) {
+        return this.moduleInfo.nameSection.functionNames.get(globalIndex);
+      }
+      const dwarfMap = this.getDwarfFunctionMap();
+      if (dwarfMap) {
+        return dwarfMap.get(globalIndex) || null;
+      }
+      return null;
+    }
+    getDwarfFunctionMap() {
+      if (this.dwarfFunctionMap !== null) {
+        return this.dwarfFunctionMap;
+      }
+      const dwarfData = this.getDwarfInfo();
+      if (!dwarfData || dwarfData.functions.length === 0 || !this.moduleInfo || !this.byteRanges) {
+        return null;
+      }
+      this.dwarfFunctionMap = /* @__PURE__ */ new Map();
+      const importedFuncCount = this.moduleInfo.imports.filter((imp) => imp.kind === 0).length;
+      const codeSectionRange = this.byteRanges.sections.find((section) => section.sectionId === 10);
+      if (!codeSectionRange) {
+        return this.dwarfFunctionMap;
+      }
+      const codeSectionBodyOffset = this.findCodeSectionDataOffset(codeSectionRange.offset);
+      const offsets = [codeSectionBodyOffset, codeSectionRange.offset, 0];
+      for (const baseOffset of offsets) {
+        for (let funcIndex = 0; funcIndex < this.moduleInfo.functions.length; funcIndex++) {
+          const globalIndex = importedFuncCount + funcIndex;
+          const byteRange = this.byteRanges.getItem("function", funcIndex);
+          if (!byteRange) {
+            continue;
+          }
+          const relativeOffset = byteRange.offset - baseOffset;
+          const match = dwarfData.functions.find(
+            (dwarfFunc) => dwarfFunc.lowPc >= relativeOffset && dwarfFunc.lowPc < relativeOffset + byteRange.length
+          );
+          if (match) {
+            this.dwarfFunctionMap.set(globalIndex, match.name);
+          }
+        }
+        if (this.dwarfFunctionMap.size > 0) {
+          break;
+        }
+      }
+      if (this.dwarfFunctionMap.size === 0 && dwarfData.functions.length > 0) {
+        const sortedDwarfFuncs = [...dwarfData.functions].filter((dwarfFunc) => dwarfFunc.name.length > 0).sort((funcA, funcB) => funcA.lowPc - funcB.lowPc);
+        for (let funcIndex = 0; funcIndex < Math.min(this.moduleInfo.functions.length, sortedDwarfFuncs.length); funcIndex++) {
+          const globalIndex = importedFuncCount + funcIndex;
+          this.dwarfFunctionMap.set(globalIndex, sortedDwarfFuncs[funcIndex].name);
+        }
+      }
+      return this.dwarfFunctionMap;
+    }
+    buildDwarfLocalNameMap() {
+      const dwarfData = this.getDwarfInfo();
+      if (!dwarfData || dwarfData.functions.length === 0 || !this.moduleInfo) {
+        return null;
+      }
+      const dwarfFuncMap = this.getDwarfFunctionMap();
+      if (!dwarfFuncMap || dwarfFuncMap.size === 0) {
+        return null;
+      }
+      const dwarfFuncByName = /* @__PURE__ */ new Map();
+      for (const func of dwarfData.functions) {
+        if (func.name) {
+          dwarfFuncByName.set(func.name, func);
+        }
+      }
+      const result = /* @__PURE__ */ new Map();
+      for (const [globalIndex, funcName] of dwarfFuncMap) {
+        const dwarfFunc = dwarfFuncByName.get(funcName);
+        if (!dwarfFunc) {
+          continue;
+        }
+        const localMap = /* @__PURE__ */ new Map();
+        for (const param of dwarfFunc.parameters) {
+          if (param.wasmLocal !== null) {
+            localMap.set(param.wasmLocal, param.name);
+          }
+        }
+        for (const variable of dwarfFunc.variables) {
+          if (variable.wasmLocal !== null) {
+            localMap.set(variable.wasmLocal, variable.name);
+          }
+        }
+        if (localMap.size > 0) {
+          result.set(globalIndex, localMap);
+        }
+      }
+      return result.size > 0 ? result : null;
+    }
+    findDwarfFunction(localFuncIndex) {
+      const dwarfData = this.getDwarfInfo();
+      if (!dwarfData || dwarfData.functions.length === 0 || !this.byteRanges) {
+        return null;
+      }
+      const byteRange = this.byteRanges.getItem("function", localFuncIndex);
+      if (!byteRange) {
+        return null;
+      }
+      const codeSectionRange = this.byteRanges.sections.find((section) => section.sectionId === 10);
+      if (!codeSectionRange) {
+        return null;
+      }
+      const codeSectionBodyOffset = this.findCodeSectionDataOffset(codeSectionRange.offset);
+      for (const baseOffset of [codeSectionBodyOffset, codeSectionRange.offset, 0]) {
+        const relativeOffset = byteRange.offset - baseOffset;
+        const match = dwarfData.functions.find(
+          (dwarfFunc) => dwarfFunc.lowPc >= relativeOffset && dwarfFunc.lowPc < relativeOffset + byteRange.length
+        );
+        if (match) {
+          return match;
+        }
+      }
+      return null;
+    }
+    findCodeSectionDataOffset(codeSectionStart) {
+      if (!this.rawBytes) {
+        return codeSectionStart;
+      }
+      let offset = codeSectionStart;
+      offset++;
+      let byte;
+      do {
+        byte = this.rawBytes[offset++];
+      } while (byte & 128);
+      return offset;
+    }
+    getNameSource(globalFuncIndex) {
+      if (this.moduleInfo?.nameSection?.functionNames?.has(globalFuncIndex)) {
+        return "WASM name section";
+      }
+      const dwarfMap = this.getDwarfFunctionMap();
+      if (dwarfMap && dwarfMap.has(globalFuncIndex)) {
+        return "DWARF debug info";
+      }
+      return null;
+    }
+    getCallGraph() {
+      if (!this.callGraph && this.moduleInfo) {
+        this.callGraph = buildCallGraph(this.moduleInfo);
+      }
+      return this.callGraph;
+    }
+    getDwarfInfo() {
+      if (this.dwarfInfo === void 0) {
+        if (this.moduleInfo) {
+          this.dwarfInfo = parseDwarfDebugInfo(this.moduleInfo.customSections);
+        } else {
+          return null;
+        }
+      }
+      return this.dwarfInfo;
+    }
+    detectSourceMappingUrl() {
+      if (!this.moduleInfo) {
+        return;
+      }
+      const sourceMappingSection = this.moduleInfo.customSections.find(
+        (section) => section.name === "sourceMappingURL"
+      );
+      if (!sourceMappingSection) {
+        return;
+      }
+      const decoder = new TextDecoder("utf-8");
+      const sourceMapUrl = decoder.decode(sourceMappingSection.data);
+      if (sourceMapUrl.startsWith("data:application/json;base64,")) {
+        const base64Data = sourceMapUrl.slice("data:application/json;base64,".length);
+        const jsonString = atob(base64Data);
+        this.parsedSourceMap = parseSourceMap(jsonString);
+      }
+    }
+    renderSourceTabContent(tabContent, funcIndex) {
+      if (!this.parsedSourceMap || !this.byteRanges) {
+        const placeholder = document.createElement("div");
+        placeholder.className = "detail-placeholder";
+        placeholder.textContent = "No source map loaded.";
+        tabContent.appendChild(placeholder);
+        return;
+      }
+      const byteRange = this.byteRanges.getItem("function", funcIndex);
+      if (!byteRange) {
+        const placeholder = document.createElement("div");
+        placeholder.className = "detail-placeholder";
+        placeholder.textContent = "No byte range information available for this function.";
+        tabContent.appendChild(placeholder);
+        return;
+      }
+      const startMapping = lookupMapping(this.parsedSourceMap.mappings, byteRange.offset);
+      if (!startMapping) {
+        const placeholder = document.createElement("div");
+        placeholder.className = "detail-placeholder";
+        placeholder.textContent = "No source mapping found for this function.";
+        tabContent.appendChild(placeholder);
+        return;
+      }
+      const endOffset = byteRange.offset + byteRange.length;
+      const relevantMappings = [];
+      for (const mapping of this.parsedSourceMap.mappings) {
+        if (mapping.generatedOffset >= byteRange.offset && mapping.generatedOffset < endOffset) {
+          relevantMappings.push(mapping);
+        }
+      }
+      const highlightedLines = /* @__PURE__ */ new Set();
+      for (const mapping of relevantMappings) {
+        if (mapping.sourceIndex === startMapping.sourceIndex) {
+          highlightedLines.add(mapping.sourceLine);
+        }
+      }
+      const sourceFileName = this.parsedSourceMap.sources[startMapping.sourceIndex] || "unknown";
+      const sourceRoot = this.parsedSourceMap.sourceRoot;
+      const fullSourcePath = sourceRoot ? sourceRoot + sourceFileName : sourceFileName;
+      const fileLabel = document.createElement("div");
+      fileLabel.className = "source-file-label";
+      fileLabel.textContent = fullSourcePath;
+      tabContent.appendChild(fileLabel);
+      const sourceContent = this.parsedSourceMap.sourcesContent[startMapping.sourceIndex];
+      if (!sourceContent) {
+        const placeholder = document.createElement("div");
+        placeholder.className = "detail-placeholder";
+        placeholder.textContent = "Source content not available in the source map.";
+        tabContent.appendChild(placeholder);
+        return;
+      }
+      const sourceLines = sourceContent.split("\n");
+      let minLine = Infinity;
+      let maxLine = -Infinity;
+      for (const lineNumber of highlightedLines) {
+        if (lineNumber < minLine) {
+          minLine = lineNumber;
+        }
+        if (lineNumber > maxLine) {
+          maxLine = lineNumber;
+        }
+      }
+      const contextPadding = 5;
+      const displayStart = Math.max(0, minLine - contextPadding);
+      const displayEnd = Math.min(sourceLines.length - 1, maxLine + contextPadding);
+      const block = document.createElement("div");
+      block.className = "detail-code";
+      const gutterWidth = String(displayEnd + 2).length;
+      for (let lineIndex = displayStart; lineIndex <= displayEnd; lineIndex++) {
+        const lineElement = document.createElement("div");
+        lineElement.className = "code-line";
+        if (highlightedLines.has(lineIndex)) {
+          lineElement.classList.add("source-highlight");
+        }
+        const gutter = document.createElement("span");
+        gutter.className = "code-line-number";
+        gutter.textContent = String(lineIndex + 1).padStart(gutterWidth, " ");
+        lineElement.appendChild(gutter);
+        const content = document.createElement("span");
+        content.className = "code-line-content";
+        content.textContent = sourceLines[lineIndex];
+        lineElement.appendChild(content);
+        block.appendChild(lineElement);
+      }
+      const wrapper = document.createElement("div");
+      wrapper.className = "detail-block-wrapper";
+      wrapper.appendChild(block);
+      wrapper.appendChild(this.createCopyButton(
+        sourceLines.slice(displayStart, displayEnd + 1).join("\n")
+      ));
+      tabContent.appendChild(wrapper);
+    }
+    renderDropZone() {
+      this.container.innerHTML = "";
+      const dropZone = document.createElement("div");
+      dropZone.className = "explorer-drop-zone";
+      const icon = document.createElement("div");
+      icon.className = "drop-zone-icon";
+      icon.textContent = "\u{1F4C2}";
+      dropZone.appendChild(icon);
+      const message = document.createElement("div");
+      message.className = "drop-zone-message";
+      message.textContent = "Drop a .wasm file here or click to open";
+      dropZone.appendChild(message);
+      const hint = document.createElement("div");
+      hint.className = "drop-zone-hint";
+      hint.textContent = "Supports any valid WebAssembly binary";
+      dropZone.appendChild(hint);
+      const fileInput = document.createElement("input");
+      fileInput.type = "file";
+      fileInput.accept = ".wasm";
+      fileInput.style.display = "none";
+      fileInput.addEventListener("change", () => {
+        if (fileInput.files && fileInput.files.length > 0) {
+          this.loadFile(fileInput.files[0]);
+        }
+      });
+      dropZone.addEventListener("click", () => fileInput.click());
+      dropZone.addEventListener("dragover", (event) => {
+        event.preventDefault();
+        dropZone.classList.add("drag-over");
+      });
+      dropZone.addEventListener("dragleave", () => {
+        dropZone.classList.remove("drag-over");
+      });
+      dropZone.addEventListener("drop", (event) => {
+        event.preventDefault();
+        dropZone.classList.remove("drag-over");
+        if (event.dataTransfer && event.dataTransfer.files.length > 0) {
+          this.loadFile(event.dataTransfer.files[0]);
+        }
+      });
+      this.container.appendChild(dropZone);
+      this.container.appendChild(fileInput);
+    }
+    async loadFile(file) {
+      this.fileName = file.name;
+      const arrayBuffer = await file.arrayBuffer();
+      this.rawBytes = new Uint8Array(arrayBuffer);
+      try {
+        const reader = new BinaryReader(this.rawBytes);
+        this.moduleInfo = reader.read();
+        this.byteRanges = buildByteRanges(this.rawBytes);
+        this.disassembler = new Disassembler(this.moduleInfo);
+        this.cachedFullWat = null;
+        this.callGraph = null;
+        this.cachedStrings = null;
+        this.dwarfFunctionMap = null;
+        const hasDebugSections = this.moduleInfo.customSections.some(
+          (section) => section.name === ".debug_info"
+        );
+        if (hasDebugSections) {
+          this.dwarfInfo = parseDwarfDebugInfo(this.moduleInfo.customSections);
+        } else {
+          this.dwarfInfo = null;
+        }
+        const dwarfMap = this.getDwarfFunctionMap();
+        const dwarfLocalNames = this.buildDwarfLocalNameMap();
+        this.nameResolver = createNameResolver(
+          this.moduleInfo,
+          dwarfMap ? (globalIndex) => dwarfMap.get(globalIndex) || null : void 0,
+          dwarfLocalNames ? (funcGlobalIndex, localIndex) => {
+            const funcLocals = dwarfLocalNames.get(funcGlobalIndex);
+            return funcLocals?.get(localIndex) || null;
+          } : void 0
+        );
+        this.parsedSourceMap = null;
+        this.detectSourceMappingUrl();
+        this.renderExplorer();
+      } catch (error) {
+        const errorMessage = error instanceof Error ? error.message : String(error);
+        this.container.innerHTML = "";
+        const errorDisplay = document.createElement("div");
+        errorDisplay.className = "explorer-error";
+        errorDisplay.textContent = `Failed to parse ${this.fileName}: ${errorMessage}`;
+        const retryButton = document.createElement("button");
+        retryButton.className = "explorer-retry-btn";
+        retryButton.textContent = "Load another file";
+        retryButton.addEventListener("click", () => this.renderDropZone());
+        this.container.appendChild(errorDisplay);
+        this.container.appendChild(retryButton);
+      }
+    }
+    renderExplorer() {
+      this.container.innerHTML = "";
+      const toolbar = document.createElement("div");
+      toolbar.className = "explorer-toolbar";
+      const fileLabel = document.createElement("span");
+      fileLabel.className = "explorer-file-label";
+      fileLabel.textContent = this.fileName;
+      toolbar.appendChild(fileLabel);
+      if (this.rawBytes) {
+        const sizeLabel = document.createElement("span");
+        sizeLabel.className = "explorer-size-label";
+        sizeLabel.textContent = this.formatFileSize(this.rawBytes.length);
+        toolbar.appendChild(sizeLabel);
+      }
+      const loadButton = document.createElement("button");
+      loadButton.className = "explorer-load-btn";
+      loadButton.textContent = "Open file";
+      loadButton.addEventListener("click", () => {
+        const fileInput = document.createElement("input");
+        fileInput.type = "file";
+        fileInput.accept = ".wasm";
+        fileInput.addEventListener("change", () => {
+          if (fileInput.files && fileInput.files.length > 0) {
+            this.loadFile(fileInput.files[0]);
+          }
+        });
+        fileInput.click();
+      });
+      toolbar.appendChild(loadButton);
+      const watSearchInput = document.createElement("input");
+      watSearchInput.type = "text";
+      watSearchInput.placeholder = "Search WAT...";
+      watSearchInput.className = "explorer-wat-search";
+      watSearchInput.addEventListener("keydown", (event) => {
+        if (event.key === "Enter") {
+          this.searchWat(watSearchInput.value);
+        }
+      });
+      toolbar.appendChild(watSearchInput);
+      this.container.appendChild(toolbar);
+      const splitView = document.createElement("div");
+      splitView.className = "explorer-split";
+      const treePane = document.createElement("div");
+      treePane.className = "explorer-tree-pane";
+      this.searchInput = document.createElement("input");
+      this.searchInput.type = "text";
+      this.searchInput.placeholder = "Filter tree...";
+      this.searchInput.className = "explorer-tree-search";
+      this.searchInput.addEventListener("input", () => {
+        this.searchQuery = this.searchInput.value.toLowerCase().trim();
+        this.renderTree();
+      });
+      this.searchInput.addEventListener("keydown", (event) => this.handleTreeKeydown(event));
+      treePane.appendChild(this.searchInput);
+      this.treeContainer = document.createElement("div");
+      this.treeContainer.className = "explorer-tree";
+      this.treeContainer.tabIndex = 0;
+      this.treeContainer.addEventListener("keydown", (event) => this.handleTreeKeydown(event));
+      treePane.appendChild(this.treeContainer);
+      const detailPane = document.createElement("div");
+      detailPane.className = "explorer-detail-pane";
+      this.breadcrumbBar = document.createElement("div");
+      this.breadcrumbBar.className = "explorer-breadcrumbs";
+      detailPane.appendChild(this.breadcrumbBar);
+      this.detailContainer = document.createElement("div");
+      this.detailContainer.className = "explorer-detail";
+      detailPane.appendChild(this.detailContainer);
+      const resizeHandle = document.createElement("div");
+      resizeHandle.className = "explorer-resize-handle";
+      this.initExplorerResize(resizeHandle, treePane, splitView);
+      splitView.appendChild(treePane);
+      splitView.appendChild(resizeHandle);
+      splitView.appendChild(detailPane);
+      this.container.appendChild(splitView);
+      this.buildTree();
+      this.renderTree();
+      const restored = this.restoreFromHash();
+      if (!restored) {
+        this.selectNode(this.treeNodes[0]);
+      }
+      this.container.addEventListener("dragover", (event) => {
+        event.preventDefault();
+      });
+      this.container.addEventListener("drop", (event) => {
+        event.preventDefault();
+        if (event.dataTransfer && event.dataTransfer.files.length > 0) {
+          this.loadFile(event.dataTransfer.files[0]);
+        }
+      });
+    }
+    formatFileSize(bytes) {
+      if (bytes < 1024) {
+        return `${bytes} B`;
+      }
+      if (bytes < 1024 * 1024) {
+        return `${(bytes / 1024).toFixed(1)} KB`;
+      }
+      return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+    }
+    buildTree() {
+      if (!this.moduleInfo) {
+        return;
+      }
+      const moduleNode = this.moduleInfo;
+      this.treeNodes = [];
+      const root = {
+        label: this.fileName,
+        section: "module",
+        index: -1,
+        expanded: true,
+        children: []
+      };
+      if (moduleNode.types.length > 0) {
+        const typesNode = {
+          label: `Types (${moduleNode.types.length})`,
+          section: "types",
+          index: -1,
+          expanded: false,
+          children: []
+        };
+        let flatIndex = 0;
+        for (let typeIndex = 0; typeIndex < moduleNode.types.length; typeIndex++) {
+          const typeEntry = moduleNode.types[typeIndex];
+          if (typeEntry.kind === "rec") {
+            const recNode = {
+              label: `type ${flatIndex}: rec (${typeEntry.types.length} types)`,
+              section: "type",
+              index: typeIndex,
+              children: []
+            };
+            for (let innerIndex = 0; innerIndex < typeEntry.types.length; innerIndex++) {
+              recNode.children.push({
+                label: `type ${flatIndex}: ${this.formatTypeLabel(typeEntry.types[innerIndex])}`,
+                section: "type",
+                index: typeIndex
+              });
+              flatIndex++;
+            }
+            typesNode.children.push(recNode);
+          } else {
+            typesNode.children.push({
+              label: `type ${flatIndex}: ${this.formatTypeLabel(typeEntry)}`,
+              section: "type",
+              index: typeIndex
+            });
+            flatIndex++;
+          }
+        }
+        root.children.push(typesNode);
+      }
+      if (moduleNode.imports.length > 0) {
+        const importsNode = {
+          label: `Imports (${moduleNode.imports.length})`,
+          section: "imports",
+          index: -1,
+          expanded: false,
+          children: moduleNode.imports.map((importEntry, importIndex) => {
+            let importTip = `${importEntry.moduleName}.${importEntry.fieldName}`;
+            if (importEntry.typeIndex !== void 0) {
+              importTip += `
+type ${importEntry.typeIndex}`;
+            }
+            if (importEntry.memoryType) {
+              importTip += `
+pages: ${importEntry.memoryType.initial}..${importEntry.memoryType.maximum ?? ""}`;
+            }
+            return {
+              label: `"${importEntry.moduleName}"."${importEntry.fieldName}" (${EXPORT_KIND_NAMES[importEntry.kind] || "unknown"})`,
+              section: "import",
+              index: importIndex,
+              tooltip: importTip
+            };
+          })
+        };
+        root.children.push(importsNode);
+      }
+      if (moduleNode.functions.length > 0) {
+        const importedFuncCount = moduleNode.imports.filter((importEntry) => importEntry.kind === 0).length;
+        const allFlatTypes = flattenTypes3(moduleNode);
+        const functionsNode = {
+          label: `Functions (${moduleNode.functions.length})`,
+          section: "functions",
+          index: -1,
+          expanded: false,
+          children: moduleNode.functions.map((funcEntry, funcIndex) => {
+            const globalIndex = importedFuncCount + funcIndex;
+            const funcName = this.getFunctionName(globalIndex);
+            let tipSignature = "";
+            if (funcEntry.typeIndex < allFlatTypes.length && allFlatTypes[funcEntry.typeIndex].kind === "func") {
+              tipSignature = formatFuncType(allFlatTypes[funcEntry.typeIndex]);
+            }
+            const totalLocals = funcEntry.locals.reduce((sum, local) => sum + local.count, 0);
+            const label = funcName ? funcName : `func_${globalIndex}`;
+            return {
+              label,
+              section: "function",
+              index: funcIndex,
+              tooltip: `func ${globalIndex}
+${tipSignature}
+${funcEntry.body.length} bytes, ${totalLocals} locals`
+            };
+          })
+        };
+        root.children.push(functionsNode);
+      }
+      if (moduleNode.tables.length > 0) {
+        const importedTableCount = moduleNode.imports.filter((importEntry) => importEntry.kind === 1).length;
+        const tablesNode = {
+          label: `Tables (${moduleNode.tables.length})`,
+          section: "tables",
+          index: -1,
+          expanded: false,
+          children: moduleNode.tables.map((tableEntry, tableIndex) => ({
+            label: `table ${importedTableCount + tableIndex}: ${getValueTypeName2(tableEntry.elementType)} (${tableEntry.initial}..${tableEntry.maximum ?? ""})`,
+            section: "table",
+            index: tableIndex
+          }))
+        };
+        root.children.push(tablesNode);
+      }
+      if (moduleNode.memories.length > 0) {
+        const importedMemCount = moduleNode.imports.filter((importEntry) => importEntry.kind === 2).length;
+        const memoriesNode = {
+          label: `Memories (${moduleNode.memories.length})`,
+          section: "memories",
+          index: -1,
+          expanded: false,
+          children: moduleNode.memories.map((memoryEntry, memIndex) => {
+            const flags = [];
+            if (memoryEntry.shared) {
+              flags.push("shared");
+            }
+            if (memoryEntry.memory64) {
+              flags.push("memory64");
+            }
+            const flagStr = flags.length > 0 ? ` [${flags.join(", ")}]` : "";
+            return {
+              label: `memory ${importedMemCount + memIndex}: ${memoryEntry.initial}..${memoryEntry.maximum ?? ""}${flagStr}`,
+              section: "memory",
+              index: memIndex
+            };
+          })
+        };
+        root.children.push(memoriesNode);
+      }
+      if (moduleNode.globals.length > 0) {
+        const importedGlobalCount = moduleNode.imports.filter((importEntry) => importEntry.kind === 3).length;
+        const globalsNode = {
+          label: `Globals (${moduleNode.globals.length})`,
+          section: "globals",
+          index: -1,
+          expanded: false,
+          children: moduleNode.globals.map((globalEntry, globalIndex) => {
+            const globalIdx = importedGlobalCount + globalIndex;
+            const globalName = moduleNode.nameSection?.globalNames?.get(globalIdx);
+            const mutStr = globalEntry.mutable ? "mut " : "";
+            const globalLabel = globalName || `global_${globalIdx}`;
+            return {
+              label: `${globalLabel}: ${mutStr}${getValueTypeName2(globalEntry.valueType)}`,
+              section: "global",
+              index: globalIndex
+            };
+          })
+        };
+        root.children.push(globalsNode);
+      }
+      if (moduleNode.exports.length > 0) {
+        const exportsNode = {
+          label: `Exports (${moduleNode.exports.length})`,
+          section: "exports",
+          index: -1,
+          expanded: false,
+          children: moduleNode.exports.map((exportEntry, exportIndex) => ({
+            label: `"${exportEntry.name}" -> ${EXPORT_KIND_NAMES[exportEntry.kind] || "unknown"} ${exportEntry.index}`,
+            section: "export",
+            index: exportIndex,
+            tooltip: `${EXPORT_KIND_NAMES[exportEntry.kind] || "unknown"} index ${exportEntry.index}`
+          }))
+        };
+        root.children.push(exportsNode);
+      }
+      if (moduleNode.start !== null) {
+        root.children.push({
+          label: `Start (func ${moduleNode.start})`,
+          section: "start",
+          index: moduleNode.start
+        });
+      }
+      if (moduleNode.elements.length > 0) {
+        const elementsNode = {
+          label: `Elements (${moduleNode.elements.length})`,
+          section: "elements",
+          index: -1,
+          expanded: false,
+          children: moduleNode.elements.map((elementEntry, elemIndex) => {
+            const passiveLabel = elementEntry.passive ? "passive" : `table ${elementEntry.tableIndex}`;
+            return {
+              label: `elem ${elemIndex}: ${passiveLabel} (${elementEntry.functionIndices.length} entries)`,
+              section: "element",
+              index: elemIndex
+            };
+          })
+        };
+        root.children.push(elementsNode);
+      }
+      if (moduleNode.data.length > 0) {
+        const dataNode = {
+          label: `Data (${moduleNode.data.length})`,
+          section: "data-segments",
+          index: -1,
+          expanded: false,
+          children: moduleNode.data.map((dataEntry, dataIndex) => {
+            const passiveLabel = dataEntry.passive ? "passive" : `memory ${dataEntry.memoryIndex}`;
+            return {
+              label: `data ${dataIndex}: ${passiveLabel} (${dataEntry.data.length} bytes)`,
+              section: "data",
+              index: dataIndex
+            };
+          })
+        };
+        root.children.push(dataNode);
+      }
+      if (moduleNode.tags.length > 0) {
+        const tagsNode = {
+          label: `Tags (${moduleNode.tags.length})`,
+          section: "tags",
+          index: -1,
+          expanded: false,
+          children: moduleNode.tags.map((tagEntry, tagIndex) => ({
+            label: `tag ${tagIndex}: type ${tagEntry.typeIndex}`,
+            section: "tag",
+            index: tagIndex
+          }))
+        };
+        root.children.push(tagsNode);
+      }
+      if (moduleNode.customSections.length > 0) {
+        const customNode = {
+          label: `Custom Sections (${moduleNode.customSections.length})`,
+          section: "custom-sections",
+          index: -1,
+          expanded: false,
+          children: moduleNode.customSections.map((customEntry, customIndex) => ({
+            label: `"${customEntry.name}" (${customEntry.data.length} bytes)`,
+            section: "custom",
+            index: customIndex
+          }))
+        };
+        root.children.push(customNode);
+      }
+      if (moduleNode.nameSection) {
+        root.children.push({
+          label: "Name Section",
+          section: "name-section",
+          index: -1
+        });
+      }
+      {
+        const sizeChildren = [
+          { label: "Section Breakdown", section: "size-sections", index: -1 }
+        ];
+        if (moduleNode.functions.length > 0) {
+          sizeChildren.push({ label: "Function Sizes", section: "size-functions", index: -1 });
+        }
+        if (moduleNode.data.length > 0) {
+          sizeChildren.push({ label: "Data Segment Sizes", section: "size-data", index: -1 });
+        }
+        root.children.push({
+          label: "Size Analysis",
+          section: "size-analysis",
+          index: -1,
+          children: sizeChildren
+        });
+      }
+      root.children.push({
+        label: "Instruction Statistics",
+        section: "instruction-stats",
+        index: -1
+      });
+      const hasDebugSections = moduleNode.customSections.some(
+        (section) => section.name.startsWith(".debug_")
+      );
+      if (hasDebugSections) {
+        root.children.push({
+          label: "Debug Info",
+          section: "debug-info",
+          index: -1
+        });
+      }
+      if (moduleNode.data.length > 0) {
+        root.children.push({
+          label: "Strings",
+          section: "strings",
+          index: -1
+        });
+      }
+      root.children.push({
+        label: "Feature Detection",
+        section: "feature-detection",
+        index: -1
+      });
+      root.children.push({
+        label: "Module Interface",
+        section: "module-interface",
+        index: -1
+      });
+      root.children.push({
+        label: "Function Complexity",
+        section: "function-complexity",
+        index: -1
+      });
+      root.children.push({
+        label: "Dead Code",
+        section: "dead-code",
+        index: -1
+      });
+      const hasProducers = moduleNode.customSections.some((section) => section.name === "producers");
+      if (hasProducers) {
+        root.children.push({
+          label: "Producers",
+          section: "producers",
+          index: -1
+        });
+      }
+      const hasTargetFeatures = moduleNode.customSections.some((section) => section.name === "target_features");
+      if (hasTargetFeatures) {
+        root.children.push({
+          label: "Target Features",
+          section: "target-features",
+          index: -1
+        });
+      }
+      this.treeNodes = [root];
+    }
+    formatTypeLabel(typeEntry) {
+      if (typeEntry.kind === "func") {
+        return `func ${formatFuncType(typeEntry)}`;
+      }
+      if (typeEntry.kind === "struct") {
+        return `struct (${typeEntry.fields.length} fields)`;
+      }
+      if (typeEntry.kind === "array") {
+        const mutStr = typeEntry.mutable ? "mut " : "";
+        return `array (${mutStr}${getValueTypeName2(typeEntry.elementType)})`;
+      }
+      return typeEntry.kind;
+    }
+    renderTree() {
+      if (!this.treeContainer) {
+        return;
+      }
+      this.treeContainer.innerHTML = "";
+      this.visibleNodes = [];
+      for (const node of this.treeNodes) {
+        this.renderTreeNode(this.treeContainer, node, 0);
+      }
+    }
+    matchesSearch(node) {
+      if (!this.searchQuery) {
+        return true;
+      }
+      if (node.label.toLowerCase().includes(this.searchQuery)) {
+        return true;
+      }
+      if (node.children) {
+        return node.children.some((child) => this.matchesSearch(child));
+      }
+      return false;
+    }
+    renderTreeNode(parent, node, depth) {
+      if (!this.matchesSearch(node)) {
+        return;
+      }
+      const row = document.createElement("div");
+      row.className = "tree-row";
+      if (this.selectedNode === node) {
+        row.classList.add("selected");
+      }
+      row.style.paddingLeft = `${8 + depth * 16}px`;
+      if (node.tooltip) {
+        row.title = node.tooltip;
+      }
+      const hasChildren = node.children && node.children.length > 0;
+      const isExpanded = node.expanded || this.searchQuery.length > 0 && hasChildren;
+      if (hasChildren) {
+        const chevron = document.createElement("span");
+        chevron.className = "tree-chevron";
+        chevron.textContent = isExpanded ? "\u25BE" : "\u25B8";
+        chevron.addEventListener("click", (event) => {
+          event.stopPropagation();
+          node.expanded = !node.expanded;
+          this.renderTree();
+        });
+        row.appendChild(chevron);
+      } else {
+        const spacer = document.createElement("span");
+        spacer.className = "tree-chevron-spacer";
+        row.appendChild(spacer);
+      }
+      const label = document.createElement("span");
+      label.className = "tree-label";
+      label.textContent = node.label;
+      row.appendChild(label);
+      row.addEventListener("click", () => {
+        if (hasChildren && !this.searchQuery) {
+          node.expanded = !node.expanded;
+        }
+        this.selectNode(node);
+      });
+      parent.appendChild(row);
+      this.visibleNodes.push(node);
+      if (hasChildren && isExpanded) {
+        for (const child of node.children) {
+          this.renderTreeNode(parent, child, depth + 1);
+        }
+      }
+    }
+    handleTreeKeydown(event) {
+      if (!this.visibleNodes.length) {
+        return;
+      }
+      const currentIndex = this.selectedNode ? this.visibleNodes.indexOf(this.selectedNode) : -1;
+      if (event.key === "ArrowDown") {
+        event.preventDefault();
+        const nextIndex = Math.min(currentIndex + 1, this.visibleNodes.length - 1);
+        this.selectNode(this.visibleNodes[nextIndex]);
+        this.scrollSelectedIntoView();
+      } else if (event.key === "ArrowUp") {
+        event.preventDefault();
+        const prevIndex = Math.max(currentIndex - 1, 0);
+        this.selectNode(this.visibleNodes[prevIndex]);
+        this.scrollSelectedIntoView();
+      } else if (event.key === "ArrowRight" && this.selectedNode) {
+        event.preventDefault();
+        if (this.selectedNode.children && !this.selectedNode.expanded) {
+          this.selectedNode.expanded = true;
+          this.renderTree();
+        }
+      } else if (event.key === "ArrowLeft" && this.selectedNode) {
+        event.preventDefault();
+        if (this.selectedNode.children && this.selectedNode.expanded) {
+          this.selectedNode.expanded = false;
+          this.renderTree();
+        }
+      } else if (event.key === "Enter" && this.selectedNode) {
+        event.preventDefault();
+        this.renderDetail(this.selectedNode);
+      }
+    }
+    initExplorerResize(handle, treePane, splitView) {
+      let isResizing = false;
+      handle.addEventListener("mousedown", (event) => {
+        isResizing = true;
+        handle.classList.add("active");
+        document.body.style.cursor = "col-resize";
+        document.body.style.userSelect = "none";
+        event.preventDefault();
+      });
+      document.addEventListener("mousemove", (event) => {
+        if (!isResizing) {
+          return;
+        }
+        const rect = splitView.getBoundingClientRect();
+        const position = event.clientX - rect.left;
+        const percentage = Math.max(15, Math.min(60, position / rect.width * 100));
+        treePane.style.width = percentage + "%";
+      });
+      document.addEventListener("mouseup", () => {
+        if (isResizing) {
+          isResizing = false;
+          handle.classList.remove("active");
+          document.body.style.cursor = "";
+          document.body.style.userSelect = "";
+        }
+      });
+    }
+    scrollSelectedIntoView() {
+      if (!this.treeContainer) {
+        return;
+      }
+      const selectedRow = this.treeContainer.querySelector(".tree-row.selected");
+      if (selectedRow) {
+        selectedRow.scrollIntoView({ block: "nearest" });
+      }
+    }
+    selectNode(node, updateHash = true) {
+      this.selectedNode = node;
+      this.renderTree();
+      this.renderBreadcrumbs(node);
+      this.renderDetail(node);
+      if (updateHash) {
+        this.updateHash(node);
+      }
+    }
+    navigateToItem(section, index) {
+      const node = this.findNode(this.treeNodes, section, index);
+      if (node) {
+        this.expandParents(this.treeNodes, node);
+        this.selectNode(node);
+      }
+    }
+    renderBreadcrumbs(node) {
+      if (!this.breadcrumbBar) {
+        return;
+      }
+      const path = this.findPathToNode(this.treeNodes, node);
+      if (path.length === 0) {
+        return;
+      }
+      const breadcrumbBar = this.breadcrumbBar;
+      breadcrumbBar.innerHTML = "";
+      for (let pathIndex = 0; pathIndex < path.length; pathIndex++) {
+        const pathNode = path[pathIndex];
+        if (pathIndex > 0) {
+          const separator = document.createElement("span");
+          separator.className = "breadcrumb-separator";
+          separator.textContent = " > ";
+          breadcrumbBar.appendChild(separator);
+        }
+        if (pathIndex < path.length - 1) {
+          const link = document.createElement("a");
+          link.className = "breadcrumb-link";
+          link.textContent = pathNode.label;
+          link.href = "#";
+          link.addEventListener("click", (event) => {
+            event.preventDefault();
+            this.selectNode(pathNode);
+          });
+          breadcrumbBar.appendChild(link);
+        } else {
+          const current = document.createElement("span");
+          current.className = "breadcrumb-current";
+          current.textContent = pathNode.label;
+          breadcrumbBar.appendChild(current);
+        }
+      }
+    }
+    findPathToNode(nodes, target) {
+      for (const node of nodes) {
+        if (node === target) {
+          return [node];
+        }
+        if (node.children) {
+          const childPath = this.findPathToNode(node.children, target);
+          if (childPath.length > 0) {
+            return [node, ...childPath];
+          }
+        }
+      }
+      return [];
+    }
+    restoreFromHash() {
+      const hash = location.hash.replace(/^#/, "");
+      const parts = hash.split("/");
+      if (parts.length >= 3 && parts[0] === "explorer") {
+        const section = parts[1];
+        const index = parseInt(parts[2], 10);
+        if (!isNaN(index)) {
+          const node = this.findNode(this.treeNodes, section, index);
+          if (node) {
+            this.expandParents(this.treeNodes, node);
+            this.selectNode(node, false);
+            return true;
+          }
+        }
+      }
+      return false;
+    }
+    updateHash(node) {
+      if (node.section === "module") {
+        history.replaceState(null, "", "#explorer");
+      } else {
+        history.replaceState(null, "", `#explorer/${node.section}/${node.index}`);
+      }
+    }
+    findNode(nodes, section, index) {
+      for (const node of nodes) {
+        if (node.section === section && node.index === index) {
+          return node;
+        }
+        if (node.children) {
+          const found = this.findNode(node.children, section, index);
+          if (found) {
+            return found;
+          }
+        }
+      }
+      return null;
+    }
+    getExportTargetSection(kind) {
+      const sectionMap = {
+        0: "function",
+        1: "table",
+        2: "memory",
+        3: "global",
+        4: "tag"
+      };
+      return sectionMap[kind] || null;
+    }
+    getExportTargetItemIndex(kind, globalIndex) {
+      if (!this.moduleInfo) {
+        return -1;
+      }
+      const importedCounts = {
+        0: this.moduleInfo.imports.filter((importEntry) => importEntry.kind === 0).length,
+        1: this.moduleInfo.imports.filter((importEntry) => importEntry.kind === 1).length,
+        2: this.moduleInfo.imports.filter((importEntry) => importEntry.kind === 2).length,
+        3: this.moduleInfo.imports.filter((importEntry) => importEntry.kind === 3).length,
+        4: this.moduleInfo.imports.filter((importEntry) => importEntry.kind === 4).length
+      };
+      const importedCount = importedCounts[kind] || 0;
+      return globalIndex - importedCount;
+    }
+    findTopLevelTypeIndex(flatTypeIndex) {
+      if (!this.moduleInfo) {
+        return -1;
+      }
+      let flatCounter = 0;
+      for (let topIndex = 0; topIndex < this.moduleInfo.types.length; topIndex++) {
+        const typeEntry = this.moduleInfo.types[topIndex];
+        if (typeEntry.kind === "rec") {
+          if (flatTypeIndex >= flatCounter && flatTypeIndex < flatCounter + typeEntry.types.length) {
+            return topIndex;
+          }
+          flatCounter += typeEntry.types.length;
+        } else {
+          if (flatCounter === flatTypeIndex) {
+            return topIndex;
+          }
+          flatCounter++;
+        }
+      }
+      return -1;
+    }
+    expandParents(nodes, target) {
+      for (const node of nodes) {
+        if (node === target) {
+          return true;
+        }
+        if (node.children) {
+          if (this.expandParents(node.children, target)) {
+            node.expanded = true;
+            return true;
+          }
+        }
+      }
+      return false;
+    }
+    renderDetail(node) {
+      if (!this.detailContainer || !this.moduleInfo) {
+        return;
+      }
+      this.detailContainer.innerHTML = "";
+      switch (node.section) {
+        case "module":
+          this.renderModuleDetail();
+          break;
+        case "types":
+        case "imports":
+        case "functions":
+        case "tables":
+        case "memories":
+        case "globals":
+        case "exports":
+        case "elements":
+        case "data-segments":
+        case "tags":
+        case "custom-sections":
+          this.renderSectionSummary(node);
+          break;
+        case "type":
+          this.renderTypeDetail(node.index);
+          break;
+        case "import":
+          this.renderImportDetail(node.index);
+          break;
+        case "function":
+          this.renderFunctionDetail(node.index);
+          break;
+        case "table":
+          this.renderTableDetail(node.index);
+          break;
+        case "memory":
+          this.renderMemoryDetail(node.index);
+          break;
+        case "global":
+          this.renderGlobalDetail(node.index);
+          break;
+        case "export":
+          this.renderExportDetail(node.index);
+          break;
+        case "start":
+          this.renderStartDetail();
+          break;
+        case "element":
+          this.renderElementDetail(node.index);
+          break;
+        case "data":
+          this.renderDataDetail(node.index);
+          break;
+        case "tag":
+          this.renderTagDetail(node.index);
+          break;
+        case "custom":
+          this.renderCustomSectionDetail(node.index);
+          break;
+        case "name-section":
+          this.renderNameSectionDetail();
+          break;
+        case "size-analysis":
+          this.renderSizeAnalysisSummary();
+          break;
+        case "size-sections":
+          this.renderSizeSections();
+          break;
+        case "size-functions":
+          this.renderSizeFunctions();
+          break;
+        case "size-data":
+          this.renderSizeData();
+          break;
+        case "strings":
+          this.renderStringsView();
+          break;
+        case "instruction-stats":
+          this.renderInstructionStats();
+          break;
+        case "debug-info":
+          this.renderDebugInfo();
+          break;
+        case "feature-detection":
+          this.renderFeatureDetection();
+          break;
+        case "module-interface":
+          this.renderModuleInterface();
+          break;
+        case "function-complexity":
+          this.renderFunctionComplexity();
+          break;
+        case "dead-code":
+          this.renderDeadCode();
+          break;
+        case "producers":
+          this.renderProducers();
+          break;
+        case "target-features":
+          this.renderTargetFeatures();
+          break;
+      }
+    }
+    renderModuleDetail() {
+      if (!this.moduleInfo || !this.rawBytes) {
+        return;
+      }
+      const detail = this.detailContainer;
+      this.appendHeading(detail, this.fileName);
+      const table = this.createInfoTable();
+      this.addInfoRow(table, "Version", String(this.moduleInfo.version));
+      this.addInfoRow(table, "File size", this.formatFileSize(this.rawBytes.length));
+      this.addInfoRow(table, "Types", String(this.moduleInfo.types.length));
+      this.addInfoRow(table, "Imports", String(this.moduleInfo.imports.length));
+      this.addInfoRow(table, "Functions", String(this.moduleInfo.functions.length));
+      this.addInfoRow(table, "Tables", String(this.moduleInfo.tables.length));
+      this.addInfoRow(table, "Memories", String(this.moduleInfo.memories.length));
+      this.addInfoRow(table, "Globals", String(this.moduleInfo.globals.length));
+      this.addInfoRow(table, "Exports", String(this.moduleInfo.exports.length));
+      this.addInfoRow(table, "Start", this.moduleInfo.start !== null ? `func ${this.moduleInfo.start}` : "none");
+      this.addInfoRow(table, "Elements", String(this.moduleInfo.elements.length));
+      this.addInfoRow(table, "Data segments", String(this.moduleInfo.data.length));
+      this.addInfoRow(table, "Tags", String(this.moduleInfo.tags.length));
+      this.addInfoRow(table, "Custom sections", String(this.moduleInfo.customSections.length));
+      detail.appendChild(table);
+      if (this.byteRanges && this.byteRanges.sections.length > 0) {
+        this.appendSubheading(detail, "Sections");
+        const sectionTable = this.createInfoTable();
+        for (const sectionRange of this.byteRanges.sections) {
+          const sectionName = SECTION_NAMES[sectionRange.sectionId] || `Unknown (${sectionRange.sectionId})`;
+          this.addInfoRow(sectionTable, sectionName, `offset 0x${sectionRange.offset.toString(16)}, ${sectionRange.length} bytes`);
+        }
+        detail.appendChild(sectionTable);
+      }
+      this.appendSubheading(detail, "Header");
+      this.appendHexDump(detail, this.rawBytes.slice(0, 8), 0);
+      this.appendSubheading(detail, "Full WAT");
+      const showWatButton = document.createElement("button");
+      showWatButton.className = "explorer-load-btn";
+      showWatButton.textContent = "Generate full disassembly";
+      showWatButton.addEventListener("click", () => {
+        if (this.disassembler) {
+          if (!this.cachedFullWat) {
+            this.cachedFullWat = this.disassembler.disassemble();
+          }
+          showWatButton.remove();
+          this.appendCodeBlock(detail, this.cachedFullWat);
+        }
+      });
+      detail.appendChild(showWatButton);
+    }
+    renderSectionSummary(node) {
+      if (!this.moduleInfo) {
+        return;
+      }
+      const detail = this.detailContainer;
+      this.appendHeading(detail, node.label);
+      const sectionDescription = this.getSectionDescription(node.section);
+      if (sectionDescription) {
+        const descriptionElement = document.createElement("div");
+        descriptionElement.className = "detail-description";
+        descriptionElement.textContent = sectionDescription;
+        detail.appendChild(descriptionElement);
+      }
+    }
+    getSectionDescription(section) {
+      const descriptions = {
+        "types": "Function signatures, struct definitions, and array types used by the module.",
+        "imports": "External functions, tables, memories, globals, and tags imported from the host environment.",
+        "functions": "Functions defined in this module. Select a function to see its body.",
+        "tables": "Tables holding references (funcref, externref, etc.).",
+        "memories": "Linear memory instances.",
+        "globals": "Global variables with their types and initial values.",
+        "exports": "Items exported from this module for external use.",
+        "elements": "Element segments used to initialize table contents.",
+        "data-segments": "Data segments used to initialize linear memory.",
+        "tags": "Exception tags for the exception handling proposal.",
+        "custom-sections": "Custom sections containing metadata, debug info, or tool-specific data."
+      };
+      return descriptions[section] || "";
+    }
+    renderTypeDetail(typeIndex) {
+      if (!this.moduleInfo) {
+        return;
+      }
+      const detail = this.detailContainer;
+      const typeEntry = this.moduleInfo.types[typeIndex];
+      this.appendHeading(detail, `Type ${typeIndex}`);
+      if (typeEntry.kind === "func") {
+        const table = this.createInfoTable();
+        this.addInfoRow(table, "Kind", "func");
+        this.addInfoRow(table, "Parameters", typeEntry.parameterTypes.map((p) => getValueTypeName2(p)).join(", ") || "none");
+        this.addInfoRow(table, "Returns", typeEntry.returnTypes.map((r) => getValueTypeName2(r)).join(", ") || "none");
+        detail.appendChild(table);
+      } else if (typeEntry.kind === "struct") {
+        const table = this.createInfoTable();
+        this.addInfoRow(table, "Kind", "struct");
+        this.addInfoRow(table, "Fields", String(typeEntry.fields.length));
+        if (typeEntry.superTypes && typeEntry.superTypes.length > 0) {
+          this.addInfoRow(table, "Super types", typeEntry.superTypes.join(", "));
+        }
+        if (typeEntry.final !== void 0) {
+          this.addInfoRow(table, "Final", String(typeEntry.final));
+        }
+        detail.appendChild(table);
+        if (typeEntry.fields.length > 0) {
+          this.appendSubheading(detail, "Fields");
+          const fieldsTable = this.createInfoTable();
+          for (let fieldIndex = 0; fieldIndex < typeEntry.fields.length; fieldIndex++) {
+            const field = typeEntry.fields[fieldIndex];
+            const mutLabel = field.mutable ? "mut " : "";
+            this.addInfoRow(fieldsTable, `field ${fieldIndex}`, `${mutLabel}${getValueTypeName2(field.type)}`);
+          }
+          detail.appendChild(fieldsTable);
+        }
+      } else if (typeEntry.kind === "array") {
+        const table = this.createInfoTable();
+        this.addInfoRow(table, "Kind", "array");
+        this.addInfoRow(table, "Element type", getValueTypeName2(typeEntry.elementType));
+        this.addInfoRow(table, "Mutable", String(typeEntry.mutable));
+        detail.appendChild(table);
+      } else if (typeEntry.kind === "rec") {
+        const table = this.createInfoTable();
+        this.addInfoRow(table, "Kind", "rec group");
+        this.addInfoRow(table, "Types", String(typeEntry.types.length));
+        detail.appendChild(table);
+      }
+      this.appendSubheading(detail, "WAT");
+      if (this.disassembler) {
+        this.appendCodeBlock(detail, this.disassembler.disassembleType(typeIndex));
+      }
+      this.appendByteRange(detail, "type", typeIndex);
+    }
+    renderImportDetail(importIndex) {
+      if (!this.moduleInfo) {
+        return;
+      }
+      const detail = this.detailContainer;
+      const importEntry = this.moduleInfo.imports[importIndex];
+      this.appendHeading(detail, `Import ${importIndex}`);
+      const table = this.createInfoTable();
+      this.addInfoRow(table, "Module", importEntry.moduleName);
+      this.addInfoRow(table, "Field", importEntry.fieldName);
+      this.addInfoRow(table, "Kind", EXPORT_KIND_NAMES[importEntry.kind] || `unknown (${importEntry.kind})`);
+      if (importEntry.typeIndex !== void 0) {
+        const topLevelTypeIdx = this.findTopLevelTypeIndex(importEntry.typeIndex);
+        this.addLinkedInfoRow(table, "Type index", String(importEntry.typeIndex), "type", topLevelTypeIdx);
+        const flatTypes = flattenTypes3(this.moduleInfo);
+        if (importEntry.typeIndex < flatTypes.length) {
+          const typeEntry = flatTypes[importEntry.typeIndex];
+          if (typeEntry.kind === "func") {
+            this.addInfoRow(table, "Signature", formatFuncType(typeEntry));
+          }
+        }
+      }
+      if (importEntry.tableType) {
+        this.addInfoRow(table, "Element type", getValueTypeName2(importEntry.tableType.elementType));
+        this.addInfoRow(table, "Initial", String(importEntry.tableType.initial));
+        if (importEntry.tableType.maximum !== null) {
+          this.addInfoRow(table, "Maximum", String(importEntry.tableType.maximum));
+        }
+      }
+      if (importEntry.memoryType) {
+        this.addInfoRow(table, "Initial pages", String(importEntry.memoryType.initial));
+        if (importEntry.memoryType.maximum !== null) {
+          this.addInfoRow(table, "Maximum pages", String(importEntry.memoryType.maximum));
+        }
+        if (importEntry.memoryType.shared) {
+          this.addInfoRow(table, "Shared", "true");
+        }
+        if (importEntry.memoryType.memory64) {
+          this.addInfoRow(table, "Memory64", "true");
+        }
+      }
+      if (importEntry.globalType) {
+        const mutStr = importEntry.globalType.mutable ? "mut " : "";
+        this.addInfoRow(table, "Type", `${mutStr}${getValueTypeName2(importEntry.globalType.valueType)}`);
+      }
+      if (importEntry.tagType) {
+        this.addInfoRow(table, "Tag type index", String(importEntry.tagType.typeIndex));
+      }
+      detail.appendChild(table);
+      this.appendSubheading(detail, "WAT");
+      if (this.disassembler) {
+        this.appendCodeBlock(detail, this.disassembler.disassembleImport(importIndex));
+      }
+      this.appendByteRange(detail, "import", importIndex);
+    }
+    renderFunctionDetail(funcIndex) {
+      if (!this.moduleInfo) {
+        return;
+      }
+      const detail = this.detailContainer;
+      const funcEntry = this.moduleInfo.functions[funcIndex];
+      const importedFuncCount = this.moduleInfo.imports.filter((importEntry) => importEntry.kind === 0).length;
+      const globalFuncIndex = importedFuncCount + funcIndex;
+      const funcName = this.getFunctionName(globalFuncIndex);
+      const rawName = this.moduleInfo.nameSection?.functionNames?.get(globalFuncIndex) || null;
+      const heading = funcName || `func_${globalFuncIndex}`;
+      this.appendHeading(detail, heading);
+      const flatTypes = flattenTypes3(this.moduleInfo);
+      const table = this.createInfoTable();
+      this.addInfoRow(table, "Index", String(globalFuncIndex));
+      if (funcName) {
+        this.addInfoRow(table, "Name", funcName);
+      }
+      if (rawName && rawName !== funcName) {
+        this.addInfoRow(table, "Raw name", rawName);
+      }
+      const topLevelFuncTypeIdx = this.findTopLevelTypeIndex(funcEntry.typeIndex);
+      this.addLinkedInfoRow(table, "Type index", String(funcEntry.typeIndex), "type", topLevelFuncTypeIdx);
+      if (funcEntry.typeIndex < flatTypes.length) {
+        const typeEntry = flatTypes[funcEntry.typeIndex];
+        if (typeEntry.kind === "func") {
+          this.addInfoRow(table, "Signature", formatFuncType(typeEntry));
+        }
+      }
+      if (funcEntry.locals.length > 0) {
+        const totalLocals = funcEntry.locals.reduce((sum, local) => sum + local.count, 0);
+        this.addInfoRow(table, "Locals", String(totalLocals));
+      }
+      this.addInfoRow(table, "Body size", `${funcEntry.body.length} bytes`);
+      const dwarfFunc = this.findDwarfFunction(funcIndex);
+      if (dwarfFunc) {
+        const dwarfData = this.getDwarfInfo();
+        if (dwarfFunc.linkageName) {
+          this.addInfoRow(table, "Linkage name", dwarfFunc.linkageName);
+        }
+        if (dwarfFunc.declFile > 0 && dwarfData && dwarfFunc.declFile <= dwarfData.sourceFiles.length) {
+          const sourceFile = dwarfData.sourceFiles[dwarfFunc.declFile - 1];
+          this.addInfoRow(table, "Source", `${sourceFile}:${dwarfFunc.declLine}`);
+        }
+      }
+      detail.appendChild(table);
+      const hasLocalNames = this.moduleInfo.nameSection?.localNames?.has(globalFuncIndex);
+      if (funcEntry.locals.length > 0 && hasLocalNames) {
+        this.appendSubheading(detail, "Named Locals");
+        const localsTable = this.createInfoTable();
+        let localOffset = 0;
+        const funcType = funcEntry.typeIndex < flatTypes.length ? flatTypes[funcEntry.typeIndex] : null;
+        const paramCount = funcType && funcType.kind === "func" ? funcType.parameterTypes.length : 0;
+        for (const localGroup of funcEntry.locals) {
+          for (let localIndex = 0; localIndex < localGroup.count; localIndex++) {
+            const absoluteLocalIndex = paramCount + localOffset;
+            const localName = this.moduleInfo.nameSection?.localNames?.get(globalFuncIndex)?.get(absoluteLocalIndex);
+            if (localName) {
+              this.addInfoRow(localsTable, `${localName} (local ${absoluteLocalIndex})`, getValueTypeName2(localGroup.type));
+            }
+            localOffset++;
+          }
+        }
+        detail.appendChild(localsTable);
+      }
+      {
+        const callGraphData = this.getCallGraph();
+        const calleesSet = callGraphData.callees.get(globalFuncIndex);
+        const callersSet = callGraphData.callers.get(globalFuncIndex);
+        if (calleesSet && calleesSet.size > 0 || callersSet && callersSet.size > 0) {
+          this.appendSubheading(detail, "Call Graph");
+        }
+        if (calleesSet && calleesSet.size > 0) {
+          this.appendCallList(detail, "Calls", calleesSet);
+        }
+        if (callersSet && callersSet.size > 0) {
+          this.appendCallList(detail, "Called by", callersSet);
+        }
+      }
+      const nameSource = this.getNameSource(globalFuncIndex);
+      if (nameSource) {
+        this.addInfoRow(table, "Name source", nameSource);
+      }
+      const tabContainer = document.createElement("div");
+      tabContainer.className = "func-tab-container";
+      const tabBar = document.createElement("div");
+      tabBar.className = "func-tab-bar";
+      const tabContent = document.createElement("div");
+      tabContent.className = "func-tab-content";
+      const tabs = [
+        { label: "WAT", id: "wat" },
+        { label: "Bytes", id: "bytes" },
+        { label: "Decompiled", id: "decompiled" },
+        { label: "Source", id: "source" }
+      ];
+      let activeTab = "decompiled";
+      const renderTabContent = () => {
+        tabContent.innerHTML = "";
+        tabBar.querySelectorAll(".func-tab-btn").forEach((btn) => {
+          btn.classList.toggle("active", btn.dataset.tab === activeTab);
+        });
+        if (activeTab === "decompiled") {
+          if (this.nameResolver && this.moduleInfo) {
+            const decompiledCode = decompileFunction(this.moduleInfo, funcIndex, this.nameResolver);
+            const funcNameMap = /* @__PURE__ */ new Map();
+            const importedFuncCount2 = this.moduleInfo.imports.filter((imp) => imp.kind === 0).length;
+            for (let localFuncIdx = 0; localFuncIdx < this.moduleInfo.functions.length; localFuncIdx++) {
+              const globalFuncIdx = importedFuncCount2 + localFuncIdx;
+              const nameRes = this.nameResolver.functionName(globalFuncIdx);
+              funcNameMap.set(nameRes.name, localFuncIdx);
+            }
+            const highlightOptions = {
+              onFunctionClick: (functionName) => {
+                const targetLocalIdx = funcNameMap.get(functionName);
+                if (targetLocalIdx !== void 0) {
+                  this.navigateToItem("function", targetLocalIdx);
+                }
+              }
+            };
+            const block = document.createElement("div");
+            block.className = "detail-code";
+            const lines = decompiledCode.split("\n");
+            const gutterWidth = String(lines.length).length;
+            for (let lineIdx = 0; lineIdx < lines.length; lineIdx++) {
+              const lineEl = document.createElement("div");
+              lineEl.className = "code-line";
+              const gutter = document.createElement("span");
+              gutter.className = "code-line-number";
+              gutter.textContent = String(lineIdx + 1).padStart(gutterWidth, " ");
+              lineEl.appendChild(gutter);
+              const content = document.createElement("span");
+              content.className = "code-line-content";
+              renderHighlightedC(content, lines[lineIdx], highlightOptions);
+              lineEl.appendChild(content);
+              block.appendChild(lineEl);
+            }
+            const wrapper = document.createElement("div");
+            wrapper.className = "detail-block-wrapper";
+            wrapper.appendChild(block);
+            wrapper.appendChild(this.createCopyButton(decompiledCode));
+            tabContent.appendChild(wrapper);
+          }
+        } else if (activeTab === "wat") {
+          if (this.disassembler) {
+            this.appendCodeBlock(tabContent, this.disassembler.disassembleFunction(funcIndex));
+          }
+        } else if (activeTab === "bytes") {
+          this.appendByteRange(tabContent, "function", funcIndex);
+        } else if (activeTab === "source") {
+          this.renderSourceTabContent(tabContent, funcIndex);
+        }
+      };
+      for (const tabDef of tabs) {
+        const tabButton = document.createElement("button");
+        tabButton.className = "func-tab-btn";
+        tabButton.dataset.tab = tabDef.id;
+        tabButton.textContent = tabDef.label;
+        tabButton.addEventListener("click", () => {
+          activeTab = tabDef.id;
+          renderTabContent();
+        });
+        tabBar.appendChild(tabButton);
+      }
+      tabContainer.appendChild(tabBar);
+      tabContainer.appendChild(tabContent);
+      detail.appendChild(tabContainer);
+      renderTabContent();
+    }
+    renderTableDetail(tableIndex) {
+      if (!this.moduleInfo) {
+        return;
+      }
+      const detail = this.detailContainer;
+      const tableEntry = this.moduleInfo.tables[tableIndex];
+      const importedTableCount = this.moduleInfo.imports.filter((importEntry) => importEntry.kind === 1).length;
+      this.appendHeading(detail, `Table ${importedTableCount + tableIndex}`);
+      const table = this.createInfoTable();
+      this.addInfoRow(table, "Element type", getValueTypeName2(tableEntry.elementType));
+      this.addInfoRow(table, "Initial", String(tableEntry.initial));
+      if (tableEntry.maximum !== null) {
+        this.addInfoRow(table, "Maximum", String(tableEntry.maximum));
+      }
+      detail.appendChild(table);
+      this.appendSubheading(detail, "WAT");
+      if (this.disassembler) {
+        this.appendCodeBlock(detail, this.disassembler.disassembleTable(tableIndex));
+      }
+      this.appendByteRange(detail, "table", tableIndex);
+    }
+    renderMemoryDetail(memIndex) {
+      if (!this.moduleInfo) {
+        return;
+      }
+      const detail = this.detailContainer;
+      const memoryEntry = this.moduleInfo.memories[memIndex];
+      const importedMemCount = this.moduleInfo.imports.filter((importEntry) => importEntry.kind === 2).length;
+      this.appendHeading(detail, `Memory ${importedMemCount + memIndex}`);
+      const table = this.createInfoTable();
+      this.addInfoRow(table, "Initial pages", String(memoryEntry.initial));
+      if (memoryEntry.maximum !== null) {
+        this.addInfoRow(table, "Maximum pages", String(memoryEntry.maximum));
+      }
+      this.addInfoRow(table, "Initial size", this.formatFileSize(memoryEntry.initial * 65536));
+      if (memoryEntry.shared) {
+        this.addInfoRow(table, "Shared", "true");
+      }
+      if (memoryEntry.memory64) {
+        this.addInfoRow(table, "Memory64", "true");
+      }
+      detail.appendChild(table);
+      this.appendSubheading(detail, "WAT");
+      if (this.disassembler) {
+        this.appendCodeBlock(detail, this.disassembler.disassembleMemory(memIndex));
+      }
+      this.appendByteRange(detail, "memory", memIndex);
+    }
+    renderGlobalDetail(globalIndex) {
+      if (!this.moduleInfo) {
+        return;
+      }
+      const detail = this.detailContainer;
+      const globalEntry = this.moduleInfo.globals[globalIndex];
+      const importedGlobalCount = this.moduleInfo.imports.filter((importEntry) => importEntry.kind === 3).length;
+      const absoluteGlobalIndex = importedGlobalCount + globalIndex;
+      const globalName = this.moduleInfo.nameSection?.globalNames?.get(absoluteGlobalIndex);
+      this.appendHeading(detail, globalName || `global_${absoluteGlobalIndex}`);
+      const table = this.createInfoTable();
+      this.addInfoRow(table, "Type", getValueTypeName2(globalEntry.valueType));
+      this.addInfoRow(table, "Mutable", String(globalEntry.mutable));
+      detail.appendChild(table);
+      this.appendSubheading(detail, "WAT");
+      if (this.disassembler) {
+        this.appendCodeBlock(detail, this.disassembler.disassembleGlobal(globalIndex));
+      }
+      this.appendByteRange(detail, "global", globalIndex);
+    }
+    renderExportDetail(exportIndex) {
+      if (!this.moduleInfo) {
+        return;
+      }
+      const detail = this.detailContainer;
+      const exportEntry = this.moduleInfo.exports[exportIndex];
+      this.appendHeading(detail, `Export "${exportEntry.name}"`);
+      const table = this.createInfoTable();
+      this.addInfoRow(table, "Name", exportEntry.name);
+      this.addInfoRow(table, "Kind", EXPORT_KIND_NAMES[exportEntry.kind] || `unknown (${exportEntry.kind})`);
+      const exportTargetSection = this.getExportTargetSection(exportEntry.kind);
+      const exportTargetIndex = this.getExportTargetItemIndex(exportEntry.kind, exportEntry.index);
+      if (exportTargetSection && exportTargetIndex >= 0) {
+        this.addLinkedInfoRow(table, "Target", `${EXPORT_KIND_NAMES[exportEntry.kind]} ${exportEntry.index}`, exportTargetSection, exportTargetIndex);
+      } else {
+        this.addInfoRow(table, "Index", String(exportEntry.index));
+      }
+      if (exportEntry.kind === 0 && this.moduleInfo.nameSection?.functionNames) {
+        const funcName = this.moduleInfo.nameSection.functionNames.get(exportEntry.index);
+        if (funcName) {
+          this.addInfoRow(table, "Function name", funcName);
+        }
+      }
+      detail.appendChild(table);
+      this.appendSubheading(detail, "WAT");
+      if (this.disassembler) {
+        this.appendCodeBlock(detail, this.disassembler.disassembleExport(exportIndex));
+      }
+      this.appendByteRange(detail, "export", exportIndex);
+    }
+    renderStartDetail() {
+      if (!this.moduleInfo || this.moduleInfo.start === null) {
+        return;
+      }
+      const detail = this.detailContainer;
+      this.appendHeading(detail, "Start Function");
+      const table = this.createInfoTable();
+      this.addInfoRow(table, "Function index", String(this.moduleInfo.start));
+      const funcName = this.moduleInfo.nameSection?.functionNames?.get(this.moduleInfo.start);
+      if (funcName) {
+        this.addInfoRow(table, "Function name", funcName);
+      }
+      detail.appendChild(table);
+    }
+    renderElementDetail(elemIndex) {
+      if (!this.moduleInfo) {
+        return;
+      }
+      const detail = this.detailContainer;
+      const elementEntry = this.moduleInfo.elements[elemIndex];
+      this.appendHeading(detail, `Element ${elemIndex}`);
+      const table = this.createInfoTable();
+      this.addInfoRow(table, "Passive", String(elementEntry.passive));
+      if (!elementEntry.passive) {
+        this.addInfoRow(table, "Table index", String(elementEntry.tableIndex));
+      }
+      this.addInfoRow(table, "Entries", String(elementEntry.functionIndices.length));
+      detail.appendChild(table);
+      if (elementEntry.functionIndices.length > 0) {
+        this.appendSubheading(detail, "Function Indices");
+        const indicesBlock = document.createElement("div");
+        indicesBlock.className = "detail-code";
+        indicesBlock.textContent = elementEntry.functionIndices.join(", ");
+        detail.appendChild(indicesBlock);
+      }
+      this.appendSubheading(detail, "WAT");
+      if (this.disassembler) {
+        this.appendCodeBlock(detail, this.disassembler.disassembleElement(elemIndex));
+      }
+      this.appendByteRange(detail, "element", elemIndex);
+    }
+    renderDataDetail(dataIndex) {
+      if (!this.moduleInfo) {
+        return;
+      }
+      const detail = this.detailContainer;
+      const dataEntry = this.moduleInfo.data[dataIndex];
+      this.appendHeading(detail, `Data ${dataIndex}`);
+      const table = this.createInfoTable();
+      this.addInfoRow(table, "Passive", String(dataEntry.passive));
+      if (!dataEntry.passive) {
+        this.addInfoRow(table, "Memory index", String(dataEntry.memoryIndex));
+      }
+      this.addInfoRow(table, "Size", `${dataEntry.data.length} bytes`);
+      detail.appendChild(table);
+      this.appendSubheading(detail, "WAT");
+      if (this.disassembler) {
+        this.appendCodeBlock(detail, this.disassembler.disassembleData(dataIndex));
+      }
+      const isPrintable = dataEntry.data.every((byteValue) => byteValue >= 32 && byteValue < 127 || byteValue === 10 || byteValue === 13 || byteValue === 9);
+      if (isPrintable && dataEntry.data.length > 0) {
+        this.appendSubheading(detail, "String Preview");
+        const preview = document.createElement("div");
+        preview.className = "detail-code";
+        preview.textContent = new TextDecoder().decode(dataEntry.data);
+        detail.appendChild(preview);
+      }
+      if (dataEntry.data.length > 0) {
+        this.appendSubheading(detail, "Hex");
+        this.appendHexDump(detail, dataEntry.data, 0);
+      }
+      this.appendByteRange(detail, "data", dataIndex);
+    }
+    renderTagDetail(tagIndex) {
+      if (!this.moduleInfo) {
+        return;
+      }
+      const detail = this.detailContainer;
+      const tagEntry = this.moduleInfo.tags[tagIndex];
+      this.appendHeading(detail, `Tag ${tagIndex}`);
+      const table = this.createInfoTable();
+      this.addInfoRow(table, "Attribute", String(tagEntry.attribute));
+      const topLevelTagTypeIdx = this.findTopLevelTypeIndex(tagEntry.typeIndex);
+      this.addLinkedInfoRow(table, "Type index", String(tagEntry.typeIndex), "type", topLevelTagTypeIdx);
+      detail.appendChild(table);
+      this.appendByteRange(detail, "tag", tagIndex);
+    }
+    renderCustomSectionDetail(customIndex) {
+      if (!this.moduleInfo) {
+        return;
+      }
+      const detail = this.detailContainer;
+      const customEntry = this.moduleInfo.customSections[customIndex];
+      this.appendHeading(detail, `Custom Section "${customEntry.name}"`);
+      const table = this.createInfoTable();
+      this.addInfoRow(table, "Name", customEntry.name);
+      this.addInfoRow(table, "Size", `${customEntry.data.length} bytes`);
+      detail.appendChild(table);
+      if (customEntry.data.length > 0) {
+        this.appendSubheading(detail, "Data");
+        const maxDisplay = Math.min(customEntry.data.length, 4096);
+        this.appendHexDump(detail, customEntry.data.slice(0, maxDisplay), 0);
+        if (customEntry.data.length > maxDisplay) {
+          const truncated = document.createElement("div");
+          truncated.className = "detail-truncated";
+          truncated.textContent = `(showing ${maxDisplay} of ${customEntry.data.length} bytes)`;
+          detail.appendChild(truncated);
+        }
+      }
+    }
+    renderNameSectionDetail() {
+      if (!this.moduleInfo || !this.moduleInfo.nameSection) {
+        return;
+      }
+      const detail = this.detailContainer;
+      const nameSection = this.moduleInfo.nameSection;
+      this.appendHeading(detail, "Name Section");
+      if (nameSection.moduleName) {
+        const table = this.createInfoTable();
+        this.addInfoRow(table, "Module name", nameSection.moduleName);
+        detail.appendChild(table);
+      }
+      if (nameSection.functionNames && nameSection.functionNames.size > 0) {
+        this.appendSubheading(detail, `Function Names (${nameSection.functionNames.size})`);
+        const table = this.createInfoTable();
+        const sortedEntries = Array.from(nameSection.functionNames.entries()).sort((entryA, entryB) => entryA[0] - entryB[0]);
+        for (const [funcIdx, funcName] of sortedEntries) {
+          this.addInfoRow(table, `func ${funcIdx}`, funcName);
+        }
+        detail.appendChild(table);
+      }
+      if (nameSection.localNames && nameSection.localNames.size > 0) {
+        this.appendSubheading(detail, `Local Names (${nameSection.localNames.size} functions)`);
+        const sortedFuncs = Array.from(nameSection.localNames.entries()).sort((entryA, entryB) => entryA[0] - entryB[0]);
+        for (const [funcIdx, locals] of sortedFuncs) {
+          const funcName = nameSection.functionNames?.get(funcIdx);
+          this.appendSubheading(detail, funcName || `func_${funcIdx}`);
+          const table = this.createInfoTable();
+          const sortedLocals = Array.from(locals.entries()).sort((entryA, entryB) => entryA[0] - entryB[0]);
+          for (const [localIdx, localName] of sortedLocals) {
+            this.addInfoRow(table, `local ${localIdx}`, localName);
+          }
+          detail.appendChild(table);
+        }
+      }
+      if (nameSection.globalNames && nameSection.globalNames.size > 0) {
+        this.appendSubheading(detail, `Global Names (${nameSection.globalNames.size})`);
+        const table = this.createInfoTable();
+        const sortedGlobals = Array.from(nameSection.globalNames.entries()).sort((entryA, entryB) => entryA[0] - entryB[0]);
+        for (const [globalIdx, globalName] of sortedGlobals) {
+          this.addInfoRow(table, `global ${globalIdx}`, globalName);
+        }
+        detail.appendChild(table);
+      }
+    }
+    extractStrings() {
+      if (this.cachedStrings) {
+        return this.cachedStrings;
+      }
+      if (!this.moduleInfo) {
+        return [];
+      }
+      const results = [];
+      const minLength = 4;
+      for (let segmentIndex = 0; segmentIndex < this.moduleInfo.data.length; segmentIndex++) {
+        const segment = this.moduleInfo.data[segmentIndex];
+        let runStart = -1;
+        for (let byteIndex = 0; byteIndex <= segment.data.length; byteIndex++) {
+          const byteValue = byteIndex < segment.data.length ? segment.data[byteIndex] : 0;
+          const isPrintable = byteValue >= 32 && byteValue < 127 || byteValue === 10 || byteValue === 13 || byteValue === 9;
+          if (isPrintable) {
+            if (runStart === -1) {
+              runStart = byteIndex;
+            }
+          } else {
+            if (runStart !== -1 && byteIndex - runStart >= minLength) {
+              const value = new TextDecoder().decode(segment.data.slice(runStart, byteIndex));
+              results.push({ dataSegmentIndex: segmentIndex, offset: runStart, value });
+            }
+            runStart = -1;
+          }
+        }
+      }
+      this.cachedStrings = results;
+      return results;
+    }
+    renderSizeAnalysisSummary() {
+      if (!this.moduleInfo || !this.rawBytes) {
+        return;
+      }
+      const detail = this.detailContainer;
+      this.appendHeading(detail, "Size Analysis");
+      const table = this.createInfoTable();
+      this.addInfoRow(table, "Total file size", this.formatFileSize(this.rawBytes.length));
+      const totalCodeSize = this.moduleInfo.functions.reduce((sum, func) => sum + func.body.length, 0);
+      this.addInfoRow(table, "Code size", this.formatFileSize(totalCodeSize));
+      const totalDataSize = this.moduleInfo.data.reduce((sum, dataEntry) => sum + dataEntry.data.length, 0);
+      this.addInfoRow(table, "Data size", this.formatFileSize(totalDataSize));
+      this.addInfoRow(table, "Functions", String(this.moduleInfo.functions.length));
+      this.addInfoRow(table, "Data segments", String(this.moduleInfo.data.length));
+      detail.appendChild(table);
+      const description = document.createElement("div");
+      description.className = "detail-description";
+      description.textContent = "Expand the child nodes for detailed breakdowns.";
+      detail.appendChild(description);
+    }
+    renderSizeSections() {
+      if (!this.rawBytes || !this.byteRanges) {
+        return;
+      }
+      const detail = this.detailContainer;
+      const totalSize = this.rawBytes.length;
+      this.appendHeading(detail, "Section Breakdown");
+      const sectionTable = this.createInfoTable();
+      const sortedSections = [...this.byteRanges.sections].sort((sectionA, sectionB) => sectionB.length - sectionA.length);
+      for (const sectionRange of sortedSections) {
+        const sectionName = SECTION_NAMES[sectionRange.sectionId] || `Unknown (${sectionRange.sectionId})`;
+        const percentage = (sectionRange.length / totalSize * 100).toFixed(1);
+        const row = document.createElement("div");
+        row.className = "detail-info-row";
+        const labelElement = document.createElement("span");
+        labelElement.className = "detail-info-label";
+        labelElement.textContent = sectionName;
+        row.appendChild(labelElement);
+        const barContainer = document.createElement("div");
+        barContainer.className = "size-bar-container";
+        const bar = document.createElement("div");
+        bar.className = "size-bar";
+        bar.style.width = `${Math.max(2, sectionRange.length / totalSize * 100)}%`;
+        barContainer.appendChild(bar);
+        row.appendChild(barContainer);
+        const valueElement = document.createElement("span");
+        valueElement.className = "detail-info-value";
+        valueElement.textContent = `${this.formatFileSize(sectionRange.length)} (${percentage}%)`;
+        row.appendChild(valueElement);
+        sectionTable.appendChild(row);
+      }
+      detail.appendChild(sectionTable);
+    }
+    renderSizeFunctions() {
+      if (!this.moduleInfo) {
+        return;
+      }
+      const detail = this.detailContainer;
+      const importedFuncCount = this.moduleInfo.imports.filter((importEntry) => importEntry.kind === 0).length;
+      this.appendHeading(detail, "Function Sizes (largest first)");
+      const funcSizes = this.moduleInfo.functions.map((func, funcIndex) => ({
+        globalIndex: importedFuncCount + funcIndex,
+        localIndex: funcIndex,
+        size: func.body.length,
+        name: this.moduleInfo.nameSection?.functionNames?.get(importedFuncCount + funcIndex) || null
+      }));
+      funcSizes.sort((funcA, funcB) => funcB.size - funcA.size);
+      const maxFuncSize = funcSizes.length > 0 ? funcSizes[0].size : 1;
+      const funcTable = this.createInfoTable();
+      for (const funcSizeEntry of funcSizes) {
+        const displayName = funcSizeEntry.name || `func_${funcSizeEntry.globalIndex}`;
+        const row = document.createElement("div");
+        row.className = "detail-info-row";
+        const link = document.createElement("a");
+        link.className = "detail-info-link";
+        link.textContent = displayName;
+        link.href = "#";
+        link.style.minWidth = "120px";
+        link.style.flexShrink = "0";
+        link.addEventListener("click", (event) => {
+          event.preventDefault();
+          this.navigateToItem("function", funcSizeEntry.localIndex);
+        });
+        row.appendChild(link);
+        const barContainer = document.createElement("div");
+        barContainer.className = "size-bar-container";
+        const bar = document.createElement("div");
+        bar.className = "size-bar";
+        bar.style.width = `${Math.max(2, funcSizeEntry.size / maxFuncSize * 100)}%`;
+        barContainer.appendChild(bar);
+        row.appendChild(barContainer);
+        const valueElement = document.createElement("span");
+        valueElement.className = "detail-info-value";
+        valueElement.textContent = `${funcSizeEntry.size} bytes`;
+        row.appendChild(valueElement);
+        funcTable.appendChild(row);
+      }
+      detail.appendChild(funcTable);
+    }
+    renderSizeData() {
+      if (!this.moduleInfo) {
+        return;
+      }
+      const detail = this.detailContainer;
+      this.appendHeading(detail, "Data Segment Sizes (largest first)");
+      const dataSizes = this.moduleInfo.data.map((dataEntry, dataIndex) => ({
+        index: dataIndex,
+        size: dataEntry.data.length,
+        passive: dataEntry.passive,
+        memoryIndex: dataEntry.memoryIndex
+      }));
+      dataSizes.sort((entryA, entryB) => entryB.size - entryA.size);
+      const maxDataSize = dataSizes.length > 0 ? dataSizes[0].size : 1;
+      const dataTable = this.createInfoTable();
+      for (const dataSizeEntry of dataSizes) {
+        const passiveLabel = dataSizeEntry.passive ? "passive" : `memory ${dataSizeEntry.memoryIndex}`;
+        const row = document.createElement("div");
+        row.className = "detail-info-row";
+        const link = document.createElement("a");
+        link.className = "detail-info-link";
+        link.textContent = `data ${dataSizeEntry.index} (${passiveLabel})`;
+        link.href = "#";
+        link.style.minWidth = "140px";
+        link.style.flexShrink = "0";
+        link.addEventListener("click", (event) => {
+          event.preventDefault();
+          this.navigateToItem("data", dataSizeEntry.index);
+        });
+        row.appendChild(link);
+        const barContainer = document.createElement("div");
+        barContainer.className = "size-bar-container";
+        const bar = document.createElement("div");
+        bar.className = "size-bar";
+        bar.style.width = `${Math.max(2, dataSizeEntry.size / maxDataSize * 100)}%`;
+        barContainer.appendChild(bar);
+        row.appendChild(barContainer);
+        const valueElement = document.createElement("span");
+        valueElement.className = "detail-info-value";
+        valueElement.textContent = this.formatFileSize(dataSizeEntry.size);
+        row.appendChild(valueElement);
+        dataTable.appendChild(row);
+      }
+      detail.appendChild(dataTable);
+    }
+    renderStringsView() {
+      if (!this.moduleInfo) {
+        return;
+      }
+      const detail = this.detailContainer;
+      const strings = this.extractStrings();
+      this.appendHeading(detail, `Strings (${strings.length})`);
+      const table = this.createInfoTable();
+      for (const stringEntry of strings) {
+        const row = document.createElement("div");
+        row.className = "detail-info-row";
+        const link = document.createElement("a");
+        link.className = "detail-info-link";
+        link.textContent = `data ${stringEntry.dataSegmentIndex}+${stringEntry.offset}`;
+        link.href = "#";
+        link.style.minWidth = "100px";
+        link.style.flexShrink = "0";
+        link.addEventListener("click", (event) => {
+          event.preventDefault();
+          this.navigateToItem("data", stringEntry.dataSegmentIndex);
+        });
+        row.appendChild(link);
+        const valueElement = document.createElement("span");
+        valueElement.className = "detail-string-value";
+        const displayValue = stringEntry.value.length > 120 ? stringEntry.value.slice(0, 120) + "..." : stringEntry.value;
+        valueElement.textContent = displayValue;
+        row.appendChild(valueElement);
+        table.appendChild(row);
+      }
+      detail.appendChild(table);
+    }
+    renderDebugInfo() {
+      const dwarfData = this.getDwarfInfo();
+      if (!dwarfData) {
+        return;
+      }
+      const detail = this.detailContainer;
+      this.appendHeading(detail, "Debug Info (DWARF)");
+      const summaryTable = this.createInfoTable();
+      this.addInfoRow(summaryTable, "Compilation units", String(dwarfData.compilationUnits.length));
+      this.addInfoRow(summaryTable, "DWARF functions", String(dwarfData.functions.length));
+      this.addInfoRow(summaryTable, "Source files", String(dwarfData.sourceFiles.length));
+      if (dwarfData.lineInfo) {
+        this.addInfoRow(summaryTable, "Line entries", String(dwarfData.lineInfo.lineEntries.length));
+      }
+      detail.appendChild(summaryTable);
+      if (dwarfData.compilationUnits.length > 0) {
+        this.appendSubheading(detail, "Compilation Units");
+        for (const compilationUnit of dwarfData.compilationUnits) {
+          const unitTable = this.createInfoTable();
+          if (compilationUnit.name) {
+            this.addInfoRow(unitTable, "Source", compilationUnit.name);
+          }
+          if (compilationUnit.producer) {
+            this.addInfoRow(unitTable, "Producer", compilationUnit.producer);
+          }
+          if (compilationUnit.compDir) {
+            this.addInfoRow(unitTable, "Compile dir", compilationUnit.compDir);
+          }
+          if (compilationUnit.language) {
+            this.addInfoRow(unitTable, "Language", this.getDwarfLanguageName(compilationUnit.language));
+          }
+          this.addInfoRow(unitTable, "Functions", String(compilationUnit.functions.length));
+          detail.appendChild(unitTable);
+        }
+      }
+      if (dwarfData.functions.length > 0) {
+        this.appendSubheading(detail, `DWARF Functions (${dwarfData.functions.length})`);
+        const funcTable = this.createInfoTable();
+        const sortedFunctions = [...dwarfData.functions].sort((funcA, funcB) => funcA.lowPc - funcB.lowPc);
+        for (const dwarfFunc of sortedFunctions) {
+          let sourceInfo = "";
+          if (dwarfFunc.declFile > 0 && dwarfFunc.declFile <= dwarfData.sourceFiles.length) {
+            const fileName = dwarfData.sourceFiles[dwarfFunc.declFile - 1];
+            const shortName = fileName.split("/").pop() || fileName;
+            sourceInfo = `${shortName}:${dwarfFunc.declLine}`;
+          }
+          const addressRange = dwarfFunc.lowPc > 0 ? ` [0x${dwarfFunc.lowPc.toString(16)}..0x${dwarfFunc.highPc.toString(16)}]` : "";
+          this.addInfoRow(funcTable, dwarfFunc.name, `${sourceInfo}${addressRange}`);
+        }
+        detail.appendChild(funcTable);
+      }
+      if (dwarfData.sourceFiles.length > 0) {
+        this.appendSubheading(detail, "Source Files");
+        const fileTable = this.createInfoTable();
+        for (let fileIndex = 0; fileIndex < dwarfData.sourceFiles.length; fileIndex++) {
+          this.addInfoRow(fileTable, String(fileIndex), dwarfData.sourceFiles[fileIndex]);
+        }
+        detail.appendChild(fileTable);
+      }
+    }
+    getDwarfLanguageName(language) {
+      const languageNames = {
+        1: "C89",
+        2: "C",
+        4: "C++",
+        12: "C99",
+        26: "C11",
+        42: "C17",
+        28: "C++03",
+        33: "C++11",
+        26: "C++14",
+        34: "C++14",
+        29: "Rust",
+        18: "Java",
+        14: "Python",
+        31: "Swift",
+        36: "Kotlin",
+        32: "Go",
+        37: "Zig"
+      };
+      return languageNames[language] || `language_${language} (0x${language.toString(16)})`;
+    }
+    searchWat(query) {
+      if (!this.moduleInfo || !this.disassembler || !this.detailContainer || !query.trim()) {
+        return;
+      }
+      const detail = this.detailContainer;
+      detail.innerHTML = "";
+      const lowerQuery = query.toLowerCase();
+      const importedFuncCount = this.moduleInfo.imports.filter((importEntry) => importEntry.kind === 0).length;
+      this.appendHeading(detail, `Search: "${query}"`);
+      const matches = [];
+      for (let funcIndex = 0; funcIndex < this.moduleInfo.functions.length; funcIndex++) {
+        const globalIndex = importedFuncCount + funcIndex;
+        const funcName = this.moduleInfo.nameSection?.functionNames?.get(globalIndex) || null;
+        const wat = this.disassembler.disassembleFunction(funcIndex);
+        const lines = wat.split("\n");
+        for (let lineNumber = 0; lineNumber < lines.length; lineNumber++) {
+          if (lines[lineNumber].toLowerCase().includes(lowerQuery)) {
+            matches.push({
+              funcIndex,
+              globalIndex,
+              funcName,
+              lineNumber: lineNumber + 1,
+              lineText: lines[lineNumber].trim()
+            });
+          }
+        }
+      }
+      this.addInfoRow(this.createInfoTable(), "Results", String(matches.length));
+      const summaryTable = this.createInfoTable();
+      this.addInfoRow(summaryTable, "Results", String(matches.length));
+      this.addInfoRow(summaryTable, "Functions searched", String(this.moduleInfo.functions.length));
+      detail.appendChild(summaryTable);
+      if (matches.length === 0) {
+        const noResults = document.createElement("div");
+        noResults.className = "detail-description";
+        noResults.textContent = "No matches found.";
+        detail.appendChild(noResults);
+        return;
+      }
+      const maxResults = 500;
+      const displayMatches = matches.slice(0, maxResults);
+      for (const match of displayMatches) {
+        const row = document.createElement("div");
+        row.className = "search-result-row";
+        const link = document.createElement("a");
+        link.className = "detail-info-link";
+        const displayName = match.funcName || `func_${match.globalIndex}`;
+        link.textContent = `${displayName}:${match.lineNumber}`;
+        link.href = "#";
+        link.addEventListener("click", (event) => {
+          event.preventDefault();
+          this.navigateToItem("function", match.funcIndex);
+        });
+        row.appendChild(link);
+        const linePreview = document.createElement("span");
+        linePreview.className = "search-result-line";
+        linePreview.textContent = match.lineText;
+        row.appendChild(linePreview);
+        detail.appendChild(row);
+      }
+      if (matches.length > maxResults) {
+        const truncated = document.createElement("div");
+        truncated.className = "detail-truncated";
+        truncated.textContent = `(showing ${maxResults} of ${matches.length} results)`;
+        detail.appendChild(truncated);
+      }
+    }
+    renderFeatureDetection() {
+      if (!this.moduleInfo) {
+        return;
+      }
+      const detail = this.detailContainer;
+      const importedFuncCount = this.moduleInfo.imports.filter((imp) => imp.kind === 0).length;
+      this.appendHeading(detail, "Feature Detection");
+      const featureOpcodes = /* @__PURE__ */ new Map();
+      const featureFunctions = /* @__PURE__ */ new Map();
+      for (let funcIndex = 0; funcIndex < this.moduleInfo.functions.length; funcIndex++) {
+        const func = this.moduleInfo.functions[funcIndex];
+        const instructions = func.instructions || InstructionDecoder.decodeFunctionBody(func.body);
+        const globalIndex = importedFuncCount + funcIndex;
+        for (const instruction of instructions) {
+          const feature = instruction.opCode.feature;
+          if (feature) {
+            if (!featureOpcodes.has(feature)) {
+              featureOpcodes.set(feature, []);
+            }
+            const opcodes = featureOpcodes.get(feature);
+            if (!opcodes.includes(instruction.opCode.mnemonic)) {
+              opcodes.push(instruction.opCode.mnemonic);
+            }
+            if (!featureFunctions.has(feature)) {
+              featureFunctions.set(feature, /* @__PURE__ */ new Set());
+            }
+            featureFunctions.get(feature).add(globalIndex);
+          }
+        }
+      }
+      const hasMultiValue = this.moduleInfo.types.some((typeEntry) => {
+        if (typeEntry.kind === "func") {
+          return typeEntry.returnTypes.length > 1;
+        }
+        return false;
+      });
+      const hasGcTypes = this.moduleInfo.types.some(
+        (typeEntry) => typeEntry.kind === "struct" || typeEntry.kind === "array" || typeEntry.kind === "rec"
+      );
+      const hasSharedMemory = this.moduleInfo.memories.some((mem) => mem.shared) || this.moduleInfo.imports.some((imp) => imp.memoryType?.shared);
+      const hasMemory64 = this.moduleInfo.memories.some((mem) => mem.memory64) || this.moduleInfo.imports.some((imp) => imp.memoryType?.memory64);
+      const hasTags = this.moduleInfo.tags.length > 0 || this.moduleInfo.imports.some((imp) => imp.kind === 4);
+      const structuralFeatures = [
+        ["multi-value", hasMultiValue],
+        ["gc (struct/array types)", hasGcTypes],
+        ["shared-memory", hasSharedMemory],
+        ["memory64", hasMemory64],
+        ["exception-handling (tags)", hasTags]
+      ];
+      if (featureOpcodes.size === 0 && !structuralFeatures.some(([, present]) => present)) {
+        const mvpNote = document.createElement("div");
+        mvpNote.className = "detail-description";
+        mvpNote.textContent = "This module uses only MVP features.";
+        detail.appendChild(mvpNote);
+        return;
+      }
+      this.appendSubheading(detail, "Opcode-based Features");
+      if (featureOpcodes.size === 0) {
+        const noneNote = document.createElement("div");
+        noneNote.className = "detail-description";
+        noneNote.textContent = "No post-MVP opcodes detected.";
+        detail.appendChild(noneNote);
+      } else {
+        const sortedFeatures = Array.from(featureOpcodes.entries()).sort(
+          (entryA, entryB) => (featureFunctions.get(entryB[0])?.size || 0) - (featureFunctions.get(entryA[0])?.size || 0)
+        );
+        const table = this.createInfoTable();
+        for (const [featureName, opcodes] of sortedFeatures) {
+          const funcCount = featureFunctions.get(featureName)?.size || 0;
+          this.addInfoRow(table, featureName, `${funcCount} functions, opcodes: ${opcodes.slice(0, 5).join(", ")}${opcodes.length > 5 ? "..." : ""}`);
+        }
+        detail.appendChild(table);
+      }
+      this.appendSubheading(detail, "Structural Features");
+      const structTable = this.createInfoTable();
+      for (const [featureName, present] of structuralFeatures) {
+        if (present) {
+          this.addInfoRow(structTable, featureName, "detected");
+        }
+      }
+      if (!structuralFeatures.some(([, present]) => present)) {
+        this.addInfoRow(structTable, "(none)", "MVP only");
+      }
+      detail.appendChild(structTable);
+    }
+    renderModuleInterface() {
+      if (!this.moduleInfo) {
+        return;
+      }
+      const detail = this.detailContainer;
+      const flatTypes = flattenTypes3(this.moduleInfo);
+      this.appendHeading(detail, "Module Interface");
+      this.appendSubheading(detail, `Imports (${this.moduleInfo.imports.length})`);
+      if (this.moduleInfo.imports.length > 0) {
+        const importTable = this.createInfoTable();
+        for (let importIndex = 0; importIndex < this.moduleInfo.imports.length; importIndex++) {
+          const importEntry = this.moduleInfo.imports[importIndex];
+          const kindName = EXPORT_KIND_NAMES[importEntry.kind] || "unknown";
+          let signature = "";
+          if (importEntry.kind === 0 && importEntry.typeIndex !== void 0 && importEntry.typeIndex < flatTypes.length) {
+            const typeEntry = flatTypes[importEntry.typeIndex];
+            if (typeEntry.kind === "func") {
+              signature = " " + formatFuncType(typeEntry);
+            }
+          }
+          this.addLinkedInfoRow(
+            importTable,
+            `${importEntry.moduleName}.${importEntry.fieldName}`,
+            `${kindName}${signature}`,
+            "import",
+            importIndex
+          );
+        }
+        detail.appendChild(importTable);
+      }
+      this.appendSubheading(detail, `Exports (${this.moduleInfo.exports.length})`);
+      if (this.moduleInfo.exports.length > 0) {
+        const exportTable = this.createInfoTable();
+        for (let exportIndex = 0; exportIndex < this.moduleInfo.exports.length; exportIndex++) {
+          const exportEntry = this.moduleInfo.exports[exportIndex];
+          const kindName = EXPORT_KIND_NAMES[exportEntry.kind] || "unknown";
+          let signature = "";
+          if (exportEntry.kind === 0) {
+            const importedFuncCount = this.moduleInfo.imports.filter((imp) => imp.kind === 0).length;
+            const localFuncIndex = exportEntry.index - importedFuncCount;
+            if (localFuncIndex >= 0 && localFuncIndex < this.moduleInfo.functions.length) {
+              const funcEntry = this.moduleInfo.functions[localFuncIndex];
+              if (funcEntry.typeIndex < flatTypes.length) {
+                const typeEntry = flatTypes[funcEntry.typeIndex];
+                if (typeEntry.kind === "func") {
+                  signature = " " + formatFuncType(typeEntry);
+                }
+              }
+            }
+          }
+          this.addLinkedInfoRow(
+            exportTable,
+            exportEntry.name,
+            `${kindName}${signature}`,
+            "export",
+            exportIndex
+          );
+        }
+        detail.appendChild(exportTable);
+      }
+    }
+    renderFunctionComplexity() {
+      if (!this.moduleInfo) {
+        return;
+      }
+      const detail = this.detailContainer;
+      const importedFuncCount = this.moduleInfo.imports.filter((imp) => imp.kind === 0).length;
+      this.appendHeading(detail, "Function Complexity");
+      const entries = [];
+      for (let funcIndex = 0; funcIndex < this.moduleInfo.functions.length; funcIndex++) {
+        const globalIndex = importedFuncCount + funcIndex;
+        const func = this.moduleInfo.functions[funcIndex];
+        const instructions = func.instructions || InstructionDecoder.decodeFunctionBody(func.body);
+        const funcName = this.moduleInfo.nameSection?.functionNames?.get(globalIndex) || null;
+        let instructionCount = 0;
+        let branchCount = 0;
+        let currentDepth = 0;
+        let maxDepth = 0;
+        for (const instruction of instructions) {
+          const mnemonic = instruction.opCode.mnemonic;
+          if (mnemonic === "end") {
+            currentDepth = Math.max(0, currentDepth - 1);
+            continue;
+          }
+          instructionCount++;
+          if (mnemonic === "block" || mnemonic === "loop" || mnemonic === "if" || mnemonic === "try") {
+            currentDepth++;
+            maxDepth = Math.max(maxDepth, currentDepth);
+          }
+          if (mnemonic === "br" || mnemonic === "br_if" || mnemonic === "br_table" || mnemonic === "if") {
+            branchCount++;
+          }
+        }
+        entries.push({
+          localIndex: funcIndex,
+          globalIndex,
+          name: funcName,
+          instructionCount,
+          branchCount,
+          maxNestingDepth: maxDepth,
+          bodySize: func.body.length
+        });
+      }
+      entries.sort((entryA, entryB) => {
+        const scoreA = entryA.branchCount * 3 + entryA.maxNestingDepth * 5 + entryA.instructionCount;
+        const scoreB = entryB.branchCount * 3 + entryB.maxNestingDepth * 5 + entryB.instructionCount;
+        return scoreB - scoreA;
+      });
+      const maxScore = entries.length > 0 ? entries[0].branchCount * 3 + entries[0].maxNestingDepth * 5 + entries[0].instructionCount : 1;
+      const headerRow = document.createElement("div");
+      headerRow.className = "detail-info-row complexity-header";
+      for (const label of ["Function", "Instructions", "Branches", "Max Depth", "Body"]) {
+        const cell = document.createElement("span");
+        cell.className = "complexity-header-cell";
+        cell.textContent = label;
+        headerRow.appendChild(cell);
+      }
+      detail.appendChild(headerRow);
+      for (const entry of entries) {
+        const row = document.createElement("div");
+        row.className = "detail-info-row";
+        const displayName = entry.name || `func_${entry.globalIndex}`;
+        const link = document.createElement("a");
+        link.className = "detail-info-link";
+        link.textContent = displayName;
+        link.style.minWidth = "140px";
+        link.style.flexShrink = "0";
+        link.href = "#";
+        link.addEventListener("click", (event) => {
+          event.preventDefault();
+          this.navigateToItem("function", entry.localIndex);
+        });
+        row.appendChild(link);
+        for (const value of [entry.instructionCount, entry.branchCount, entry.maxNestingDepth, entry.bodySize]) {
+          const cell = document.createElement("span");
+          cell.className = "detail-info-value";
+          cell.style.minWidth = "70px";
+          cell.textContent = String(value);
+          row.appendChild(cell);
+        }
+        detail.appendChild(row);
+      }
+    }
+    renderDeadCode() {
+      if (!this.moduleInfo) {
+        return;
+      }
+      const detail = this.detailContainer;
+      const importedFuncCount = this.moduleInfo.imports.filter((imp) => imp.kind === 0).length;
+      const callGraphData = this.getCallGraph();
+      const exportedFuncIndices = /* @__PURE__ */ new Set();
+      for (const exportEntry of this.moduleInfo.exports) {
+        if (exportEntry.kind === 0) {
+          exportedFuncIndices.add(exportEntry.index);
+        }
+      }
+      if (this.moduleInfo.start !== null) {
+        exportedFuncIndices.add(this.moduleInfo.start);
+      }
+      for (const elementEntry of this.moduleInfo.elements) {
+        for (const funcIdx of elementEntry.functionIndices) {
+          exportedFuncIndices.add(funcIdx);
+        }
+      }
+      const reachable = /* @__PURE__ */ new Set();
+      const worklist = Array.from(exportedFuncIndices);
+      while (worklist.length > 0) {
+        const current = worklist.pop();
+        if (reachable.has(current)) {
+          continue;
+        }
+        reachable.add(current);
+        const callees = callGraphData.callees.get(current);
+        if (callees) {
+          for (const callee of callees) {
+            if (!reachable.has(callee)) {
+              worklist.push(callee);
+            }
+          }
+        }
+      }
+      const deadFunctions = [];
+      for (let funcIndex = 0; funcIndex < this.moduleInfo.functions.length; funcIndex++) {
+        const globalIndex = importedFuncCount + funcIndex;
+        if (!reachable.has(globalIndex)) {
+          deadFunctions.push({
+            localIndex: funcIndex,
+            globalIndex,
+            name: this.moduleInfo.nameSection?.functionNames?.get(globalIndex) || null,
+            bodySize: this.moduleInfo.functions[funcIndex].body.length
+          });
+        }
+      }
+      this.appendHeading(detail, "Dead Code Analysis");
+      const summaryTable = this.createInfoTable();
+      this.addInfoRow(summaryTable, "Total functions", String(this.moduleInfo.functions.length));
+      this.addInfoRow(summaryTable, "Reachable", String(reachable.size - importedFuncCount));
+      this.addInfoRow(summaryTable, "Unreachable", String(deadFunctions.length));
+      const wastedBytes = deadFunctions.reduce((sum, func) => sum + func.bodySize, 0);
+      this.addInfoRow(summaryTable, "Wasted bytes", this.formatFileSize(wastedBytes));
+      detail.appendChild(summaryTable);
+      if (deadFunctions.length === 0) {
+        const noDeadCode = document.createElement("div");
+        noDeadCode.className = "detail-description";
+        noDeadCode.textContent = "No unreachable functions detected.";
+        detail.appendChild(noDeadCode);
+        return;
+      }
+      deadFunctions.sort((funcA, funcB) => funcB.bodySize - funcA.bodySize);
+      this.appendSubheading(detail, `Unreachable Functions (${deadFunctions.length})`);
+      const funcTable = this.createInfoTable();
+      for (const deadFunc of deadFunctions) {
+        const displayName = deadFunc.name || `func_${deadFunc.globalIndex}`;
+        this.addLinkedInfoRow(funcTable, displayName, `${deadFunc.bodySize} bytes`, "function", deadFunc.localIndex);
+      }
+      detail.appendChild(funcTable);
+    }
+    renderProducers() {
+      if (!this.moduleInfo) {
+        return;
+      }
+      const detail = this.detailContainer;
+      const producersSection = this.moduleInfo.customSections.find((section) => section.name === "producers");
+      if (!producersSection) {
+        return;
+      }
+      this.appendHeading(detail, "Producers");
+      try {
+        let readULEB1282 = function() {
+          let result = 0;
+          let shift = 0;
+          let byte;
+          do {
+            byte = data[offset++];
+            result |= (byte & 127) << shift;
+            shift += 7;
+          } while (byte & 128);
+          return result >>> 0;
+        }, readString2 = function() {
+          const length = readULEB1282();
+          const str = new TextDecoder().decode(data.slice(offset, offset + length));
+          offset += length;
+          return str;
+        };
+        var readULEB128 = readULEB1282, readString = readString2;
+        const data = producersSection.data;
+        let offset = 0;
+        const fieldCount = readULEB1282();
+        for (let fieldIndex = 0; fieldIndex < fieldCount; fieldIndex++) {
+          const fieldName = readString2();
+          this.appendSubheading(detail, fieldName);
+          const valueCount = readULEB1282();
+          const table = this.createInfoTable();
+          for (let valueIndex = 0; valueIndex < valueCount; valueIndex++) {
+            const name = readString2();
+            const version = readString2();
+            this.addInfoRow(table, name, version || "(no version)");
+          }
+          detail.appendChild(table);
+        }
+      } catch (parseError) {
+        const errorElement = document.createElement("div");
+        errorElement.className = "detail-description";
+        errorElement.textContent = "Failed to parse producers section.";
+        detail.appendChild(errorElement);
+      }
+    }
+    renderTargetFeatures() {
+      if (!this.moduleInfo) {
+        return;
+      }
+      const detail = this.detailContainer;
+      const targetFeaturesSection = this.moduleInfo.customSections.find((section) => section.name === "target_features");
+      if (!targetFeaturesSection) {
+        return;
+      }
+      this.appendHeading(detail, "Target Features");
+      try {
+        let readULEB1282 = function() {
+          let result = 0;
+          let shift = 0;
+          let byte;
+          do {
+            byte = data[offset++];
+            result |= (byte & 127) << shift;
+            shift += 7;
+          } while (byte & 128);
+          return result >>> 0;
+        }, readString2 = function() {
+          const length = readULEB1282();
+          const str = new TextDecoder().decode(data.slice(offset, offset + length));
+          offset += length;
+          return str;
+        };
+        var readULEB128 = readULEB1282, readString = readString2;
+        const data = targetFeaturesSection.data;
+        let offset = 0;
+        const prefixLabels = {
+          43: "used (+)",
+          45: "disallowed (-)",
+          61: "required (=)"
+        };
+        const featureCount = readULEB1282();
+        const table = this.createInfoTable();
+        for (let featureIndex = 0; featureIndex < featureCount; featureIndex++) {
+          const prefix = data[offset++];
+          const featureName = readString2();
+          this.addInfoRow(table, featureName, prefixLabels[prefix] || `prefix 0x${prefix.toString(16)}`);
+        }
+        detail.appendChild(table);
+      } catch (parseError) {
+        const errorElement = document.createElement("div");
+        errorElement.className = "detail-description";
+        errorElement.textContent = "Failed to parse target_features section.";
+        detail.appendChild(errorElement);
+      }
+    }
+    renderInstructionStats() {
+      if (!this.moduleInfo) {
+        return;
+      }
+      const detail = this.detailContainer;
+      const opcodeCounts = /* @__PURE__ */ new Map();
+      let totalInstructions = 0;
+      for (const func of this.moduleInfo.functions) {
+        const instructions = func.instructions || InstructionDecoder.decodeFunctionBody(func.body);
+        for (const instruction of instructions) {
+          if (instruction.opCode.mnemonic === "end") {
+            continue;
+          }
+          totalInstructions++;
+          const mnemonic = instruction.opCode.mnemonic;
+          opcodeCounts.set(mnemonic, (opcodeCounts.get(mnemonic) || 0) + 1);
+        }
+      }
+      this.appendHeading(detail, "Instruction Statistics");
+      const summaryTable = this.createInfoTable();
+      this.addInfoRow(summaryTable, "Total instructions", String(totalInstructions));
+      this.addInfoRow(summaryTable, "Unique opcodes", String(opcodeCounts.size));
+      this.addInfoRow(summaryTable, "Functions", String(this.moduleInfo.functions.length));
+      detail.appendChild(summaryTable);
+      const categories = {
+        "Control Flow": [],
+        "Memory": [],
+        "Numeric": [],
+        "Variable": [],
+        "Reference": [],
+        "Table": [],
+        "Other": []
+      };
+      for (const [mnemonic] of opcodeCounts) {
+        if (/^(block|loop|if|else|br|br_if|br_table|return|call|call_indirect|return_call|unreachable|nop|select|drop)/.test(mnemonic)) {
+          categories["Control Flow"].push(mnemonic);
+        } else if (/^(i32|i64|f32|f64)\.(load|store|const|add|sub|mul|div|rem|and|or|xor|shl|shr|rotl|rotr|clz|ctz|popcnt|eqz|eq|ne|lt|gt|le|ge|abs|neg|ceil|floor|trunc|nearest|sqrt|min|max|copysign|wrap|extend|convert|demote|promote|reinterpret|atomic)/.test(mnemonic)) {
+          categories["Numeric"].push(mnemonic);
+        } else if (/^(memory\.|i32\.load|i64\.load|f32\.load|f64\.load|i32\.store|i64\.store|f32\.store|f64\.store)/.test(mnemonic)) {
+          categories["Memory"].push(mnemonic);
+        } else if (/^(local\.|global\.)/.test(mnemonic)) {
+          categories["Variable"].push(mnemonic);
+        } else if (/^(ref\.|struct\.|array\.|i31\.|any\.|extern\.|br_on_cast)/.test(mnemonic)) {
+          categories["Reference"].push(mnemonic);
+        } else if (/^(table\.|elem\.)/.test(mnemonic)) {
+          categories["Table"].push(mnemonic);
+        } else {
+          categories["Other"].push(mnemonic);
+        }
+      }
+      this.appendSubheading(detail, "By Category");
+      const categoryTable = this.createInfoTable();
+      for (const [categoryName, mnemonics] of Object.entries(categories)) {
+        if (mnemonics.length === 0) {
+          continue;
+        }
+        const categoryCount = mnemonics.reduce((sum, mnemonic) => sum + (opcodeCounts.get(mnemonic) || 0), 0);
+        const percentage = totalInstructions > 0 ? (categoryCount / totalInstructions * 100).toFixed(1) : "0";
+        const row = document.createElement("div");
+        row.className = "detail-info-row";
+        const labelElement = document.createElement("span");
+        labelElement.className = "detail-info-label";
+        labelElement.textContent = categoryName;
+        row.appendChild(labelElement);
+        const barContainer = document.createElement("div");
+        barContainer.className = "size-bar-container";
+        const bar = document.createElement("div");
+        bar.className = "size-bar";
+        bar.style.width = `${Math.max(2, categoryCount / totalInstructions * 100)}%`;
+        barContainer.appendChild(bar);
+        row.appendChild(barContainer);
+        const valueElement = document.createElement("span");
+        valueElement.className = "detail-info-value";
+        valueElement.textContent = `${categoryCount} (${percentage}%)`;
+        row.appendChild(valueElement);
+        categoryTable.appendChild(row);
+      }
+      detail.appendChild(categoryTable);
+      this.appendSubheading(detail, "All Opcodes (by frequency)");
+      const sorted = Array.from(opcodeCounts.entries()).sort((entryA, entryB) => entryB[1] - entryA[1]);
+      const maxCount = sorted.length > 0 ? sorted[0][1] : 1;
+      const opcodeTable = this.createInfoTable();
+      for (const [mnemonic, count] of sorted) {
+        const percentage = totalInstructions > 0 ? (count / totalInstructions * 100).toFixed(1) : "0";
+        const row = document.createElement("div");
+        row.className = "detail-info-row";
+        const labelElement = document.createElement("span");
+        labelElement.className = "detail-info-label";
+        labelElement.style.fontFamily = "'SF Mono', 'Fira Code', 'Cascadia Code', monospace";
+        labelElement.textContent = mnemonic;
+        row.appendChild(labelElement);
+        const barContainer = document.createElement("div");
+        barContainer.className = "size-bar-container";
+        const bar = document.createElement("div");
+        bar.className = "size-bar";
+        bar.style.width = `${Math.max(2, count / maxCount * 100)}%`;
+        barContainer.appendChild(bar);
+        row.appendChild(barContainer);
+        const valueElement = document.createElement("span");
+        valueElement.className = "detail-info-value";
+        valueElement.textContent = `${count} (${percentage}%)`;
+        row.appendChild(valueElement);
+        opcodeTable.appendChild(row);
+      }
+      detail.appendChild(opcodeTable);
+    }
+    appendHeading(parent, text) {
+      const heading = document.createElement("h2");
+      heading.className = "detail-heading";
+      heading.textContent = text;
+      parent.appendChild(heading);
+    }
+    appendSubheading(parent, text) {
+      const heading = document.createElement("h3");
+      heading.className = "detail-subheading";
+      heading.textContent = text;
+      parent.appendChild(heading);
+    }
+    createInfoTable() {
+      const table = document.createElement("div");
+      table.className = "detail-info-table";
+      return table;
+    }
+    addInfoRow(table, label, value) {
+      const row = document.createElement("div");
+      row.className = "detail-info-row";
+      const labelElement = document.createElement("span");
+      labelElement.className = "detail-info-label";
+      labelElement.textContent = label;
+      row.appendChild(labelElement);
+      const valueElement = document.createElement("span");
+      valueElement.className = "detail-info-value";
+      valueElement.textContent = value;
+      row.appendChild(valueElement);
+      table.appendChild(row);
+    }
+    addLinkedInfoRow(table, label, value, targetSection, targetIndex) {
+      const row = document.createElement("div");
+      row.className = "detail-info-row";
+      const labelElement = document.createElement("span");
+      labelElement.className = "detail-info-label";
+      labelElement.textContent = label;
+      row.appendChild(labelElement);
+      const link = document.createElement("a");
+      link.className = "detail-info-link";
+      link.textContent = value;
+      link.href = "#";
+      link.addEventListener("click", (event) => {
+        event.preventDefault();
+        this.navigateToItem(targetSection, targetIndex);
+      });
+      row.appendChild(link);
+      table.appendChild(row);
+    }
+    appendCallList(parent, label, funcIndices) {
+      if (!this.moduleInfo) {
+        return;
+      }
+      const importedFuncCount = this.moduleInfo.imports.filter((importEntry) => importEntry.kind === 0).length;
+      const container = document.createElement("div");
+      container.className = "detail-call-list";
+      const labelElement = document.createElement("span");
+      labelElement.className = "detail-call-label";
+      labelElement.textContent = label + ": ";
+      container.appendChild(labelElement);
+      const sortedIndices = Array.from(funcIndices).sort((indexA, indexB) => indexA - indexB);
+      for (let position = 0; position < sortedIndices.length; position++) {
+        const targetGlobalIndex = sortedIndices[position];
+        const funcName = this.getFunctionName(targetGlobalIndex);
+        const displayName = funcName || `func_${targetGlobalIndex}`;
+        const localFuncIndex = targetGlobalIndex - importedFuncCount;
+        const link = document.createElement("a");
+        link.className = "detail-info-link";
+        link.textContent = displayName;
+        link.href = "#";
+        link.addEventListener("click", (event) => {
+          event.preventDefault();
+          if (localFuncIndex >= 0) {
+            this.navigateToItem("function", localFuncIndex);
+          }
+        });
+        container.appendChild(link);
+        if (position < sortedIndices.length - 1) {
+          container.appendChild(document.createTextNode(", "));
+        }
+      }
+      parent.appendChild(container);
+    }
+    appendCodeBlock(parent, code) {
+      const wrapper = document.createElement("div");
+      wrapper.className = "detail-block-wrapper";
+      const block = document.createElement("div");
+      block.className = "detail-code";
+      const lines = code.split("\n");
+      const gutterWidth = String(lines.length).length;
+      for (let lineIndex = 0; lineIndex < lines.length; lineIndex++) {
+        const lineElement = document.createElement("div");
+        lineElement.className = "code-line";
+        const gutter = document.createElement("span");
+        gutter.className = "code-line-number";
+        gutter.textContent = String(lineIndex + 1).padStart(gutterWidth, " ");
+        lineElement.appendChild(gutter);
+        const content = document.createElement("span");
+        content.className = "code-line-content";
+        renderHighlightedWat(content, lines[lineIndex]);
+        lineElement.appendChild(content);
+        block.appendChild(lineElement);
+      }
+      wrapper.appendChild(block);
+      wrapper.appendChild(this.createCopyButton(code));
+      parent.appendChild(wrapper);
+    }
+    createCopyButton(text) {
+      const button = document.createElement("button");
+      button.className = "detail-copy-btn";
+      button.textContent = "Copy";
+      button.addEventListener("click", () => {
+        navigator.clipboard.writeText(text).then(() => {
+          button.textContent = "Copied";
+          setTimeout(() => {
+            button.textContent = "Copy";
+          }, 1500);
+        });
+      });
+      return button;
+    }
+    appendHexDump(parent, bytes, baseOffset, byteClasses) {
+      const wrapper = document.createElement("div");
+      wrapper.className = "detail-block-wrapper";
+      const hexText = formatHexDump(bytes, baseOffset);
+      const block = document.createElement("pre");
+      block.className = "detail-hex";
+      if (byteClasses && byteClasses.size > 0) {
+        renderColoredHexDump(block, bytes, baseOffset, byteClasses);
+      } else {
+        block.textContent = hexText;
+      }
+      wrapper.appendChild(block);
+      wrapper.appendChild(this.createCopyButton(hexText));
+      parent.appendChild(wrapper);
+    }
+    appendByteRange(parent, section, index) {
+      if (!this.byteRanges || !this.rawBytes) {
+        return;
+      }
+      const range = this.byteRanges.getItem(section, index);
+      if (!range) {
+        return;
+      }
+      this.appendSubheading(parent, "Bytes");
+      const rangeInfo = document.createElement("div");
+      rangeInfo.className = "detail-byte-range-info";
+      rangeInfo.textContent = `Offset: 0x${range.offset.toString(16)} (${range.offset}), Length: ${range.length} bytes`;
+      parent.appendChild(rangeInfo);
+      const maxDisplay = Math.min(range.length, 4096);
+      const bytes = this.rawBytes.slice(range.offset, range.offset + maxDisplay);
+      let byteClasses;
+      if (section === "function" && this.moduleInfo && index < this.moduleInfo.functions.length) {
+        const funcBody = this.moduleInfo.functions[index].body;
+        byteClasses = buildInstructionByteClasses(funcBody);
+      }
+      this.appendHexDump(parent, bytes, range.offset, byteClasses);
+      if (range.length > maxDisplay) {
+        const truncated = document.createElement("div");
+        truncated.className = "detail-truncated";
+        truncated.textContent = `(showing ${maxDisplay} of ${range.length} bytes)`;
+        parent.appendChild(truncated);
+      }
+    }
+  };
+
   // playground/playground.ts
   var GROUP_ICONS = {
     Basics: "\u{1F44B}",
@@ -19582,6 +29927,67 @@ ${code}
       renderWatPane(capturedModules);
     }
   }
+  var currentMode = "editor";
+  var explorerInstance = null;
+  function switchMode(mode, updateHash = true) {
+    if (mode === currentMode) {
+      return;
+    }
+    currentMode = mode;
+    const editorMode = document.getElementById("editorMode");
+    const explorerMode = document.getElementById("explorerMode");
+    const runBtn = document.getElementById("runBtn");
+    const examplesBtn = document.getElementById("examplesBtn");
+    document.querySelectorAll(".mode-btn").forEach((btn) => {
+      btn.classList.toggle("active", btn.dataset.mode === mode);
+    });
+    if (mode === "editor") {
+      editorMode.style.display = "";
+      explorerMode.style.display = "none";
+      runBtn.style.display = "";
+      examplesBtn.style.display = "";
+      document.getElementById("outputPane").style.display = "";
+      if (updateHash) {
+        history.replaceState(null, "", "#editor");
+      }
+    } else {
+      editorMode.style.display = "none";
+      explorerMode.style.display = "";
+      runBtn.style.display = "none";
+      examplesBtn.style.display = "none";
+      document.getElementById("outputPane").style.display = "none";
+      if (!explorerInstance) {
+        explorerInstance = new Explorer(document.getElementById("explorerContainer"));
+      }
+      if (updateHash) {
+        history.replaceState(null, "", "#explorer");
+      }
+    }
+  }
+  function handleHashNavigation() {
+    const hash = location.hash.replace(/^#/, "");
+    if (!hash) {
+      return;
+    }
+    const parts = hash.split("/");
+    const mode = parts[0];
+    if (mode === "explorer") {
+      if (currentMode !== "explorer") {
+        switchMode("explorer", false);
+      }
+      if (explorerInstance && parts.length > 2) {
+        const section = parts[1];
+        const index = parseInt(parts[2], 10);
+        if (!isNaN(index)) {
+          explorerInstance.navigateToItem(section, index);
+        }
+      }
+    } else if (mode === "editor") {
+      if (currentMode !== "editor") {
+        switchMode("editor", false);
+      }
+    }
+  }
   document.addEventListener("DOMContentLoaded", () => {
     document.getElementById("examplesBtn").addEventListener("click", openExamplePicker);
     document.getElementById("runBtn").addEventListener("click", run);
@@ -19591,6 +29997,14 @@ ${code}
     document.getElementById("outputToggle").addEventListener("click", () => {
       document.getElementById("outputPane").classList.toggle("collapsed");
     });
+    document.querySelectorAll(".mode-btn").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const mode = btn.dataset.mode;
+        switchMode(mode);
+      });
+    });
+    handleHashNavigation();
+    window.addEventListener("hashchange", handleHashNavigation);
     document.getElementById("outputClear").addEventListener("click", (e) => {
       e.stopPropagation();
       document.getElementById("outputBody").textContent = "";

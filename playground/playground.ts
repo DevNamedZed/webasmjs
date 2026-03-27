@@ -21,6 +21,7 @@ import {
 import type { WasmTarget, WasmFeature } from '../src/types';
 import { EXAMPLES } from './examples';
 import type { ExampleDef } from './examples';
+import Explorer from './explorer';
 
 // ─── UI helpers ───
 
@@ -514,6 +515,75 @@ async function run(): Promise<void> {
   }
 }
 
+let currentMode: 'editor' | 'explorer' = 'editor';
+let explorerInstance: Explorer | null = null;
+
+function switchMode(mode: 'editor' | 'explorer', updateHash: boolean = true): void {
+  if (mode === currentMode) {
+    return;
+  }
+  currentMode = mode;
+
+  const editorMode = document.getElementById('editorMode')!;
+  const explorerMode = document.getElementById('explorerMode')!;
+  const runBtn = document.getElementById('runBtn')!;
+  const examplesBtn = document.getElementById('examplesBtn')!;
+
+  document.querySelectorAll('.mode-btn').forEach((btn) => {
+    btn.classList.toggle('active', (btn as HTMLElement).dataset.mode === mode);
+  });
+
+  if (mode === 'editor') {
+    editorMode.style.display = '';
+    explorerMode.style.display = 'none';
+    runBtn.style.display = '';
+    examplesBtn.style.display = '';
+    document.getElementById('outputPane')!.style.display = '';
+    if (updateHash) {
+      history.replaceState(null, '', '#editor');
+    }
+  } else {
+    editorMode.style.display = 'none';
+    explorerMode.style.display = '';
+    runBtn.style.display = 'none';
+    examplesBtn.style.display = 'none';
+    document.getElementById('outputPane')!.style.display = 'none';
+    if (!explorerInstance) {
+      explorerInstance = new Explorer(document.getElementById('explorerContainer')!);
+    }
+    if (updateHash) {
+      history.replaceState(null, '', '#explorer');
+    }
+  }
+}
+
+function handleHashNavigation(): void {
+  const hash = location.hash.replace(/^#/, '');
+  if (!hash) {
+    return;
+  }
+
+  const parts = hash.split('/');
+  const mode = parts[0];
+
+  if (mode === 'explorer') {
+    if (currentMode !== 'explorer') {
+      switchMode('explorer', false);
+    }
+    if (explorerInstance && parts.length > 2) {
+      const section = parts[1];
+      const index = parseInt(parts[2], 10);
+      if (!isNaN(index)) {
+        explorerInstance.navigateToItem(section, index);
+      }
+    }
+  } else if (mode === 'editor') {
+    if (currentMode !== 'editor') {
+      switchMode('editor', false);
+    }
+  }
+}
+
 document.addEventListener('DOMContentLoaded', () => {
   document.getElementById('examplesBtn')!.addEventListener('click', openExamplePicker);
   document.getElementById('runBtn')!.addEventListener('click', run);
@@ -525,6 +595,18 @@ document.addEventListener('DOMContentLoaded', () => {
   document.getElementById('outputToggle')!.addEventListener('click', () => {
     document.getElementById('outputPane')!.classList.toggle('collapsed');
   });
+
+  // Mode toggle (Editor/Explorer)
+  document.querySelectorAll('.mode-btn').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const mode = (btn as HTMLElement).dataset.mode as 'editor' | 'explorer';
+      switchMode(mode);
+    });
+  });
+
+  // Hash navigation
+  handleHashNavigation();
+  window.addEventListener('hashchange', handleHashNavigation);
 
   // Output clear
   document.getElementById('outputClear')!.addEventListener('click', (e) => {

@@ -82,6 +82,57 @@ export default class InstructionDecoder {
     return decoder.decode();
   }
 
+  static decodeFunctionBody(bytes: Uint8Array): DecodedInstruction[] {
+    const decoder = new InstructionDecoder(bytes);
+    return decoder.decodeAll();
+  }
+
+  decodeAll(): DecodedInstruction[] {
+    const instructions: DecodedInstruction[] = [];
+    this.offset = 0;
+    let depth = 0;
+
+    while (this.offset < this.buffer.length) {
+      const startOffset = this.offset;
+      const byte = this.buffer[this.offset++];
+
+      let opCode: OpCodeDef | undefined;
+
+      if (prefixedOpcodes.has(byte)) {
+        const subMap = prefixedOpcodes.get(byte)!;
+        const subOpcode = this.readVarUInt32();
+        opCode = subMap.get(subOpcode);
+        if (!opCode) {
+          break;
+        }
+      } else {
+        opCode = singleByteOpcodes.get(byte);
+        if (!opCode) {
+          break;
+        }
+      }
+
+      const immediates = this.decodeImmediates(opCode);
+      instructions.push({
+        opCode,
+        immediates,
+        offset: startOffset,
+        length: this.offset - startOffset,
+      });
+
+      if (opCode === OpCodes.block || opCode === OpCodes.loop || opCode === OpCodes.if || opCode === OpCodes.try) {
+        depth++;
+      } else if (opCode === OpCodes.end) {
+        if (depth === 0) {
+          break;
+        }
+        depth--;
+      }
+    }
+
+    return instructions;
+  }
+
   private decodeImmediates(opCode: OpCodeDef): { type: string; values: any[] } {
     if (!opCode.immediate) {
       return { type: 'None', values: [] };
