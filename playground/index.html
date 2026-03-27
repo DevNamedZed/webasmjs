@@ -4,16 +4,21 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>webasmjs Playground</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body {
-    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
     background: #1e1e2e;
     color: #cdd6f4;
     height: 100vh;
     display: flex;
     flex-direction: column;
     overflow: hidden;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
   }
 
   header {
@@ -175,7 +180,7 @@
     color: #cdd6f4;
     border: none;
     resize: none;
-    font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
+    font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', 'SF Mono', monospace;
     font-size: 13px;
     line-height: 1.6;
     tab-size: 2;
@@ -298,7 +303,7 @@
     font-size: 12px;
     font-weight: 600;
     color: #cba6f7;
-    font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
+    font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', 'SF Mono', monospace;
   }
 
   .module-card-actions {
@@ -327,7 +332,7 @@
 
   .module-card-wat {
     padding: 12px;
-    font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
+    font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', 'SF Mono', monospace;
     font-size: 12px;
     line-height: 1.5;
     white-space: pre-wrap;
@@ -350,7 +355,7 @@
   .output-body {
     overflow: auto;
     padding: 8px 16px;
-    font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
+    font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', 'SF Mono', monospace;
     font-size: 13px;
     line-height: 1.6;
     white-space: pre-wrap;
@@ -539,29 +544,29 @@
   }
 
   /* WAT highlighting */
-  .wat-keyword { color: #cba6f7; }
+  .wat-keyword { color: #cba6f7; font-weight: 500; }
   .wat-type { color: #89b4fa; }
   .wat-number { color: #fab387; }
   .wat-string { color: #a6e3a1; }
-  .wat-annotation { color: #585b70; }
+  .wat-annotation { color: #585b70; font-style: italic; }
   .wat-name { color: #f9e2af; }
 
   /* C/Decompiled highlighting */
   .c-keyword { color: #cba6f7; font-weight: 600; }
-  .c-type { color: #89b4fa; }
+  .c-type { color: #89b4fa; font-weight: 500; }
   .c-number { color: #fab387; }
   .c-string { color: #a6e3a1; }
   .c-comment { color: #6c7086; font-style: italic; }
   .c-function { color: #89dceb; }
-  .c-function-link { cursor: pointer; text-decoration: underline; text-decoration-style: dotted; text-underline-offset: 2px; }
-  .c-function-link:hover { color: #b4befe; text-decoration-style: solid; }
+  .c-function-link { cursor: pointer; text-decoration: underline; text-decoration-style: dotted; text-underline-offset: 3px; text-decoration-color: rgba(137, 220, 235, 0.4); }
+  .c-function-link:hover { color: #b4befe; text-decoration-style: solid; text-decoration-color: currentColor; }
   .c-variable { color: #cdd6f4; }
-  .c-global { color: #f38ba8; font-style: italic; }
+  .c-global { color: #eba0ac; font-style: italic; }
   .c-memory { color: #fab387; font-weight: 600; }
-  .c-operator { color: #89dceb; }
-  .c-cast { color: #74c7ec; }
-  .c-brace { color: #a6adc8; }
-  .c-punct { color: #a6adc8; }
+  .c-operator { color: #94e2d5; }
+  .c-cast { color: #74c7ec; font-style: italic; }
+  .c-brace { color: #9399b2; }
+  .c-punct { color: #9399b2; }
 
   /* ─── Editor/Explorer mode containers ─── */
 
@@ -583,16 +588,18 @@
     display: flex;
     gap: 2px;
     margin-left: 8px;
-    background: #181825;
-    border-radius: 6px;
-    padding: 2px;
+    background: #11111b;
+    border: 1px solid #313244;
+    border-radius: 8px;
+    padding: 3px;
   }
 
   .mode-btn {
-    padding: 4px 12px;
+    padding: 4px 14px;
     font-size: 12px;
+    font-weight: 500;
     border: none;
-    border-radius: 4px;
+    border-radius: 6px;
     background: transparent;
     color: #6c7086;
     cursor: pointer;
@@ -603,6 +610,7 @@
   .mode-btn.active {
     background: #313244;
     color: #cdd6f4;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
   }
 
   .mode-btn:hover:not(.active) {
@@ -616,7 +624,7 @@
     flex-direction: column;
     height: calc(100vh - 50px);
     overflow: hidden;
-    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    font-family: inherit;
     font-size: 13px;
   }
 
@@ -627,10 +635,10 @@
   }
 
   .explorer-tree-pane {
-    width: 320px;
+    width: 300px;
     min-width: 200px;
     max-width: 50%;
-    background: #1e1e2e;
+    background: #181825;
     border-right: 1px solid #313244;
     display: flex;
     flex-direction: column;
@@ -646,15 +654,34 @@
   }
 
   .explorer-resize-handle {
-    width: 4px;
+    width: 5px;
     cursor: col-resize;
     background: transparent;
     flex-shrink: 0;
     transition: background 0.15s;
+    position: relative;
+  }
+
+  .explorer-resize-handle::after {
+    content: '';
+    position: absolute;
+    top: 50%;
+    left: 1px;
+    transform: translateY(-50%);
+    width: 3px;
+    height: 32px;
+    border-radius: 2px;
+    background: #45475a;
+    opacity: 0;
+    transition: opacity 0.2s;
+  }
+
+  .explorer-resize-handle:hover::after {
+    opacity: 1;
   }
 
   .explorer-resize-handle:hover {
-    background: #585b70;
+    background: rgba(137, 180, 250, 0.15);
   }
 
   /* ─── Explorer toolbar ─── */
@@ -662,45 +689,51 @@
   .explorer-toolbar {
     display: flex;
     align-items: center;
-    gap: 8px;
-    padding: 8px 12px;
+    gap: 10px;
+    padding: 8px 16px;
     border-bottom: 1px solid #313244;
-    background: #181825;
+    background: #11111b;
     flex-shrink: 0;
   }
 
   .explorer-file-label {
     font-size: 13px;
-    font-weight: 500;
-    color: #a6adc8;
+    font-weight: 600;
+    color: #cdd6f4;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
     flex: 1;
+    letter-spacing: -0.01em;
   }
 
   .explorer-size-label {
     font-size: 11px;
-    color: #585b70;
+    color: #6c7086;
     white-space: nowrap;
+    font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', 'SF Mono', monospace;
+    background: #1e1e2e;
+    padding: 2px 8px;
+    border-radius: 4px;
   }
 
   .explorer-load-btn {
     font-size: 11px;
-    padding: 4px 12px;
-    border: 1px solid #313244;
-    border-radius: 4px;
-    background: #181825;
-    color: #a6adc8;
+    padding: 5px 14px;
+    border: 1px solid #45475a;
+    border-radius: 6px;
+    background: #313244;
+    color: #cdd6f4;
     cursor: pointer;
     white-space: nowrap;
     font-family: inherit;
+    font-weight: 500;
     transition: all 0.15s;
   }
 
   .explorer-load-btn:hover {
-    background: #313244;
-    color: #cdd6f4;
+    background: #45475a;
+    border-color: #585b70;
   }
 
   /* ─── Drop zone ─── */
@@ -716,24 +749,28 @@
     padding: 40px;
     text-align: center;
     cursor: pointer;
-    transition: background 0.15s;
+    transition: all 0.2s;
+    border: 2px dashed transparent;
+    margin: 20px;
+    border-radius: 12px;
   }
 
   .explorer-drop-zone:hover {
-    background: rgba(69, 71, 90, 0.2);
+    background: rgba(69, 71, 90, 0.15);
+    border-color: #45475a;
   }
 
   .explorer-drop-zone.drag-over {
-    background: rgba(137, 180, 250, 0.1);
-    border: 2px dashed #89b4fa;
+    background: rgba(137, 180, 250, 0.08);
+    border-color: #89b4fa;
   }
 
-  .drop-zone-icon { font-size: 48px; opacity: 0.4; }
+  .drop-zone-icon { font-size: 56px; opacity: 0.3; }
   .drop-zone-hint { font-size: 12px; color: #45475a; }
-  .drop-zone-message { font-size: 14px; color: #6c7086; }
+  .drop-zone-message { font-size: 15px; color: #6c7086; font-weight: 500; }
 
   .explorer-error {
-    padding: 20px;
+    padding: 24px;
     color: #f38ba8;
     font-size: 13px;
   }
@@ -741,18 +778,19 @@
   .explorer-retry-btn {
     margin-top: 12px;
     padding: 6px 16px;
-    border: 1px solid #313244;
-    border-radius: 4px;
-    background: #181825;
-    color: #a6adc8;
+    border: 1px solid #45475a;
+    border-radius: 6px;
+    background: #313244;
+    color: #cdd6f4;
     cursor: pointer;
     font-family: inherit;
+    font-weight: 500;
     transition: all 0.15s;
   }
 
   .explorer-retry-btn:hover {
-    background: #313244;
-    color: #cdd6f4;
+    background: #45475a;
+    border-color: #585b70;
   }
 
   /* ─── Tree view ─── */
@@ -762,15 +800,21 @@
     overflow-y: auto;
     overflow-x: hidden;
     font-size: 13px;
-    font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
+    font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', 'SF Mono', monospace;
+    padding: 4px 0;
   }
+
+  .explorer-tree::-webkit-scrollbar { width: 8px; }
+  .explorer-tree::-webkit-scrollbar-track { background: transparent; }
+  .explorer-tree::-webkit-scrollbar-thumb { background: #313244; border-radius: 4px; }
+  .explorer-tree::-webkit-scrollbar-thumb:hover { background: #45475a; }
 
   .explorer-tree-search {
     width: 100%;
-    padding: 6px 10px;
+    padding: 8px 12px;
     border: none;
     border-bottom: 1px solid #313244;
-    background: #181825;
+    background: #11111b;
     color: #cdd6f4;
     font-size: 12px;
     font-family: inherit;
@@ -779,23 +823,36 @@
     flex-shrink: 0;
   }
 
-  .explorer-tree-search::placeholder { color: #585b70; }
+  .explorer-tree-search:focus {
+    background: #181825;
+    border-bottom-color: #89b4fa;
+  }
+
+  .explorer-tree-search::placeholder { color: #45475a; }
 
   .tree-row {
     display: flex;
     align-items: center;
-    padding: 1px 8px;
+    padding: 3px 8px;
     cursor: pointer;
     white-space: nowrap;
-    color: #cdd6f4;
+    color: #bac2de;
     line-height: 1.4;
     user-select: none;
     font-size: 12px;
-    transition: background 0.1s;
+    transition: background 0.08s;
+    border-left: 2px solid transparent;
   }
 
-  .tree-row:hover { background: #313244; }
-  .tree-row.selected { background: #45475a; }
+  .tree-row:hover {
+    background: rgba(69, 71, 90, 0.4);
+  }
+
+  .tree-row.selected {
+    background: rgba(137, 180, 250, 0.12);
+    border-left-color: #89b4fa;
+    color: #cdd6f4;
+  }
 
   .tree-chevron {
     width: 16px;
@@ -804,7 +861,10 @@
     color: #585b70;
     flex-shrink: 0;
     cursor: pointer;
+    transition: color 0.1s;
   }
+
+  .tree-row:hover .tree-chevron { color: #a6adc8; }
 
   .tree-chevron-spacer { width: 16px; flex-shrink: 0; }
   .tree-label { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
@@ -813,107 +873,131 @@
 
   .explorer-detail {
     padding: 0;
+    padding-bottom: 40px;
   }
+
+  .explorer-detail-pane::-webkit-scrollbar { width: 8px; }
+  .explorer-detail-pane::-webkit-scrollbar-track { background: transparent; }
+  .explorer-detail-pane::-webkit-scrollbar-thumb { background: #313244; border-radius: 4px; }
+  .explorer-detail-pane::-webkit-scrollbar-thumb:hover { background: #45475a; }
 
   .explorer-breadcrumbs {
     display: flex;
     align-items: center;
-    gap: 4px;
-    padding: 8px 16px;
+    gap: 6px;
+    padding: 10px 20px;
     border-bottom: 1px solid #313244;
     font-size: 12px;
     color: #585b70;
-    background: #181825;
+    background: #11111b;
     flex-shrink: 0;
     position: sticky;
     top: 0;
     z-index: 1;
+    font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', 'SF Mono', monospace;
   }
 
-  .breadcrumb-link { color: #89b4fa; cursor: pointer; text-decoration: none; }
-  .breadcrumb-link:hover { text-decoration: underline; }
-  .breadcrumb-separator { color: #45475a; }
-  .breadcrumb-current { color: #cdd6f4; }
+  .breadcrumb-link { color: #89b4fa; cursor: pointer; text-decoration: none; transition: color 0.1s; }
+  .breadcrumb-link:hover { color: #b4befe; text-decoration: underline; }
+  .breadcrumb-separator { color: #45475a; font-size: 10px; }
+  .breadcrumb-current { color: #cdd6f4; font-weight: 500; }
 
   .detail-heading {
-    font-size: 16px;
-    font-weight: 600;
+    font-size: 18px;
+    font-weight: 700;
     color: #cdd6f4;
-    margin: 0 0 12px 0;
-    padding: 16px 16px 0 16px;
+    margin: 0 0 16px 0;
+    padding: 20px 20px 0 20px;
+    letter-spacing: -0.02em;
   }
 
   .detail-subheading {
     font-size: 13px;
     font-weight: 600;
     color: #a6adc8;
-    margin: 16px 0 8px 0;
-    padding: 0 16px;
+    margin: 20px 0 8px 0;
+    padding: 0 20px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    font-size: 11px;
   }
 
   .detail-description {
     font-size: 12px;
     color: #6c7086;
-    padding: 0 16px;
+    padding: 0 20px;
     margin-bottom: 8px;
+    line-height: 1.5;
   }
 
   /* ─── Info table ─── */
 
   .detail-info-table {
     width: 100%;
-    margin: 0 0 8px 0;
+    margin: 0 0 4px 0;
     font-size: 13px;
   }
 
   .detail-info-row {
     display: flex;
-    border-bottom: 1px solid #181825;
+    border-bottom: 1px solid rgba(49, 50, 68, 0.5);
+    transition: background 0.08s;
+  }
+
+  .detail-info-row:hover {
+    background: rgba(49, 50, 68, 0.25);
   }
 
   .detail-info-label {
-    padding: 4px 16px;
+    padding: 6px 20px;
     color: #6c7086;
     white-space: nowrap;
     font-size: 12px;
     flex: 0 0 180px;
     overflow: hidden;
     text-overflow: ellipsis;
+    font-weight: 500;
   }
 
   .detail-info-value {
-    padding: 4px 16px;
+    padding: 6px 20px;
     color: #cdd6f4;
     word-break: break-all;
     font-size: 13px;
     flex: 1;
     min-width: 0;
+    font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', 'SF Mono', monospace;
+    font-size: 12px;
   }
 
   .detail-info-link {
     color: #89b4fa;
     cursor: pointer;
     text-decoration: none;
-    padding: 4px 16px;
+    padding: 6px 20px;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
     min-width: 0;
+    font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', 'SF Mono', monospace;
+    font-size: 12px;
+    transition: color 0.1s;
   }
 
-  .detail-info-link:hover { text-decoration: underline; }
+  .detail-info-link:hover { color: #b4befe; text-decoration: underline; }
 
   .complexity-header {
-    background: #181825;
-    border-bottom: 1px solid #313244;
+    background: #11111b;
+    border-bottom: 2px solid #313244;
   }
 
   .complexity-header-cell {
-    padding: 6px 12px;
-    color: #585b70;
+    padding: 8px 16px;
+    color: #6c7086;
     font-weight: 600;
-    font-size: 11px;
+    font-size: 10px;
     text-transform: uppercase;
+    letter-spacing: 0.06em;
     white-space: nowrap;
     flex: 1;
     text-align: right;
@@ -925,60 +1009,76 @@
   }
 
   .complexity-cell {
-    padding: 4px 12px;
+    padding: 6px 16px;
     color: #cdd6f4;
     font-size: 12px;
     white-space: nowrap;
     flex: 1;
     text-align: right;
+    font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', 'SF Mono', monospace;
   }
 
   /* ─── Call list ─── */
 
   .detail-call-list {
-    padding: 4px 16px;
+    padding: 8px 20px;
     font-size: 12px;
-    line-height: 1.8;
+    line-height: 1.9;
   }
 
-  .detail-call-label { color: #6c7086; font-weight: 600; }
+  .detail-call-label {
+    color: #6c7086;
+    font-weight: 600;
+    text-transform: uppercase;
+    font-size: 10px;
+    letter-spacing: 0.04em;
+    vertical-align: middle;
+  }
 
   .call-graph-link {
     color: #89b4fa;
     cursor: pointer;
     text-decoration: none;
+    font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', 'SF Mono', monospace;
+    font-size: 12px;
+    transition: color 0.1s;
   }
 
-  .call-graph-link:hover { text-decoration: underline; }
+  .call-graph-link:hover { color: #b4befe; text-decoration: underline; }
 
   /* ─── Code view ─── */
 
   .detail-code {
     background: #11111b;
     border: 1px solid #313244;
-    border-radius: 6px;
-    padding: 8px 0;
-    font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
+    border-radius: 8px;
+    padding: 12px 0;
+    font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', 'SF Mono', monospace;
     font-size: 12px;
-    line-height: 1.5;
+    line-height: 1.6;
     overflow-x: auto;
-    margin: 8px 16px;
+    margin: 8px 20px;
   }
 
   .code-line {
     display: flex;
-    padding: 0 12px;
+    padding: 0 16px;
   }
 
-  .code-line:hover { background: #1e1e2e; }
+  .code-line:hover { background: rgba(30, 30, 46, 0.8); }
 
   .code-line-number {
     color: #45475a;
     text-align: right;
-    padding-right: 12px;
-    min-width: 3ch;
+    padding-right: 16px;
+    min-width: 4ch;
     user-select: none;
     flex-shrink: 0;
+    flex-grow: 0;
+    border-right: 1px solid #313244;
+    margin-right: 16px;
+    font-family: inherit;
+    font-variant-numeric: tabular-nums;
   }
 
   .code-line-content { white-space: pre; }
@@ -987,29 +1087,34 @@
 
   .detail-copy-btn {
     position: absolute;
-    top: 12px;
-    right: 24px;
-    padding: 3px 8px;
+    top: 16px;
+    right: 28px;
+    padding: 4px 10px;
     font-size: 11px;
-    border: 1px solid #313244;
-    border-radius: 4px;
-    background: #1e1e2e;
+    border: 1px solid #45475a;
+    border-radius: 6px;
+    background: #181825;
     color: #6c7086;
     cursor: pointer;
-    opacity: 0.6;
+    opacity: 0;
     z-index: 1;
     font-family: inherit;
+    font-weight: 500;
     transition: all 0.15s;
   }
 
-  .detail-copy-btn:hover {
+  .detail-block-wrapper:hover .detail-copy-btn {
     opacity: 1;
+  }
+
+  .detail-copy-btn:hover {
     background: #313244;
     color: #cdd6f4;
+    border-color: #585b70;
   }
 
   .detail-truncated {
-    padding: 8px 16px;
+    padding: 8px 20px;
     font-size: 11px;
     color: #585b70;
     font-style: italic;
@@ -1020,38 +1125,54 @@
   .detail-hex {
     background: #11111b;
     border: 1px solid #313244;
-    border-radius: 6px;
-    padding: 8px 12px;
-    font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
+    border-radius: 8px;
+    padding: 12px 16px;
+    font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', 'SF Mono', monospace;
     font-size: 12px;
-    line-height: 1.6;
+    line-height: 1.7;
     overflow-x: auto;
-    margin: 8px 16px;
-    word-break: break-all;
+    margin: 8px 20px;
   }
 
-  .hex-address { color: #585b70; margin-right: 12px; user-select: none; }
-  .hex-ascii { color: #45475a; margin-left: 12px; }
-  .hex-opcode { color: #89b4fa; }
+  .hex-address { color: #585b70; margin-right: 16px; user-select: none; }
+  .hex-ascii { color: #45475a; margin-left: 16px; }
+  .hex-opcode { color: #89b4fa; font-weight: 500; }
   .hex-immediate { color: #a6e3a1; }
-  .detail-byte-range-info { padding: 4px 16px; font-size: 11px; color: #585b70; }
+  .detail-byte-range-info { padding: 4px 20px; font-size: 11px; color: #585b70; font-family: 'JetBrains Mono', 'Fira Code', 'SF Mono', monospace; }
+
+  /* ─── Function detail columns ─── */
+
+  .func-detail-columns {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 0 20px;
+    padding: 0 20px;
+    align-items: start;
+    min-height: 120px;
+  }
+
+  .func-detail-columns .detail-info-table {
+    margin: 0;
+  }
 
   /* ─── Function tabs ─── */
 
-  .func-tab-container { margin: 8px 16px; }
+  .func-tab-container { margin: 12px 20px; }
 
   .func-tab-bar {
     display: flex;
     gap: 0;
-    border-bottom: 1px solid #313244;
+    border-bottom: 2px solid #313244;
     margin-bottom: 0;
   }
 
   .func-tab-btn {
-    padding: 6px 16px;
+    padding: 8px 20px;
     font-size: 12px;
+    font-weight: 500;
     border: none;
     border-bottom: 2px solid transparent;
+    margin-bottom: -2px;
     background: transparent;
     color: #6c7086;
     cursor: pointer;
@@ -1059,7 +1180,7 @@
     transition: all 0.15s;
   }
 
-  .func-tab-btn:hover { color: #a6adc8; }
+  .func-tab-btn:hover { color: #a6adc8; background: rgba(49, 50, 68, 0.3); }
   .func-tab-btn.active { color: #cdd6f4; border-bottom-color: #89b4fa; }
   .func-tab-content { min-height: 100px; }
 
@@ -1067,9 +1188,9 @@
 
   .size-bar-container {
     flex: 1;
-    height: 6px;
-    background: #181825;
-    border-radius: 3px;
+    height: 8px;
+    background: rgba(24, 24, 37, 0.8);
+    border-radius: 4px;
     overflow: hidden;
     min-width: 60px;
     align-self: center;
@@ -1077,29 +1198,31 @@
 
   .size-bar {
     height: 100%;
-    background: #89b4fa;
-    border-radius: 3px;
+    background: linear-gradient(90deg, #89b4fa, #74c7ec);
+    border-radius: 4px;
     min-width: 2px;
+    transition: width 0.3s ease;
   }
 
   .size-value {
     flex: 0 0 auto;
-    padding: 4px 16px;
-    color: #cdd6f4;
+    padding: 6px 20px;
+    color: #a6adc8;
     font-size: 12px;
     white-space: nowrap;
     text-align: right;
     min-width: 100px;
+    font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', 'SF Mono', monospace;
   }
 
   /* ─── String/WAT search ─── */
 
   .explorer-wat-search {
     width: 100%;
-    padding: 6px 10px;
+    padding: 8px 12px;
     border: none;
     border-bottom: 1px solid #313244;
-    background: #181825;
+    background: #11111b;
     color: #cdd6f4;
     font-size: 12px;
     font-family: inherit;
@@ -1107,23 +1230,32 @@
     box-sizing: border-box;
   }
 
-  .explorer-wat-search::placeholder { color: #585b70; }
+  .explorer-wat-search:focus {
+    background: #181825;
+    border-bottom-color: #89b4fa;
+  }
+
+  .explorer-wat-search::placeholder { color: #45475a; }
 
   .search-result-row {
     display: flex;
-    padding: 4px 16px;
+    padding: 6px 20px;
     cursor: pointer;
     font-size: 12px;
-    border-bottom: 1px solid #181825;
-    transition: background 0.1s;
+    border-bottom: 1px solid rgba(49, 50, 68, 0.5);
+    transition: background 0.08s;
   }
 
-  .search-result-row:hover { background: #313244; }
-  .search-result-line { color: #585b70; min-width: 48px; }
+  .search-result-row:hover { background: rgba(49, 50, 68, 0.4); }
+  .search-result-line {
+    color: #585b70;
+    min-width: 48px;
+    font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', 'SF Mono', monospace;
+  }
 
   .detail-string-value {
     color: #a6e3a1;
-    font-family: 'SF Mono', 'Fira Code', monospace;
+    font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', 'SF Mono', monospace;
     font-size: 12px;
     word-break: break-all;
   }
@@ -1134,18 +1266,91 @@
     font-size: 12px;
     font-weight: 600;
     color: #89b4fa;
-    padding: 8px 12px;
+    padding: 10px 16px;
     border-bottom: 1px solid #313244;
-    font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
+    background: #11111b;
+    font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', 'SF Mono', monospace;
   }
 
-  .source-highlight { background: rgba(166, 227, 161, 0.12); }
+  .source-highlight { background: rgba(166, 227, 161, 0.1); border-left: 3px solid #a6e3a1; }
 
   .detail-placeholder {
-    padding: 16px;
+    padding: 24px 20px;
     color: #6c7086;
     font-size: 13px;
     font-style: italic;
+  }
+
+  /* ─── Feature cards ─── */
+
+  .feature-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+    gap: 12px;
+    padding: 8px 20px;
+  }
+
+  .feature-card {
+    background: #181825;
+    border: 1px solid #313244;
+    border-radius: 8px;
+    padding: 12px 16px;
+    transition: border-color 0.15s;
+  }
+
+  .feature-card:hover {
+    border-color: #45475a;
+  }
+
+  .feature-card-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 6px;
+  }
+
+  .feature-card-name {
+    font-size: 13px;
+    font-weight: 600;
+    color: #cdd6f4;
+  }
+
+  .feature-badge {
+    font-size: 10px;
+    font-weight: 500;
+    padding: 1px 8px;
+    border-radius: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+
+  .feature-badge-used {
+    background: rgba(166, 227, 161, 0.15);
+    color: #a6e3a1;
+  }
+
+  .feature-badge-required {
+    background: rgba(137, 180, 250, 0.15);
+    color: #89b4fa;
+  }
+
+  .feature-badge-disallowed {
+    background: rgba(243, 139, 168, 0.15);
+    color: #f38ba8;
+  }
+
+  .feature-card-stat {
+    font-size: 12px;
+    color: #a6adc8;
+    margin-bottom: 2px;
+  }
+
+  .feature-card-opcodes {
+    font-size: 11px;
+    color: #6c7086;
+    font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', 'SF Mono', monospace;
+    line-height: 1.5;
+    margin-top: 4px;
   }
 </style>
 </head>

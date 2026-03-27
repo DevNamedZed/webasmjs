@@ -518,7 +518,7 @@ async function run(): Promise<void> {
 let currentMode: 'editor' | 'explorer' = 'editor';
 let explorerInstance: Explorer | null = null;
 
-function switchMode(mode: 'editor' | 'explorer', updateHash: boolean = true): void {
+function switchMode(mode: 'editor' | 'explorer', hashMode: 'push' | 'replace' | 'none' = 'push'): void {
   if (mode === currentMode) {
     return;
   }
@@ -539,7 +539,9 @@ function switchMode(mode: 'editor' | 'explorer', updateHash: boolean = true): vo
     runBtn.style.display = '';
     examplesBtn.style.display = '';
     document.getElementById('outputPane')!.style.display = '';
-    if (updateHash) {
+    if (hashMode === 'push') {
+      history.pushState(null, '', '#editor');
+    } else if (hashMode === 'replace') {
       history.replaceState(null, '', '#editor');
     }
   } else {
@@ -551,7 +553,9 @@ function switchMode(mode: 'editor' | 'explorer', updateHash: boolean = true): vo
     if (!explorerInstance) {
       explorerInstance = new Explorer(document.getElementById('explorerContainer')!);
     }
-    if (updateHash) {
+    if (hashMode === 'push') {
+      history.pushState(null, '', '#explorer');
+    } else if (hashMode === 'replace') {
       history.replaceState(null, '', '#explorer');
     }
   }
@@ -568,18 +572,18 @@ function handleHashNavigation(): void {
 
   if (mode === 'explorer') {
     if (currentMode !== 'explorer') {
-      switchMode('explorer', false);
+      switchMode('explorer', 'none');
     }
     if (explorerInstance && parts.length > 2) {
       const section = parts[1];
       const index = parseInt(parts[2], 10);
       if (!isNaN(index)) {
-        explorerInstance.navigateToItem(section, index);
+        explorerInstance.navigateToHashItem(section, index);
       }
     }
   } else if (mode === 'editor') {
     if (currentMode !== 'editor') {
-      switchMode('editor', false);
+      switchMode('editor', 'none');
     }
   }
 }

@@ -27437,7 +27437,7 @@ ${funcEntry.body.length} bytes, ${totalLocals} locals`
         });
       }
       root.children.push({
-        label: "Feature Detection",
+        label: "Features",
         section: "feature-detection",
         index: -1
       });
@@ -27461,14 +27461,6 @@ ${funcEntry.body.length} bytes, ${totalLocals} locals`
         root.children.push({
           label: "Producers",
           section: "producers",
-          index: -1
-        });
-      }
-      const hasTargetFeatures = moduleNode.customSections.some((section) => section.name === "target_features");
-      if (hasTargetFeatures) {
-        root.children.push({
-          label: "Target Features",
-          section: "target-features",
           index: -1
         });
       }
@@ -27625,20 +27617,27 @@ ${funcEntry.body.length} bytes, ${totalLocals} locals`
         selectedRow.scrollIntoView({ block: "nearest" });
       }
     }
-    selectNode(node, updateHash = true) {
+    selectNode(node, hashMode = "push") {
       this.selectedNode = node;
       this.renderTree();
       this.renderBreadcrumbs(node);
       this.renderDetail(node);
-      if (updateHash) {
-        this.updateHash(node);
+      if (hashMode !== "none") {
+        this.updateHash(node, hashMode === "push");
       }
     }
     navigateToItem(section, index) {
       const node = this.findNode(this.treeNodes, section, index);
       if (node) {
         this.expandParents(this.treeNodes, node);
-        this.selectNode(node);
+        this.selectNode(node, "push");
+      }
+    }
+    navigateToHashItem(section, index) {
+      const node = this.findNode(this.treeNodes, section, index);
+      if (node) {
+        this.expandParents(this.treeNodes, node);
+        this.selectNode(node, "none");
       }
     }
     renderBreadcrumbs(node) {
@@ -27701,18 +27700,19 @@ ${funcEntry.body.length} bytes, ${totalLocals} locals`
           const node = this.findNode(this.treeNodes, section, index);
           if (node) {
             this.expandParents(this.treeNodes, node);
-            this.selectNode(node, false);
+            this.selectNode(node, "none");
             return true;
           }
         }
       }
       return false;
     }
-    updateHash(node) {
-      if (node.section === "module") {
-        history.replaceState(null, "", "#explorer");
+    updateHash(node, push = true) {
+      const hash = node.section === "module" ? "#explorer" : `#explorer/${node.section}/${node.index}`;
+      if (push) {
+        history.pushState(null, "", hash);
       } else {
-        history.replaceState(null, "", `#explorer/${node.section}/${node.index}`);
+        history.replaceState(null, "", hash);
       }
     }
     findNode(nodes, section, index) {
@@ -27884,9 +27884,6 @@ ${funcEntry.body.length} bytes, ${totalLocals} locals`
           break;
         case "producers":
           this.renderProducers();
-          break;
-        case "target-features":
-          this.renderTargetFeatures();
           break;
       }
     }
@@ -28088,39 +28085,59 @@ ${funcEntry.body.length} bytes, ${totalLocals} locals`
       const heading = funcName || `func_${globalFuncIndex}`;
       this.appendHeading(detail, heading);
       const flatTypes = flattenTypes3(this.moduleInfo);
-      const table = this.createInfoTable();
-      this.addInfoRow(table, "Index", String(globalFuncIndex));
+      const columnsContainer = document.createElement("div");
+      columnsContainer.className = "func-detail-columns";
+      const allRows = [];
+      allRows.push({ label: "Index", value: String(globalFuncIndex) });
       if (funcName) {
-        this.addInfoRow(table, "Name", funcName);
+        allRows.push({ label: "Name", value: funcName });
       }
       if (rawName && rawName !== funcName) {
-        this.addInfoRow(table, "Raw name", rawName);
+        allRows.push({ label: "Raw name", value: rawName });
       }
       const topLevelFuncTypeIdx = this.findTopLevelTypeIndex(funcEntry.typeIndex);
-      this.addLinkedInfoRow(table, "Type index", String(funcEntry.typeIndex), "type", topLevelFuncTypeIdx);
+      allRows.push({ label: "Type", value: String(funcEntry.typeIndex), linked: { section: "type", index: topLevelFuncTypeIdx } });
       if (funcEntry.typeIndex < flatTypes.length) {
         const typeEntry = flatTypes[funcEntry.typeIndex];
         if (typeEntry.kind === "func") {
-          this.addInfoRow(table, "Signature", formatFuncType(typeEntry));
+          allRows.push({ label: "Signature", value: formatFuncType(typeEntry) });
         }
       }
+      allRows.push({ label: "Body size", value: `${funcEntry.body.length} bytes` });
       if (funcEntry.locals.length > 0) {
         const totalLocals = funcEntry.locals.reduce((sum, local) => sum + local.count, 0);
-        this.addInfoRow(table, "Locals", String(totalLocals));
+        allRows.push({ label: "Locals", value: String(totalLocals) });
       }
-      this.addInfoRow(table, "Body size", `${funcEntry.body.length} bytes`);
       const dwarfFunc = this.findDwarfFunction(funcIndex);
       if (dwarfFunc) {
         const dwarfData = this.getDwarfInfo();
         if (dwarfFunc.linkageName) {
-          this.addInfoRow(table, "Linkage name", dwarfFunc.linkageName);
+          allRows.push({ label: "Linkage name", value: dwarfFunc.linkageName });
         }
         if (dwarfFunc.declFile > 0 && dwarfData && dwarfFunc.declFile <= dwarfData.sourceFiles.length) {
           const sourceFile = dwarfData.sourceFiles[dwarfFunc.declFile - 1];
-          this.addInfoRow(table, "Source", `${sourceFile}:${dwarfFunc.declLine}`);
+          allRows.push({ label: "Source", value: `${sourceFile}:${dwarfFunc.declLine}` });
         }
       }
-      detail.appendChild(table);
+      const nameSource = this.getNameSource(globalFuncIndex);
+      if (nameSource) {
+        allRows.push({ label: "Name source", value: nameSource });
+      }
+      const midpoint = Math.ceil(allRows.length / 2);
+      const leftColumn = this.createInfoTable();
+      const rightColumn = this.createInfoTable();
+      for (let rowIdx = 0; rowIdx < allRows.length; rowIdx++) {
+        const target = rowIdx < midpoint ? leftColumn : rightColumn;
+        const rowData = allRows[rowIdx];
+        if (rowData.linked) {
+          this.addLinkedInfoRow(target, rowData.label, rowData.value, rowData.linked.section, rowData.linked.index);
+        } else {
+          this.addInfoRow(target, rowData.label, rowData.value);
+        }
+      }
+      columnsContainer.appendChild(leftColumn);
+      columnsContainer.appendChild(rightColumn);
+      detail.appendChild(columnsContainer);
       const hasLocalNames = this.moduleInfo.nameSection?.localNames?.has(globalFuncIndex);
       if (funcEntry.locals.length > 0 && hasLocalNames) {
         this.appendSubheading(detail, "Named Locals");
@@ -28154,23 +28171,22 @@ ${funcEntry.body.length} bytes, ${totalLocals} locals`
           this.appendCallList(detail, "Called by", callersSet);
         }
       }
-      const nameSource = this.getNameSource(globalFuncIndex);
-      if (nameSource) {
-        this.addInfoRow(table, "Name source", nameSource);
-      }
       const tabContainer = document.createElement("div");
       tabContainer.className = "func-tab-container";
       const tabBar = document.createElement("div");
       tabBar.className = "func-tab-bar";
       const tabContent = document.createElement("div");
       tabContent.className = "func-tab-content";
+      const hasSourceMap = this.parsedSourceMap !== null;
       const tabs = [
-        { label: "WAT", id: "wat" },
-        { label: "Bytes", id: "bytes" },
         { label: "Decompiled", id: "decompiled" },
-        { label: "Source", id: "source" }
+        { label: "WAT", id: "wat" },
+        { label: "Bytes", id: "bytes" }
       ];
-      let activeTab = "wat";
+      if (hasSourceMap) {
+        tabs.push({ label: "Source", id: "source" });
+      }
+      let activeTab = "decompiled";
       const renderTabContent = () => {
         tabContent.innerHTML = "";
         tabBar.querySelectorAll(".func-tab-btn").forEach((btn) => {
@@ -28676,28 +28692,59 @@ ${funcEntry.body.length} bytes, ${totalLocals} locals`
       const detail = this.detailContainer;
       const strings = this.extractStrings();
       this.appendHeading(detail, `Strings (${strings.length})`);
+      const searchInput = document.createElement("input");
+      searchInput.type = "text";
+      searchInput.placeholder = "Filter strings...";
+      searchInput.className = "explorer-tree-search";
+      searchInput.style.margin = "0 20px 8px 20px";
+      searchInput.style.width = "calc(100% - 40px)";
+      detail.appendChild(searchInput);
+      const countLabel = document.createElement("div");
+      countLabel.className = "detail-description";
+      countLabel.textContent = `Showing ${strings.length} of ${strings.length}`;
+      detail.appendChild(countLabel);
       const table = this.createInfoTable();
-      for (const stringEntry of strings) {
-        const row = document.createElement("div");
-        row.className = "detail-info-row";
-        const link = document.createElement("a");
-        link.className = "detail-info-link";
-        link.textContent = `data ${stringEntry.dataSegmentIndex}+${stringEntry.offset}`;
-        link.href = "#";
-        link.style.flex = "0 0 120px";
-        link.addEventListener("click", (event) => {
-          event.preventDefault();
-          this.navigateToItem("data", stringEntry.dataSegmentIndex);
-        });
-        row.appendChild(link);
-        const valueElement = document.createElement("span");
-        valueElement.className = "detail-string-value";
-        valueElement.style.flex = "1";
-        const displayValue = stringEntry.value.length > 120 ? stringEntry.value.slice(0, 120) + "..." : stringEntry.value;
-        valueElement.textContent = displayValue;
-        row.appendChild(valueElement);
-        table.appendChild(row);
-      }
+      const renderStringRows = (filter) => {
+        table.innerHTML = "";
+        const lowerFilter = filter.toLowerCase();
+        let visibleCount = 0;
+        for (const stringEntry of strings) {
+          if (lowerFilter && !stringEntry.value.toLowerCase().includes(lowerFilter)) {
+            continue;
+          }
+          visibleCount++;
+          const row = document.createElement("div");
+          row.className = "detail-info-row";
+          const link = document.createElement("a");
+          link.className = "detail-info-link";
+          link.textContent = `data ${stringEntry.dataSegmentIndex}+${stringEntry.offset}`;
+          link.href = "#";
+          link.style.flex = "0 0 120px";
+          link.addEventListener("click", (event) => {
+            event.preventDefault();
+            this.navigateToItem("data", stringEntry.dataSegmentIndex);
+          });
+          row.appendChild(link);
+          const valueElement = document.createElement("span");
+          valueElement.className = "detail-string-value";
+          valueElement.style.flex = "1";
+          const displayValue = stringEntry.value.length > 120 ? stringEntry.value.slice(0, 120) + "..." : stringEntry.value;
+          valueElement.textContent = displayValue;
+          row.appendChild(valueElement);
+          table.appendChild(row);
+        }
+        countLabel.textContent = lowerFilter ? `Showing ${visibleCount} of ${strings.length}` : `Showing ${strings.length} of ${strings.length}`;
+      };
+      renderStringRows("");
+      let searchTimeout = null;
+      searchInput.addEventListener("input", () => {
+        if (searchTimeout) {
+          clearTimeout(searchTimeout);
+        }
+        searchTimeout = setTimeout(() => {
+          renderStringRows(searchInput.value.trim());
+        }, 150);
+      });
       detail.appendChild(table);
     }
     renderDebugInfo() {
@@ -28709,56 +28756,128 @@ ${funcEntry.body.length} bytes, ${totalLocals} locals`
       this.appendHeading(detail, "Debug Info (DWARF)");
       const summaryTable = this.createInfoTable();
       this.addInfoRow(summaryTable, "Compilation units", String(dwarfData.compilationUnits.length));
-      this.addInfoRow(summaryTable, "DWARF functions", String(dwarfData.functions.length));
+      this.addInfoRow(summaryTable, "Functions", String(dwarfData.functions.length));
       this.addInfoRow(summaryTable, "Source files", String(dwarfData.sourceFiles.length));
       if (dwarfData.lineInfo) {
         this.addInfoRow(summaryTable, "Line entries", String(dwarfData.lineInfo.lineEntries.length));
       }
-      detail.appendChild(summaryTable);
       if (dwarfData.compilationUnits.length > 0) {
-        this.appendSubheading(detail, "Compilation Units");
+        const uniqueProducers = /* @__PURE__ */ new Set();
+        const uniqueLanguages = /* @__PURE__ */ new Set();
         for (const compilationUnit of dwarfData.compilationUnits) {
-          const unitTable = this.createInfoTable();
-          if (compilationUnit.name) {
-            this.addInfoRow(unitTable, "Source", compilationUnit.name);
-          }
           if (compilationUnit.producer) {
-            this.addInfoRow(unitTable, "Producer", compilationUnit.producer);
-          }
-          if (compilationUnit.compDir) {
-            this.addInfoRow(unitTable, "Compile dir", compilationUnit.compDir);
+            uniqueProducers.add(compilationUnit.producer);
           }
           if (compilationUnit.language) {
-            this.addInfoRow(unitTable, "Language", this.getDwarfLanguageName(compilationUnit.language));
+            uniqueLanguages.add(this.getDwarfLanguageName(compilationUnit.language));
           }
-          this.addInfoRow(unitTable, "Functions", String(compilationUnit.functions.length));
-          detail.appendChild(unitTable);
+        }
+        if (uniqueProducers.size > 0) {
+          this.addInfoRow(summaryTable, "Producer", Array.from(uniqueProducers).join(", "));
+        }
+        if (uniqueLanguages.size > 0) {
+          this.addInfoRow(summaryTable, "Language", Array.from(uniqueLanguages).join(", "));
         }
       }
+      detail.appendChild(summaryTable);
+      const tabContainer = document.createElement("div");
+      tabContainer.className = "func-tab-container";
+      const tabBar = document.createElement("div");
+      tabBar.className = "func-tab-bar";
+      const tabContent = document.createElement("div");
+      tabContent.className = "func-tab-content";
+      const tabs = [];
       if (dwarfData.functions.length > 0) {
-        this.appendSubheading(detail, `DWARF Functions (${dwarfData.functions.length})`);
-        const funcTable = this.createInfoTable();
-        const sortedFunctions = [...dwarfData.functions].sort((funcA, funcB) => funcA.lowPc - funcB.lowPc);
-        for (const dwarfFunc of sortedFunctions) {
-          let sourceInfo = "";
-          if (dwarfFunc.declFile > 0 && dwarfFunc.declFile <= dwarfData.sourceFiles.length) {
-            const fileName = dwarfData.sourceFiles[dwarfFunc.declFile - 1];
-            const shortName = fileName.split("/").pop() || fileName;
-            sourceInfo = `${shortName}:${dwarfFunc.declLine}`;
-          }
-          const addressRange = dwarfFunc.lowPc > 0 ? ` [0x${dwarfFunc.lowPc.toString(16)}..0x${dwarfFunc.highPc.toString(16)}]` : "";
-          this.addInfoRow(funcTable, dwarfFunc.name, `${sourceInfo}${addressRange}`);
-        }
-        detail.appendChild(funcTable);
+        tabs.push({ label: `Functions (${dwarfData.functions.length})`, id: "functions" });
       }
       if (dwarfData.sourceFiles.length > 0) {
-        this.appendSubheading(detail, "Source Files");
-        const fileTable = this.createInfoTable();
-        for (let fileIndex = 0; fileIndex < dwarfData.sourceFiles.length; fileIndex++) {
-          this.addInfoRow(fileTable, String(fileIndex), dwarfData.sourceFiles[fileIndex]);
-        }
-        detail.appendChild(fileTable);
+        tabs.push({ label: `Source Files (${dwarfData.sourceFiles.length})`, id: "files" });
       }
+      if (dwarfData.compilationUnits.length > 1) {
+        tabs.push({ label: `Compilation Units (${dwarfData.compilationUnits.length})`, id: "units" });
+      }
+      let activeDebugTab = tabs.length > 0 ? tabs[0].id : "";
+      const renderDebugTabContent = () => {
+        tabContent.innerHTML = "";
+        tabBar.querySelectorAll(".func-tab-btn").forEach((btn) => {
+          btn.classList.toggle("active", btn.dataset.tab === activeDebugTab);
+        });
+        if (activeDebugTab === "functions") {
+          const searchInput = document.createElement("input");
+          searchInput.type = "text";
+          searchInput.placeholder = "Filter functions...";
+          searchInput.className = "explorer-tree-search";
+          searchInput.style.marginBottom = "8px";
+          tabContent.appendChild(searchInput);
+          const funcTable = this.createInfoTable();
+          const sortedFunctions = [...dwarfData.functions].sort((funcA, funcB) => funcA.lowPc - funcB.lowPc);
+          const renderFuncRows = (filter) => {
+            funcTable.innerHTML = "";
+            const lowerFilter = filter.toLowerCase();
+            for (const dwarfFunc of sortedFunctions) {
+              if (lowerFilter && !dwarfFunc.name.toLowerCase().includes(lowerFilter)) {
+                continue;
+              }
+              let sourceInfo = "";
+              if (dwarfFunc.declFile > 0 && dwarfFunc.declFile <= dwarfData.sourceFiles.length) {
+                const fileName = dwarfData.sourceFiles[dwarfFunc.declFile - 1];
+                const shortName = fileName.split("/").pop() || fileName;
+                sourceInfo = `${shortName}:${dwarfFunc.declLine}`;
+              }
+              const addressRange = dwarfFunc.lowPc > 0 ? ` [0x${dwarfFunc.lowPc.toString(16)}..0x${dwarfFunc.highPc.toString(16)}]` : "";
+              this.addInfoRow(funcTable, dwarfFunc.name, `${sourceInfo}${addressRange}`);
+            }
+          };
+          renderFuncRows("");
+          let searchTimeout = null;
+          searchInput.addEventListener("input", () => {
+            if (searchTimeout) {
+              clearTimeout(searchTimeout);
+            }
+            searchTimeout = setTimeout(() => renderFuncRows(searchInput.value.trim()), 150);
+          });
+          tabContent.appendChild(funcTable);
+        } else if (activeDebugTab === "files") {
+          const fileTable = this.createInfoTable();
+          for (let fileIndex = 0; fileIndex < dwarfData.sourceFiles.length; fileIndex++) {
+            this.addInfoRow(fileTable, String(fileIndex), dwarfData.sourceFiles[fileIndex]);
+          }
+          tabContent.appendChild(fileTable);
+        } else if (activeDebugTab === "units") {
+          for (const compilationUnit of dwarfData.compilationUnits) {
+            const unitTable = this.createInfoTable();
+            if (compilationUnit.name) {
+              this.addInfoRow(unitTable, "Source", compilationUnit.name);
+            }
+            if (compilationUnit.producer) {
+              this.addInfoRow(unitTable, "Producer", compilationUnit.producer);
+            }
+            if (compilationUnit.compDir) {
+              this.addInfoRow(unitTable, "Compile dir", compilationUnit.compDir);
+            }
+            if (compilationUnit.language) {
+              this.addInfoRow(unitTable, "Language", this.getDwarfLanguageName(compilationUnit.language));
+            }
+            this.addInfoRow(unitTable, "Functions", String(compilationUnit.functions.length));
+            tabContent.appendChild(unitTable);
+          }
+        }
+      };
+      for (const tabDef of tabs) {
+        const tabButton = document.createElement("button");
+        tabButton.className = "func-tab-btn";
+        tabButton.dataset.tab = tabDef.id;
+        tabButton.textContent = tabDef.label;
+        tabButton.addEventListener("click", () => {
+          activeDebugTab = tabDef.id;
+          renderDebugTabContent();
+        });
+        tabBar.appendChild(tabButton);
+      }
+      tabContainer.appendChild(tabBar);
+      tabContainer.appendChild(tabContent);
+      detail.appendChild(tabContainer);
+      renderDebugTabContent();
     }
     getDwarfLanguageName(language) {
       const languageNames = {
@@ -28855,7 +28974,7 @@ ${funcEntry.body.length} bytes, ${totalLocals} locals`
       }
       const detail = this.detailContainer;
       const importedFuncCount = this.moduleInfo.imports.filter((imp) => imp.kind === 0).length;
-      this.appendHeading(detail, "Feature Detection");
+      this.appendHeading(detail, "Features & Target");
       const featureOpcodes = /* @__PURE__ */ new Map();
       const featureFunctions = /* @__PURE__ */ new Map();
       for (let funcIndex = 0; funcIndex < this.moduleInfo.functions.length; funcIndex++) {
@@ -28879,60 +28998,131 @@ ${funcEntry.body.length} bytes, ${totalLocals} locals`
           }
         }
       }
-      const hasMultiValue = this.moduleInfo.types.some((typeEntry) => {
-        if (typeEntry.kind === "func") {
-          return typeEntry.returnTypes.length > 1;
-        }
-        return false;
-      });
-      const hasGcTypes = this.moduleInfo.types.some(
-        (typeEntry) => typeEntry.kind === "struct" || typeEntry.kind === "array" || typeEntry.kind === "rec"
-      );
-      const hasSharedMemory = this.moduleInfo.memories.some((mem) => mem.shared) || this.moduleInfo.imports.some((imp) => imp.memoryType?.shared);
-      const hasMemory64 = this.moduleInfo.memories.some((mem) => mem.memory64) || this.moduleInfo.imports.some((imp) => imp.memoryType?.memory64);
-      const hasTags = this.moduleInfo.tags.length > 0 || this.moduleInfo.imports.some((imp) => imp.kind === 4);
-      const structuralFeatures = [
-        ["multi-value", hasMultiValue],
-        ["gc (struct/array types)", hasGcTypes],
-        ["shared-memory", hasSharedMemory],
-        ["memory64", hasMemory64],
-        ["exception-handling (tags)", hasTags]
+      const structuralChecks = [
+        { name: "multi-value", detected: this.moduleInfo.types.some((t) => t.kind === "func" && t.returnTypes.length > 1), detail: "Functions with multiple return values" },
+        { name: "gc", detected: this.moduleInfo.types.some((t) => t.kind === "struct" || t.kind === "array" || t.kind === "rec"), detail: "Struct/array/rec types" },
+        { name: "shared-memory", detected: this.moduleInfo.memories.some((m) => m.shared) || this.moduleInfo.imports.some((i) => i.memoryType?.shared), detail: "Shared linear memory" },
+        { name: "memory64", detected: this.moduleInfo.memories.some((m) => m.memory64) || this.moduleInfo.imports.some((i) => i.memoryType?.memory64), detail: "64-bit memory addressing" },
+        { name: "exception-handling", detected: this.moduleInfo.tags.length > 0 || this.moduleInfo.imports.some((i) => i.kind === 4), detail: "Tags for exception handling" }
       ];
-      if (featureOpcodes.size === 0 && !structuralFeatures.some(([, present]) => present)) {
-        const mvpNote = document.createElement("div");
-        mvpNote.className = "detail-description";
-        mvpNote.textContent = "This module uses only MVP features.";
-        detail.appendChild(mvpNote);
+      const targetFeatures = /* @__PURE__ */ new Map();
+      const targetFeaturesSection = this.moduleInfo.customSections.find((section) => section.name === "target_features");
+      if (targetFeaturesSection) {
+        try {
+          const data = targetFeaturesSection.data;
+          let offset = 0;
+          const readULEB = () => {
+            let r = 0, s = 0, b;
+            do {
+              b = data[offset++];
+              r |= (b & 127) << s;
+              s += 7;
+            } while (b & 128);
+            return r >>> 0;
+          };
+          const readStr = () => {
+            const len = readULEB();
+            const str = new TextDecoder().decode(data.slice(offset, offset + len));
+            offset += len;
+            return str;
+          };
+          const prefixLabels = { 43: "used", 45: "disallowed", 61: "required" };
+          const count = readULEB();
+          for (let idx = 0; idx < count; idx++) {
+            const prefix = data[offset++];
+            const name = readStr();
+            targetFeatures.set(name, prefixLabels[prefix] || "unknown");
+          }
+        } catch (parseError) {
+        }
+      }
+      const allFeatureNames = /* @__PURE__ */ new Set();
+      for (const name of featureOpcodes.keys()) {
+        allFeatureNames.add(name);
+      }
+      for (const check of structuralChecks) {
+        if (check.detected) {
+          allFeatureNames.add(check.name);
+        }
+      }
+      for (const name of targetFeatures.keys()) {
+        allFeatureNames.add(name);
+      }
+      const postMvpOpcodeFeatures = /* @__PURE__ */ new Set(["bulk-memory", "sign-extend", "sat-trunc", "mutable-globals", "multi-value", "reference-types", "simd", "tail-call", "relaxed-simd", "extended-const"]);
+      const postMvpFeatures = /* @__PURE__ */ new Set();
+      for (const name of allFeatureNames) {
+        postMvpFeatures.add(name);
+      }
+      for (const name of targetFeatures.keys()) {
+        postMvpFeatures.add(name);
+      }
+      let specLevel = "MVP (1.0)";
+      const hasGcFeatures = postMvpFeatures.has("gc") || postMvpFeatures.has("function-references") || postMvpFeatures.has("reference-types");
+      const hasThreads = postMvpFeatures.has("atomics") || postMvpFeatures.has("shared-memory");
+      const hasSIMD = postMvpFeatures.has("simd128") || postMvpFeatures.has("simd") || postMvpFeatures.has("relaxed-simd");
+      const hasExceptions = postMvpFeatures.has("exception-handling");
+      if (hasGcFeatures) {
+        specLevel = "Wasm 3.0 (GC)";
+      } else if (hasThreads || hasSIMD || hasExceptions) {
+        specLevel = "Wasm 2.0+";
+      } else if (postMvpFeatures.size > 0) {
+        specLevel = "Wasm 2.0";
+      }
+      const summaryTable = this.createInfoTable();
+      this.addInfoRow(summaryTable, "Spec level", specLevel);
+      this.addInfoRow(summaryTable, "Detected features", String(featureOpcodes.size));
+      this.addInfoRow(summaryTable, "Structural features", String(structuralChecks.filter((check) => check.detected).length));
+      if (targetFeatures.size > 0) {
+        this.addInfoRow(summaryTable, "Target features", String(targetFeatures.size));
+      }
+      detail.appendChild(summaryTable);
+      if (allFeatureNames.size === 0) {
         return;
       }
-      this.appendSubheading(detail, "Opcode-based Features");
-      if (featureOpcodes.size === 0) {
-        const noneNote = document.createElement("div");
-        noneNote.className = "detail-description";
-        noneNote.textContent = "No post-MVP opcodes detected.";
-        detail.appendChild(noneNote);
-      } else {
-        const sortedFeatures = Array.from(featureOpcodes.entries()).sort(
-          (entryA, entryB) => (featureFunctions.get(entryB[0])?.size || 0) - (featureFunctions.get(entryA[0])?.size || 0)
-        );
-        const table = this.createInfoTable();
-        for (const [featureName, opcodes] of sortedFeatures) {
-          const funcCount = featureFunctions.get(featureName)?.size || 0;
-          this.addInfoRow(table, featureName, `${funcCount} functions, opcodes: ${opcodes.slice(0, 5).join(", ")}${opcodes.length > 5 ? "..." : ""}`);
+      this.appendSubheading(detail, "Detected Features");
+      const grid = document.createElement("div");
+      grid.className = "feature-grid";
+      for (const featureName of Array.from(allFeatureNames).sort()) {
+        const card = document.createElement("div");
+        card.className = "feature-card";
+        const header = document.createElement("div");
+        header.className = "feature-card-header";
+        const nameEl = document.createElement("span");
+        nameEl.className = "feature-card-name";
+        nameEl.textContent = featureName;
+        header.appendChild(nameEl);
+        const targetStatus = targetFeatures.get(featureName);
+        if (targetStatus) {
+          const badge = document.createElement("span");
+          badge.className = "feature-badge feature-badge-" + targetStatus;
+          badge.textContent = targetStatus;
+          header.appendChild(badge);
         }
-        detail.appendChild(table);
-      }
-      this.appendSubheading(detail, "Structural Features");
-      const structTable = this.createInfoTable();
-      for (const [featureName, present] of structuralFeatures) {
-        if (present) {
-          this.addInfoRow(structTable, featureName, "detected");
+        card.appendChild(header);
+        const opcodes = featureOpcodes.get(featureName);
+        const funcSet = featureFunctions.get(featureName);
+        const structCheck = structuralChecks.find((check) => check.name === featureName && check.detected);
+        if (funcSet && funcSet.size > 0) {
+          const stat = document.createElement("div");
+          stat.className = "feature-card-stat";
+          stat.textContent = `${funcSet.size} function${funcSet.size > 1 ? "s" : ""}`;
+          card.appendChild(stat);
         }
+        if (opcodes && opcodes.length > 0) {
+          const opcodeList = document.createElement("div");
+          opcodeList.className = "feature-card-opcodes";
+          opcodeList.textContent = opcodes.slice(0, 8).join(", ") + (opcodes.length > 8 ? ` (+${opcodes.length - 8} more)` : "");
+          card.appendChild(opcodeList);
+        }
+        if (structCheck) {
+          const structNote = document.createElement("div");
+          structNote.className = "feature-card-stat";
+          structNote.textContent = structCheck.detail;
+          card.appendChild(structNote);
+        }
+        grid.appendChild(card);
       }
-      if (!structuralFeatures.some(([, present]) => present)) {
-        this.addInfoRow(structTable, "(none)", "MVP only");
-      }
-      detail.appendChild(structTable);
+      detail.appendChild(grid);
     }
     renderModuleInterface() {
       if (!this.moduleInfo) {
@@ -28941,7 +29131,20 @@ ${funcEntry.body.length} bytes, ${totalLocals} locals`
       const detail = this.detailContainer;
       const flatTypes = flattenTypes3(this.moduleInfo);
       this.appendHeading(detail, "Module Interface");
-      this.appendSubheading(detail, `Imports (${this.moduleInfo.imports.length})`);
+      const summaryTable = this.createInfoTable();
+      this.addInfoRow(summaryTable, "Imports", String(this.moduleInfo.imports.length));
+      this.addInfoRow(summaryTable, "Exports", String(this.moduleInfo.exports.length));
+      detail.appendChild(summaryTable);
+      const columnsContainer = document.createElement("div");
+      columnsContainer.className = "func-detail-columns";
+      columnsContainer.style.alignItems = "start";
+      const leftCol = document.createElement("div");
+      const rightCol = document.createElement("div");
+      const importsHeading = document.createElement("h3");
+      importsHeading.className = "detail-subheading";
+      importsHeading.style.padding = "0";
+      importsHeading.textContent = `Imports (${this.moduleInfo.imports.length})`;
+      leftCol.appendChild(importsHeading);
       if (this.moduleInfo.imports.length > 0) {
         const importTable = this.createInfoTable();
         for (let importIndex = 0; importIndex < this.moduleInfo.imports.length; importIndex++) {
@@ -28954,23 +29157,54 @@ ${funcEntry.body.length} bytes, ${totalLocals} locals`
               signature = " " + formatFuncType(typeEntry);
             }
           }
-          this.addLinkedInfoRow(
-            importTable,
-            `${importEntry.moduleName}.${importEntry.fieldName}`,
-            `${kindName}${signature}`,
-            "import",
-            importIndex
-          );
+          const row = document.createElement("div");
+          row.className = "detail-info-row";
+          const nameLink = document.createElement("a");
+          nameLink.className = "detail-info-link";
+          nameLink.style.flex = "0 0 140px";
+          nameLink.textContent = importEntry.fieldName;
+          nameLink.title = `${importEntry.moduleName}.${importEntry.fieldName}`;
+          nameLink.href = "#";
+          nameLink.addEventListener("click", (event) => {
+            event.preventDefault();
+            this.navigateToItem("import", importIndex);
+          });
+          row.appendChild(nameLink);
+          if (importEntry.kind === 0 && importEntry.typeIndex !== void 0 && signature) {
+            const topLevelTypeIdx = this.findTopLevelTypeIndex(importEntry.typeIndex);
+            const sigLink = document.createElement("a");
+            sigLink.className = "detail-info-link";
+            sigLink.style.flex = "1";
+            sigLink.textContent = `${kindName}${signature}`;
+            sigLink.href = "#";
+            sigLink.addEventListener("click", (event) => {
+              event.preventDefault();
+              this.navigateToItem("type", topLevelTypeIdx);
+            });
+            row.appendChild(sigLink);
+          } else {
+            const valueElement = document.createElement("span");
+            valueElement.className = "detail-info-value";
+            valueElement.textContent = `${kindName}${signature}`;
+            row.appendChild(valueElement);
+          }
+          importTable.appendChild(row);
         }
-        detail.appendChild(importTable);
+        leftCol.appendChild(importTable);
       }
-      this.appendSubheading(detail, `Exports (${this.moduleInfo.exports.length})`);
+      const exportsHeading = document.createElement("h3");
+      exportsHeading.className = "detail-subheading";
+      exportsHeading.style.padding = "0";
+      exportsHeading.textContent = `Exports (${this.moduleInfo.exports.length})`;
+      rightCol.appendChild(exportsHeading);
       if (this.moduleInfo.exports.length > 0) {
         const exportTable = this.createInfoTable();
         for (let exportIndex = 0; exportIndex < this.moduleInfo.exports.length; exportIndex++) {
           const exportEntry = this.moduleInfo.exports[exportIndex];
           const kindName = EXPORT_KIND_NAMES[exportEntry.kind] || "unknown";
           let signature = "";
+          const targetSection = this.getExportTargetSection(exportEntry.kind);
+          const targetItemIndex = this.getExportTargetItemIndex(exportEntry.kind, exportEntry.index);
           if (exportEntry.kind === 0) {
             const importedFuncCount = this.moduleInfo.imports.filter((imp) => imp.kind === 0).length;
             const localFuncIndex = exportEntry.index - importedFuncCount;
@@ -28984,16 +29218,56 @@ ${funcEntry.body.length} bytes, ${totalLocals} locals`
               }
             }
           }
-          this.addLinkedInfoRow(
-            exportTable,
-            exportEntry.name,
-            `${kindName}${signature}`,
-            "export",
-            exportIndex
-          );
+          const row = document.createElement("div");
+          row.className = "detail-info-row";
+          const navSection = targetSection && targetItemIndex >= 0 ? targetSection : "export";
+          const navIndex = targetSection && targetItemIndex >= 0 ? targetItemIndex : exportIndex;
+          const nameLink = document.createElement("a");
+          nameLink.className = "detail-info-link";
+          nameLink.style.flex = "0 0 140px";
+          nameLink.textContent = exportEntry.name;
+          nameLink.title = exportEntry.name;
+          nameLink.href = "#";
+          nameLink.addEventListener("click", (event) => {
+            event.preventDefault();
+            this.navigateToItem(navSection, navIndex);
+          });
+          row.appendChild(nameLink);
+          if (exportEntry.kind === 0 && signature) {
+            const importedFuncCount = this.moduleInfo.imports.filter((imp) => imp.kind === 0).length;
+            const localFuncIndex = exportEntry.index - importedFuncCount;
+            if (localFuncIndex >= 0 && localFuncIndex < this.moduleInfo.functions.length) {
+              const funcEntry = this.moduleInfo.functions[localFuncIndex];
+              const topLevelTypeIdx = this.findTopLevelTypeIndex(funcEntry.typeIndex);
+              const sigLink = document.createElement("a");
+              sigLink.className = "detail-info-link";
+              sigLink.style.flex = "1";
+              sigLink.textContent = `${kindName}${signature}`;
+              sigLink.href = "#";
+              sigLink.addEventListener("click", (event) => {
+                event.preventDefault();
+                this.navigateToItem("type", topLevelTypeIdx);
+              });
+              row.appendChild(sigLink);
+            } else {
+              const valueElement = document.createElement("span");
+              valueElement.className = "detail-info-value";
+              valueElement.textContent = `${kindName}${signature}`;
+              row.appendChild(valueElement);
+            }
+          } else {
+            const valueElement = document.createElement("span");
+            valueElement.className = "detail-info-value";
+            valueElement.textContent = `${kindName}${signature}`;
+            row.appendChild(valueElement);
+          }
+          exportTable.appendChild(row);
         }
-        detail.appendChild(exportTable);
+        rightCol.appendChild(exportTable);
       }
+      columnsContainer.appendChild(leftCol);
+      columnsContainer.appendChild(rightCol);
+      detail.appendChild(columnsContainer);
     }
     renderFunctionComplexity() {
       if (!this.moduleInfo) {
@@ -29043,9 +29317,19 @@ ${funcEntry.body.length} bytes, ${totalLocals} locals`
         return scoreB - scoreA;
       });
       const maxScore = entries.length > 0 ? entries[0].branchCount * 3 + entries[0].maxNestingDepth * 5 + entries[0].instructionCount : 1;
+      const summaryTable = this.createInfoTable();
+      this.addInfoRow(summaryTable, "Functions", String(entries.length));
+      if (entries.length > 0) {
+        const avgInstructions = Math.round(entries.reduce((sum, entry) => sum + entry.instructionCount, 0) / entries.length);
+        const avgBranches = Math.round(entries.reduce((sum, entry) => sum + entry.branchCount, 0) / entries.length);
+        this.addInfoRow(summaryTable, "Avg instructions", String(avgInstructions));
+        this.addInfoRow(summaryTable, "Avg branches", String(avgBranches));
+      }
+      detail.appendChild(summaryTable);
+      this.appendSubheading(detail, "By Complexity Score");
       const headerRow = document.createElement("div");
       headerRow.className = "detail-info-row complexity-header";
-      for (const label of ["Function", "Instructions", "Branches", "Max Depth", "Body"]) {
+      for (const label of ["Function", "Score", "Instructions", "Branches", "Depth", "Bytes"]) {
         const cell = document.createElement("span");
         cell.className = "complexity-header-cell";
         cell.textContent = label;
@@ -29066,6 +29350,23 @@ ${funcEntry.body.length} bytes, ${totalLocals} locals`
           this.navigateToItem("function", entry.localIndex);
         });
         row.appendChild(link);
+        const score = entry.branchCount * 3 + entry.maxNestingDepth * 5 + entry.instructionCount;
+        const scoreCell = document.createElement("span");
+        scoreCell.className = "complexity-cell";
+        const barContainer = document.createElement("span");
+        barContainer.className = "size-bar-container";
+        barContainer.style.display = "inline-block";
+        barContainer.style.width = "60px";
+        barContainer.style.verticalAlign = "middle";
+        barContainer.style.marginRight = "8px";
+        const bar = document.createElement("span");
+        bar.className = "size-bar";
+        bar.style.width = `${Math.max(2, score / maxScore * 100)}%`;
+        bar.style.display = "block";
+        barContainer.appendChild(bar);
+        scoreCell.appendChild(barContainer);
+        scoreCell.appendChild(document.createTextNode(String(score)));
+        row.appendChild(scoreCell);
         for (const value of [entry.instructionCount, entry.branchCount, entry.maxNestingDepth, entry.bodySize]) {
           const cell = document.createElement("span");
           cell.className = "complexity-cell";
@@ -29199,56 +29500,6 @@ ${funcEntry.body.length} bytes, ${totalLocals} locals`
         detail.appendChild(errorElement);
       }
     }
-    renderTargetFeatures() {
-      if (!this.moduleInfo) {
-        return;
-      }
-      const detail = this.detailContainer;
-      const targetFeaturesSection = this.moduleInfo.customSections.find((section) => section.name === "target_features");
-      if (!targetFeaturesSection) {
-        return;
-      }
-      this.appendHeading(detail, "Target Features");
-      try {
-        let readULEB1282 = function() {
-          let result = 0;
-          let shift = 0;
-          let byte;
-          do {
-            byte = data[offset++];
-            result |= (byte & 127) << shift;
-            shift += 7;
-          } while (byte & 128);
-          return result >>> 0;
-        }, readString2 = function() {
-          const length = readULEB1282();
-          const str = new TextDecoder().decode(data.slice(offset, offset + length));
-          offset += length;
-          return str;
-        };
-        var readULEB128 = readULEB1282, readString = readString2;
-        const data = targetFeaturesSection.data;
-        let offset = 0;
-        const prefixLabels = {
-          43: "used (+)",
-          45: "disallowed (-)",
-          61: "required (=)"
-        };
-        const featureCount = readULEB1282();
-        const table = this.createInfoTable();
-        for (let featureIndex = 0; featureIndex < featureCount; featureIndex++) {
-          const prefix = data[offset++];
-          const featureName = readString2();
-          this.addInfoRow(table, featureName, prefixLabels[prefix] || `prefix 0x${prefix.toString(16)}`);
-        }
-        detail.appendChild(table);
-      } catch (parseError) {
-        const errorElement = document.createElement("div");
-        errorElement.className = "detail-description";
-        errorElement.textContent = "Failed to parse target_features section.";
-        detail.appendChild(errorElement);
-      }
-    }
     renderInstructionStats() {
       if (!this.moduleInfo) {
         return;
@@ -29285,12 +29536,12 @@ ${funcEntry.body.length} bytes, ${totalLocals} locals`
       for (const [mnemonic] of opcodeCounts) {
         if (/^(block|loop|if|else|br|br_if|br_table|return|call|call_indirect|return_call|unreachable|nop|select|drop)/.test(mnemonic)) {
           categories["Control Flow"].push(mnemonic);
-        } else if (/^(i32|i64|f32|f64)\.(load|store|const|add|sub|mul|div|rem|and|or|xor|shl|shr|rotl|rotr|clz|ctz|popcnt|eqz|eq|ne|lt|gt|le|ge|abs|neg|ceil|floor|trunc|nearest|sqrt|min|max|copysign|wrap|extend|convert|demote|promote|reinterpret|atomic)/.test(mnemonic)) {
-          categories["Numeric"].push(mnemonic);
-        } else if (/^(memory\.|i32\.load|i64\.load|f32\.load|f64\.load|i32\.store|i64\.store|f32\.store|f64\.store)/.test(mnemonic)) {
+        } else if (/^(memory\.|.*\.(load|store))/.test(mnemonic)) {
           categories["Memory"].push(mnemonic);
         } else if (/^(local\.|global\.)/.test(mnemonic)) {
           categories["Variable"].push(mnemonic);
+        } else if (/^(i32|i64|f32|f64|v128)\.(const|add|sub|mul|div|rem|and|or|xor|shl|shr|rotl|rotr|clz|ctz|popcnt|eqz|eq|ne|lt|gt|le|ge|abs|neg|ceil|floor|trunc|nearest|sqrt|min|max|copysign|wrap|extend|convert|demote|promote|reinterpret|atomic|splat|extract|replace|swizzle|shuffle|bitmask|all_true|any_true|narrow|widen|dot|avgr|extmul|extadd|relaxed)/.test(mnemonic)) {
+          categories["Numeric"].push(mnemonic);
         } else if (/^(ref\.|struct\.|array\.|i31\.|any\.|extern\.|br_on_cast)/.test(mnemonic)) {
           categories["Reference"].push(mnemonic);
         } else if (/^(table\.|elem\.)/.test(mnemonic)) {
@@ -29932,7 +30183,7 @@ ${code}
   }
   var currentMode = "editor";
   var explorerInstance = null;
-  function switchMode(mode, updateHash = true) {
+  function switchMode(mode, hashMode = "push") {
     if (mode === currentMode) {
       return;
     }
@@ -29950,7 +30201,9 @@ ${code}
       runBtn.style.display = "";
       examplesBtn.style.display = "";
       document.getElementById("outputPane").style.display = "";
-      if (updateHash) {
+      if (hashMode === "push") {
+        history.pushState(null, "", "#editor");
+      } else if (hashMode === "replace") {
         history.replaceState(null, "", "#editor");
       }
     } else {
@@ -29962,7 +30215,9 @@ ${code}
       if (!explorerInstance) {
         explorerInstance = new Explorer(document.getElementById("explorerContainer"));
       }
-      if (updateHash) {
+      if (hashMode === "push") {
+        history.pushState(null, "", "#explorer");
+      } else if (hashMode === "replace") {
         history.replaceState(null, "", "#explorer");
       }
     }
@@ -29976,18 +30231,18 @@ ${code}
     const mode = parts[0];
     if (mode === "explorer") {
       if (currentMode !== "explorer") {
-        switchMode("explorer", false);
+        switchMode("explorer", "none");
       }
       if (explorerInstance && parts.length > 2) {
         const section = parts[1];
         const index = parseInt(parts[2], 10);
         if (!isNaN(index)) {
-          explorerInstance.navigateToItem(section, index);
+          explorerInstance.navigateToHashItem(section, index);
         }
       }
     } else if (mode === "editor") {
       if (currentMode !== "editor") {
-        switchMode("editor", false);
+        switchMode("editor", "none");
       }
     }
   }
