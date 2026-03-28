@@ -6,10 +6,6 @@ interface StackFrameInfo {
   frameSize: number;
 }
 
-function isGlobalGet(expression: Expression, globalName: string): boolean {
-  return expression.kind === 'global' && expression.name === globalName;
-}
-
 function isStackPointerGlobal(name: string): boolean {
   return name === '__stack_pointer' || name === 'sp' || name === 'stack_pointer';
 }

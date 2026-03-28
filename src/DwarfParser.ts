@@ -86,6 +86,7 @@ export function parseDwarfDebugInfo(customSections: { name: string; data: Uint8A
   const debugLineStrSection = customSections.find(section => section.name === '.debug_line_str');
   const debugInfoSection = customSections.find(section => section.name === '.debug_info');
   const debugAbbrevSection = customSections.find(section => section.name === '.debug_abbrev');
+  const debugStrOffsetsSection = customSections.find(section => section.name === '.debug_str_offsets');
 
   let lineInfo: DwarfLineInfo | null = null;
   if (debugLineSection) {
@@ -117,6 +118,7 @@ export function parseDwarfDebugInfo(customSections: { name: string; data: Uint8A
         debugAbbrevSection.data,
         debugStrSection?.data,
         debugLineStrSection?.data,
+        debugStrOffsetsSection?.data,
       );
       compilationUnits = parseResult.units;
       allTypes = parseResult.types;
@@ -467,6 +469,7 @@ const DW_AT_low_pc = 0x11;
 const DW_AT_high_pc = 0x12;
 const DW_AT_language = 0x13;
 const DW_AT_comp_dir = 0x1b;
+const DW_AT_str_offsets_base = 0x72;
 const DW_AT_producer = 0x25;
 const DW_AT_decl_file = 0x3a;
 const DW_AT_decl_line = 0x3b;
@@ -601,6 +604,24 @@ function skipFormValue(reader: DwarfReader, form: number, addressSize: number): 
   }
 }
 
+function resolveStrx(
+  index: number,
+  debugStrOffsets: Uint8Array | undefined,
+  debugStr: Uint8Array | undefined,
+  strOffsetsBase: number,
+): string | null {
+  if (!debugStrOffsets || !debugStr) {
+    return null;
+  }
+  const entryOffset = strOffsetsBase + index * 4;
+  if (entryOffset + 4 > debugStrOffsets.length) {
+    return null;
+  }
+  const strOffset = debugStrOffsets[entryOffset] | (debugStrOffsets[entryOffset + 1] << 8) |
+    (debugStrOffsets[entryOffset + 2] << 16) | (debugStrOffsets[entryOffset + 3] << 24);
+  return readNullTerminatedStringAt(debugStr, strOffset >>> 0);
+}
+
 function readAttrValue(
   reader: DwarfReader,
   form: number,
@@ -608,6 +629,9 @@ function readAttrValue(
   debugStr: Uint8Array | undefined,
   debugLineStr: Uint8Array | undefined,
   implicitConst: number,
+  cuOffset: number = 0,
+  debugStrOffsets: Uint8Array | undefined = undefined,
+  strOffsetsBase: number = 0,
 ): string | number | boolean | null {
   switch (form) {
     case DW_FORM_addr: {
@@ -640,17 +664,21 @@ function readAttrValue(
     case DW_FORM_flag: return reader.readUint8() !== 0;
     case DW_FORM_flag_present: return true;
     case DW_FORM_sec_offset: return reader.readUint32();
-    case DW_FORM_ref1: return reader.readUint8();
-    case DW_FORM_ref2: return reader.readUint16();
-    case DW_FORM_ref4: return reader.readUint32();
-    case DW_FORM_ref_udata: return reader.readULEB128();
+    case DW_FORM_ref1: return cuOffset + reader.readUint8();
+    case DW_FORM_ref2: return cuOffset + reader.readUint16();
+    case DW_FORM_ref4: return cuOffset + reader.readUint32();
+    case DW_FORM_ref_udata: return cuOffset + reader.readULEB128();
     case DW_FORM_ref_addr: return reader.readUint32();
     case DW_FORM_implicit_const: return implicitConst;
-    case DW_FORM_strx: case DW_FORM_addrx: case DW_FORM_loclistx: case DW_FORM_rnglistx:
+    case DW_FORM_strx: return resolveStrx(reader.readULEB128(), debugStrOffsets, debugStr, strOffsetsBase);
+    case DW_FORM_strx1: return resolveStrx(reader.readUint8(), debugStrOffsets, debugStr, strOffsetsBase);
+    case DW_FORM_strx2: return resolveStrx(reader.readUint16(), debugStrOffsets, debugStr, strOffsetsBase);
+    case DW_FORM_strx4: return resolveStrx(reader.readUint32(), debugStrOffsets, debugStr, strOffsetsBase);
+    case DW_FORM_addrx: case DW_FORM_loclistx: case DW_FORM_rnglistx:
       return reader.readULEB128();
-    case DW_FORM_strx1: case DW_FORM_addrx1: return reader.readUint8();
-    case DW_FORM_strx2: case DW_FORM_addrx2: return reader.readUint16();
-    case DW_FORM_strx4: case DW_FORM_addrx4: return reader.readUint32();
+    case DW_FORM_addrx1: return reader.readUint8();
+    case DW_FORM_addrx2: return reader.readUint16();
+    case DW_FORM_addrx4: return reader.readUint32();
     case DW_FORM_exprloc: case DW_FORM_block: {
       const len = reader.readULEB128();
       const blockStart = reader.offset;
@@ -669,15 +697,16 @@ function readAttrValue(
     case DW_FORM_block4: { const len = reader.readUint32(); reader.offset += len; return null; }
     case DW_FORM_ref_sig8: case DW_FORM_ref8: { reader.offset += 8; return null; }
     case DW_FORM_data16: { reader.offset += 16; return null; }
-    case DW_FORM_strx3: case DW_FORM_addrx3: {
-      const byte0 = reader.readUint8();
-      const byte1 = reader.readUint8();
-      const byte2 = reader.readUint8();
-      return byte0 | (byte1 << 8) | (byte2 << 16);
+    case DW_FORM_strx3: {
+      const idx = reader.readUint8() | (reader.readUint8() << 8) | (reader.readUint8() << 16);
+      return resolveStrx(idx, debugStrOffsets, debugStr, strOffsetsBase);
+    }
+    case DW_FORM_addrx3: {
+      return reader.readUint8() | (reader.readUint8() << 8) | (reader.readUint8() << 16);
     }
     case DW_FORM_indirect: {
       const actualForm = reader.readULEB128();
-      return readAttrValue(reader, actualForm, addressSize, debugStr, debugLineStr, 0);
+      return readAttrValue(reader, actualForm, addressSize, debugStr, debugLineStr, 0, cuOffset, debugStrOffsets, strOffsetsBase);
     }
     default:
       skipFormValue(reader, form, addressSize);
@@ -753,6 +782,7 @@ function parseDebugInfo(
   debugAbbrevData: Uint8Array,
   debugStr: Uint8Array | undefined,
   debugLineStr: Uint8Array | undefined,
+  debugStrOffsets: Uint8Array | undefined,
 ): { units: DwarfCompilationUnit[]; types: Map<number, DwarfTypeInfo>; globalVariables: DwarfGlobalVariable[] } {
   const reader = new DwarfReader(debugInfoData);
   const compilationUnits: DwarfCompilationUnit[] = [];
@@ -775,6 +805,16 @@ function parseDebugInfo(
       const unitType = reader.readUint8();
       addressSize = reader.readUint8();
       abbrevOffset = reader.readUint32();
+      // DW_UT_type (0x02) and DW_UT_split_type (0x06) have extra header fields
+      if (unitType === 0x02 || unitType === 0x06) {
+        reader.offset += 8; // type_signature (8 bytes)
+        reader.readUint32(); // type_offset (4 bytes)
+      }
+      // Skip non-compile units entirely (type units, skeleton units, etc.)
+      if (unitType !== 0x01 && unitType !== 0x11) {
+        reader.offset = unitEnd;
+        continue;
+      }
     } else {
       abbrevOffset = reader.readUint32();
       addressSize = reader.readUint8();
@@ -786,6 +826,7 @@ function parseDebugInfo(
     let unitProducer = '';
     let unitLanguage = 0;
     let unitCompDir = '';
+    let strOffsetsBase = 0;
     const unitFunctions: DwarfFunction[] = [];
     let depth = 0;
     let currentFunction: DwarfFunction | null = null;
@@ -819,7 +860,7 @@ function parseDebugInfo(
 
       const attrs = new Map<number, string | number | boolean | null>();
       for (const attrDef of abbrev.attributes) {
-        const value = readAttrValue(reader, attrDef.form, addressSize, debugStr, debugLineStr, attrDef.implicitConst);
+        const value = readAttrValue(reader, attrDef.form, addressSize, debugStr, debugLineStr, attrDef.implicitConst, unitStart, debugStrOffsets, strOffsetsBase);
         attrs.set(attrDef.attribute, value);
       }
 
@@ -832,6 +873,8 @@ function parseDebugInfo(
         if (typeof langVal === 'number') { unitLanguage = langVal; }
         const compDirVal = attrs.get(DW_AT_comp_dir);
         if (typeof compDirVal === 'string') { unitCompDir = compDirVal; }
+        const strOffsetsBaseVal = attrs.get(DW_AT_str_offsets_base);
+        if (typeof strOffsetsBaseVal === 'number') { strOffsetsBase = strOffsetsBaseVal; }
       }
 
       if (abbrev.tag === DW_TAG_subprogram) {

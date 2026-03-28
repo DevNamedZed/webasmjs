@@ -20009,6 +20009,7 @@ log(mod.toString());`
     const debugLineStrSection = customSections.find((section) => section.name === ".debug_line_str");
     const debugInfoSection = customSections.find((section) => section.name === ".debug_info");
     const debugAbbrevSection = customSections.find((section) => section.name === ".debug_abbrev");
+    const debugStrOffsetsSection = customSections.find((section) => section.name === ".debug_str_offsets");
     let lineInfo = null;
     if (debugLineSection) {
       lineInfo = parseDebugLine(debugLineSection.data, debugStrSection?.data, debugLineStrSection?.data);
@@ -20036,7 +20037,8 @@ log(mod.toString());`
           debugInfoSection.data,
           debugAbbrevSection.data,
           debugStrSection?.data,
-          debugLineStrSection?.data
+          debugLineStrSection?.data,
+          debugStrOffsetsSection?.data
         );
         compilationUnits = parseResult.units;
         allTypes = parseResult.types;
@@ -20338,6 +20340,7 @@ log(mod.toString());`
   var DW_AT_high_pc = 18;
   var DW_AT_language = 19;
   var DW_AT_comp_dir = 27;
+  var DW_AT_str_offsets_base = 114;
   var DW_AT_producer = 37;
   var DW_AT_decl_file = 58;
   var DW_AT_decl_line = 59;
@@ -20513,7 +20516,18 @@ log(mod.toString());`
         throw new Error(`Unknown DWARF form: 0x${form.toString(16)}`);
     }
   }
-  function readAttrValue(reader, form, addressSize, debugStr, debugLineStr, implicitConst) {
+  function resolveStrx(index, debugStrOffsets, debugStr, strOffsetsBase) {
+    if (!debugStrOffsets || !debugStr) {
+      return null;
+    }
+    const entryOffset = strOffsetsBase + index * 4;
+    if (entryOffset + 4 > debugStrOffsets.length) {
+      return null;
+    }
+    const strOffset = debugStrOffsets[entryOffset] | debugStrOffsets[entryOffset + 1] << 8 | debugStrOffsets[entryOffset + 2] << 16 | debugStrOffsets[entryOffset + 3] << 24;
+    return readNullTerminatedStringAt(debugStr, strOffset >>> 0);
+  }
+  function readAttrValue(reader, form, addressSize, debugStr, debugLineStr, implicitConst, cuOffset = 0, debugStrOffsets = void 0, strOffsetsBase = 0) {
     switch (form) {
       case DW_FORM_addr: {
         if (addressSize === 4) {
@@ -20561,29 +20575,33 @@ log(mod.toString());`
       case DW_FORM_sec_offset:
         return reader.readUint32();
       case DW_FORM_ref1:
-        return reader.readUint8();
+        return cuOffset + reader.readUint8();
       case DW_FORM_ref2:
-        return reader.readUint16();
+        return cuOffset + reader.readUint16();
       case DW_FORM_ref4:
-        return reader.readUint32();
+        return cuOffset + reader.readUint32();
       case DW_FORM_ref_udata:
-        return reader.readULEB128();
+        return cuOffset + reader.readULEB128();
       case DW_FORM_ref_addr:
         return reader.readUint32();
       case DW_FORM_implicit_const:
         return implicitConst;
       case DW_FORM_strx:
+        return resolveStrx(reader.readULEB128(), debugStrOffsets, debugStr, strOffsetsBase);
+      case DW_FORM_strx1:
+        return resolveStrx(reader.readUint8(), debugStrOffsets, debugStr, strOffsetsBase);
+      case DW_FORM_strx2:
+        return resolveStrx(reader.readUint16(), debugStrOffsets, debugStr, strOffsetsBase);
+      case DW_FORM_strx4:
+        return resolveStrx(reader.readUint32(), debugStrOffsets, debugStr, strOffsetsBase);
       case DW_FORM_addrx:
       case DW_FORM_loclistx:
       case DW_FORM_rnglistx:
         return reader.readULEB128();
-      case DW_FORM_strx1:
       case DW_FORM_addrx1:
         return reader.readUint8();
-      case DW_FORM_strx2:
       case DW_FORM_addrx2:
         return reader.readUint16();
-      case DW_FORM_strx4:
       case DW_FORM_addrx4:
         return reader.readUint32();
       case DW_FORM_exprloc:
@@ -20620,16 +20638,16 @@ log(mod.toString());`
         reader.offset += 16;
         return null;
       }
-      case DW_FORM_strx3:
+      case DW_FORM_strx3: {
+        const idx = reader.readUint8() | reader.readUint8() << 8 | reader.readUint8() << 16;
+        return resolveStrx(idx, debugStrOffsets, debugStr, strOffsetsBase);
+      }
       case DW_FORM_addrx3: {
-        const byte0 = reader.readUint8();
-        const byte1 = reader.readUint8();
-        const byte2 = reader.readUint8();
-        return byte0 | byte1 << 8 | byte2 << 16;
+        return reader.readUint8() | reader.readUint8() << 8 | reader.readUint8() << 16;
       }
       case DW_FORM_indirect: {
         const actualForm = reader.readULEB128();
-        return readAttrValue(reader, actualForm, addressSize, debugStr, debugLineStr, 0);
+        return readAttrValue(reader, actualForm, addressSize, debugStr, debugLineStr, 0, cuOffset, debugStrOffsets, strOffsetsBase);
       }
       default:
         skipFormValue(reader, form, addressSize);
@@ -20690,7 +20708,7 @@ log(mod.toString());`
       }
     }
   }
-  function parseDebugInfo(debugInfoData, debugAbbrevData, debugStr, debugLineStr) {
+  function parseDebugInfo(debugInfoData, debugAbbrevData, debugStr, debugLineStr, debugStrOffsets) {
     const reader = new DwarfReader(debugInfoData);
     const compilationUnits = [];
     const typeMap = /* @__PURE__ */ new Map();
@@ -20709,6 +20727,14 @@ log(mod.toString());`
         const unitType = reader.readUint8();
         addressSize = reader.readUint8();
         abbrevOffset = reader.readUint32();
+        if (unitType === 2 || unitType === 6) {
+          reader.offset += 8;
+          reader.readUint32();
+        }
+        if (unitType !== 1 && unitType !== 17) {
+          reader.offset = unitEnd;
+          continue;
+        }
       } else {
         abbrevOffset = reader.readUint32();
         addressSize = reader.readUint8();
@@ -20718,6 +20744,7 @@ log(mod.toString());`
       let unitProducer = "";
       let unitLanguage = 0;
       let unitCompDir = "";
+      let strOffsetsBase = 0;
       const unitFunctions = [];
       let depth = 0;
       let currentFunction = null;
@@ -20748,7 +20775,7 @@ log(mod.toString());`
         }
         const attrs = /* @__PURE__ */ new Map();
         for (const attrDef of abbrev.attributes) {
-          const value = readAttrValue(reader, attrDef.form, addressSize, debugStr, debugLineStr, attrDef.implicitConst);
+          const value = readAttrValue(reader, attrDef.form, addressSize, debugStr, debugLineStr, attrDef.implicitConst, unitStart, debugStrOffsets, strOffsetsBase);
           attrs.set(attrDef.attribute, value);
         }
         if (abbrev.tag === DW_TAG_compile_unit) {
@@ -20767,6 +20794,10 @@ log(mod.toString());`
           const compDirVal = attrs.get(DW_AT_comp_dir);
           if (typeof compDirVal === "string") {
             unitCompDir = compDirVal;
+          }
+          const strOffsetsBaseVal = attrs.get(DW_AT_str_offsets_base);
+          if (typeof strOffsetsBaseVal === "number") {
+            strOffsetsBase = strOffsetsBaseVal;
           }
         }
         if (abbrev.tag === DW_TAG_subprogram) {
@@ -21830,7 +21861,7 @@ log(mod.toString());`
             const phiInstr = {
               kind: "phi",
               result: phiVar,
-              inputs: cfgBlock.predecessors.map((pred, predIdx) => {
+              inputs: cfgBlock.predecessors.map((pred) => {
                 const predStack = stackAtExit.get(pred.id) || [];
                 return { blockId: pred.id, value: predStack[slotIndex] || values[0] };
               })
@@ -21844,7 +21875,7 @@ log(mod.toString());`
               stack.push(values[0]);
             } else {
               const phiVar = newVariable(`stack_${slotIndex}_b${cfgBlock.id}`, "i32", cfgBlock.id);
-              ssaBlock.instructions.push({ kind: "phi", result: phiVar, inputs: cfgBlock.predecessors.map((pred, predIdx) => ({ blockId: pred.id, value: (stackAtExit.get(pred.id) || [])[slotIndex] || values[0] })) });
+              ssaBlock.instructions.push({ kind: "phi", result: phiVar, inputs: cfgBlock.predecessors.map((pred) => ({ blockId: pred.id, value: (stackAtExit.get(pred.id) || [])[slotIndex] || values[0] })) });
               stack.push(phiVar);
             }
           }
@@ -22024,16 +22055,17 @@ log(mod.toString());`
             const address = stack.pop();
             if (address && expected && replacement) {
               const result = newVariable(`t${variableCounter}`, resultTypeFromOpCode(opCode), cfgBlock.id);
-              const offsetAddr = offset > 0 ? (() => {
-                const r = newVariable(`t${variableCounter}`, "i32", cfgBlock.id);
-                ssaBlock.instructions.push({ kind: "binary", result: r, op: "+", left: address, right: { kind: "const", value: offset, type: "i32" } });
-                return r;
-              })() : address;
-              ssaBlock.instructions.push({ kind: "call", result, target: -3, args: [offsetAddr, expected, replacement] });
+              let effectiveAddress = address;
+              if (offset > 0) {
+                const offsetVar = newVariable(`t${variableCounter}`, "i32", cfgBlock.id);
+                ssaBlock.instructions.push({ kind: "binary", result: offsetVar, op: "+", left: address, right: { kind: "const", value: offset, type: "i32" } });
+                effectiveAddress = offsetVar;
+              }
+              ssaBlock.instructions.push({ kind: "call", result, target: -3, args: [effectiveAddress, expected, replacement] });
               stack.push(result);
             }
           } else {
-            const value = stack.pop();
+            stack.pop();
             const address = stack.pop();
             if (address) {
               const result = newVariable(`t${variableCounter}`, resultTypeFromOpCode(opCode), cfgBlock.id);
@@ -22044,8 +22076,10 @@ log(mod.toString());`
           continue;
         }
         if (opCode.mnemonic.includes("atomic.notify") || opCode.mnemonic.includes("atomic.wait")) {
-          const extra = opCode.mnemonic.includes("wait") ? stack.pop() : void 0;
-          const value = stack.pop();
+          if (opCode.mnemonic.includes("wait")) {
+            stack.pop();
+          }
+          stack.pop();
           const address = stack.pop();
           if (address) {
             const result = newVariable(`t${variableCounter}`, "i32", cfgBlock.id);
@@ -22743,7 +22777,7 @@ log(mod.toString());`
   }
 
   // src/decompiler/StructuralAnalysis.ts
-  function structureFunction(ssaFunc, dominance, blockEndTargets) {
+  function structureFunction(ssaFunc, dominance) {
     const blockMap = /* @__PURE__ */ new Map();
     for (const block of ssaFunc.blocks) {
       blockMap.set(block.id, block);
@@ -22856,7 +22890,7 @@ log(mod.toString());`
           return structureLoop(blockId, loop, regionEnd);
         }
         return structureLinear(blockId, regionEnd, virtuallyProcessed);
-      } catch (structureError) {
+      } catch {
         processed.add(blockId);
         return { kind: "labeled_block", label: `block_${blockId}`, body: { kind: "block", body: block.instructions } };
       }
@@ -24488,11 +24522,11 @@ log(mod.toString());`
           return { kind: "store", address: resolveValue(instr.address), offset: instr.offset, storeType: instr.storeType, value: resolveValue(instr.value) };
         case "call": {
           const funcName = instr.target >= 0 ? names.functionName(instr.target) : instr.target === -1 ? "memory.size" : instr.target === -2 ? "memory.grow" : "atomic_cmpxchg";
-          let resultName = instr.result ? resolveVarName(instr.result) : null;
+          const resultName = instr.result ? resolveVarName(instr.result) : null;
           return { kind: "call", name: funcName, args: instr.args.map((a) => resolveValue(a)), result: resultName };
         }
         case "call_indirect": {
-          let resultName = instr.result ? resolveVarName(instr.result) : null;
+          const resultName = instr.result ? resolveVarName(instr.result) : null;
           return { kind: "call_indirect", tableIndex: resolveValue(instr.tableIndex), args: instr.args.map((a) => resolveValue(a)), result: resultName };
         }
         case "convert": {
@@ -25137,7 +25171,7 @@ log(mod.toString());`
     switch (node.kind) {
       case "sequence": {
         const children = node.children.map((child) => reduceNesting2(child));
-        const flattened = flattenGuardClauses(children, false);
+        const flattened = flattenGuardClauses(children);
         if (flattened.length === 1) {
           return flattened[0];
         }
@@ -25186,7 +25220,7 @@ log(mod.toString());`
     }
     return body;
   }
-  function flattenGuardClauses(children, insideLoop) {
+  function flattenGuardClauses(children) {
     const result = [];
     for (let index = 0; index < children.length; index++) {
       const child = children[index];
@@ -25194,7 +25228,7 @@ log(mod.toString());`
         const innerChildren = getChildren(child.thenBody);
         if (innerChildren.length >= 2) {
           const guardCondition = negateExpression(child.condition);
-          const exitNode = insideLoop ? { kind: "continue" } : { kind: "return", value: null };
+          const exitNode = { kind: "return", value: null };
           result.push({ kind: "if", condition: guardCondition, thenBody: exitNode, elseBody: null });
           result.push(...innerChildren);
           continue;
@@ -25393,14 +25427,27 @@ log(mod.toString());`
       return { kind: "sequence", children: filtered };
     }
     if (node.kind === "block") {
-      let body = node.body;
-      if (body.length > 0 && body[body.length - 1].kind === "expr" && body[body.length - 1].value?.kind === "var") {
-      }
-      const cleaned = { kind: "block", body };
-      return removeTrailingAssignTo(cleaned, variableName) || { kind: "sequence", children: [] };
+      return removeTrailingAssignTo(node, variableName) || { kind: "sequence", children: [] };
     }
     if (node.kind === "continue") {
       return { kind: "sequence", children: [] };
+    }
+    if (node.kind === "if") {
+      return {
+        kind: "if",
+        condition: node.condition,
+        thenBody: removeIncrementAndContinue(node.thenBody, variableName),
+        elseBody: node.elseBody ? removeIncrementAndContinue(node.elseBody, variableName) : null
+      };
+    }
+    if (node.kind === "for") {
+      return {
+        kind: "for",
+        init: node.init,
+        condition: node.condition,
+        increment: node.increment,
+        body: removeIncrementAndContinue(node.body, variableName)
+      };
     }
     return node;
   }
@@ -26636,7 +26683,7 @@ log(mod.toString());`
       const ssaFunc = buildSsa(cfg, moduleInfo, localFuncIndex);
       optimizeSsa(ssaFunc);
       const dominance = computeDominance(ssaFunc);
-      const structured = structureFunction(ssaFunc, dominance, cfg.blockEndTargets);
+      const structured = structureFunction(ssaFunc, dominance);
       const nameProvider = {
         functionName(globalIdx) {
           return nameResolver.functionName(globalIdx).name;
@@ -26872,17 +26919,6 @@ log(mod.toString());`
       10: "Code",
       11: "Data",
       0: "Custom"
-    };
-    const sectionToByteRange = {
-      1: "type",
-      2: "import",
-      3: "function",
-      4: "table",
-      5: "memory",
-      6: "global",
-      7: "export",
-      9: "element",
-      11: "data"
     };
     let offset = 8;
     while (offset < data.length) {
@@ -27218,12 +27254,11 @@ log(mod.toString());`
         while (end < source.length && source[end] === " ") {
           end++;
         }
-        let wordStart = end;
+        const wordStart = end;
         while (end < source.length && /[a-zA-Z]/.test(source[end])) {
           end++;
         }
         const castWord = source.slice(wordStart, end);
-        let fullCast = castWord;
         let castEnd = end;
         while (castEnd < source.length && source[castEnd] === " ") {
           castEnd++;
@@ -27235,7 +27270,6 @@ log(mod.toString());`
           }
           const nextWord = source.slice(castEnd, nextWordEnd);
           if (C_CAST_TYPES.has(nextWord)) {
-            fullCast = castWord + " " + nextWord;
             castEnd = nextWordEnd;
           }
         }
@@ -27325,7 +27359,6 @@ log(mod.toString());`
     try {
       const instructions = InstructionDecoder.decodeFunctionBody(bytes);
       for (const instruction of instructions) {
-        const opcodeEnd = instruction.offset + (instruction.length - (instruction.immediates.values.length > 0 ? 1 : 0));
         for (let bytePos = instruction.offset; bytePos < instruction.offset + instruction.length; bytePos++) {
           if (bytePos < instruction.offset + 1 || instruction.opCode.prefix !== void 0 && bytePos < instruction.offset + 2) {
             classes.set(bytePos, "hex-opcode");
@@ -27334,7 +27367,7 @@ log(mod.toString());`
           }
         }
       }
-    } catch (decodeError) {
+    } catch {
     }
     return classes;
   }
@@ -30256,7 +30289,7 @@ ${funcEntry.body.length} bytes, ${totalLocals} locals`,
             const name = readStr();
             targetFeatures.set(name, prefixLabels[prefix] || "unknown");
           }
-        } catch (parseError) {
+        } catch {
         }
       }
       const allFeatureNames = /* @__PURE__ */ new Set();
@@ -30271,7 +30304,6 @@ ${funcEntry.body.length} bytes, ${totalLocals} locals`,
       for (const name of targetFeatures.keys()) {
         allFeatureNames.add(name);
       }
-      const postMvpOpcodeFeatures = /* @__PURE__ */ new Set(["bulk-memory", "sign-extend", "sat-trunc", "mutable-globals", "multi-value", "reference-types", "simd", "tail-call", "relaxed-simd", "extended-const"]);
       const postMvpFeatures = /* @__PURE__ */ new Set();
       for (const name of allFeatureNames) {
         postMvpFeatures.add(name);
@@ -30827,7 +30859,7 @@ ${funcEntry.body.length} bytes, ${totalLocals} locals`,
           }
           detail.appendChild(table);
         }
-      } catch (parseError) {
+      } catch {
         const errorElement = document.createElement("div");
         errorElement.className = "detail-description";
         errorElement.textContent = "Failed to parse producers section.";
@@ -31165,7 +31197,7 @@ ${funcEntry.body.length} bytes, ${totalLocals} locals`,
       let instructions;
       try {
         instructions = InstructionDecoder.decodeFunctionBody(funcBody);
-      } catch (decodeError) {
+      } catch {
         this.appendByteRange(parent, "function", funcIndex);
         return;
       }
@@ -31694,11 +31726,12 @@ ${funcEntry.body.length} bytes, ${totalLocals} locals`,
         let bytes = new Uint8Array();
         try {
           bytes = mod.toBytes();
-        } catch (_) {
+        } catch {
         }
         capturedModules.push({ name, wat, bytes });
-      } catch (e) {
-        capturedModules.push({ name, wat: "Error: " + e.message, bytes: new Uint8Array() });
+      } catch (error) {
+        const errorMessage = error instanceof Error ? error.message : String(error);
+        capturedModules.push({ name, wat: "Error: " + errorMessage, bytes: new Uint8Array() });
       }
     }
     const patchedClass = class extends OrigModuleBuilder {
@@ -31735,10 +31768,11 @@ ${code}
 })();`);
       await asyncFn(log, wasm);
       appendOutput(outputBody, "--- Done ---", "success");
-    } catch (e) {
-      appendOutput(outputBody, "Error: " + e.message, "error");
-      if (e.stack) {
-        appendOutput(outputBody, e.stack, "error");
+    } catch (error) {
+      const runtimeError = error instanceof Error ? error : new Error(String(error));
+      appendOutput(outputBody, "Error: " + runtimeError.message, "error");
+      if (runtimeError.stack) {
+        appendOutput(outputBody, runtimeError.stack, "error");
       }
     } finally {
       wasm.ModuleBuilder = OrigModuleBuilder;

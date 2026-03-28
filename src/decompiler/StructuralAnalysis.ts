@@ -26,7 +26,6 @@ export type StructuredNode =
 export function structureFunction(
   ssaFunc: SsaFunction,
   dominance: DominanceInfo,
-  blockEndTargets?: Map<number, number>,
 ): StructuredNode {
   const blockMap = new Map<number, SsaBlock>();
   for (const block of ssaFunc.blocks) {
@@ -161,7 +160,7 @@ export function structureFunction(
         return structureLoop(blockId, loop, regionEnd);
       }
       return structureLinear(blockId, regionEnd, virtuallyProcessed);
-    } catch (structureError) {
+    } catch {
       // Fallback: emit the block as labeled block
       processed.add(blockId);
       return { kind: 'labeled_block', label: `block_${blockId}`, body: { kind: 'block', body: block.instructions } };

@@ -420,7 +420,8 @@ const ALL_SYMBOLS = [
   'RecGroupBuilder', 'refType', 'refNullType', 'OpCodes', 'mut',
 ];
 
-// Expose library globally for eval'd code
+// Expose library globally so user-typed code in the editor can access it via `new Function()`
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 (window as any).webasmjs = {
   ModuleBuilder,
   PackageBuilder,
@@ -456,11 +457,13 @@ async function run(): Promise<void> {
   document.getElementById('outputPane')!.classList.remove('collapsed');
 
   // Capture log calls -> output pane
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const log = (msg: any) => {
     appendOutput(outputBody, String(msg));
   };
 
   // Intercept ModuleBuilder to capture WAT + bytes
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const wasm = (window as any).webasmjs;
   const OrigModuleBuilder = wasm.ModuleBuilder;
   const captured = new WeakSet();
@@ -469,14 +472,20 @@ async function run(): Promise<void> {
   function captureModule(mod: ModuleBuilder): void {
     if (captured.has(mod)) return;
     captured.add(mod);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const name = (mod as any)._name || 'module';
     try {
       const wat = mod.toString();
       let bytes = new Uint8Array();
-      try { bytes = mod.toBytes(); } catch (_) {}
+      try {
+        bytes = mod.toBytes();
+      } catch {
+        // toBytes can fail on modules with validation errors — still show WAT
+      }
       capturedModules.push({ name, wat, bytes });
-    } catch (e: any) {
-      capturedModules.push({ name, wat: 'Error: ' + e.message, bytes: new Uint8Array() });
+    } catch (error: unknown) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      capturedModules.push({ name, wat: 'Error: ' + errorMessage, bytes: new Uint8Array() });
     }
   }
 
@@ -494,6 +503,7 @@ async function run(): Promise<void> {
 
   // Also wrap parseWat so its returned ModuleBuilder gets captured
   const origParseWat = wasm.parseWat;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   wasm.parseWat = (...args: any[]) => {
     const mod = origParseWat(...args);
     const origInstantiate = mod.instantiate.bind(mod);
@@ -514,10 +524,11 @@ async function run(): Promise<void> {
     const asyncFn = new Function('log', 'webasmjs', `return (async () => {\n${destructure}\n${code}\n})();`);
     await asyncFn(log, wasm);
     appendOutput(outputBody, '--- Done ---', 'success');
-  } catch (e: any) {
-    appendOutput(outputBody, 'Error: ' + e.message, 'error');
-    if (e.stack) {
-      appendOutput(outputBody, e.stack, 'error');
+  } catch (error: unknown) {
+    const runtimeError = error instanceof Error ? error : new Error(String(error));
+    appendOutput(outputBody, 'Error: ' + runtimeError.message, 'error');
+    if (runtimeError.stack) {
+      appendOutput(outputBody, runtimeError.stack, 'error');
     }
   } finally {
     wasm.ModuleBuilder = OrigModuleBuilder;

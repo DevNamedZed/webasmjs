@@ -135,6 +135,8 @@ export function buildControlFlowGraph(instructions: DecodedInstruction[]): Contr
     }
 
     if (mnemonic === 'delegate') {
+      // delegate ends the current try scope. The depth immediate identifies which
+      // enclosing try block handles the exception — this is runtime behavior, not CFG structure.
       if (scopeStack.length > 0) {
         const scope = scopeStack.pop()!;
         if (!scope.endTarget) {

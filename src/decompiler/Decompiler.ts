@@ -10,7 +10,7 @@ import { lowerSsaToStatements } from './SsaLowering';
 import type { LoweringNameProvider } from './SsaLowering';
 import { emitLowered, WASM_TO_C_TYPE, FieldResolver } from './LoweredEmitter';
 import { annotateMemoryPatterns } from './MemoryPatterns';
-import { removeStackFrame, StackFrameResult } from './StackFramePass';
+import { removeStackFrame } from './StackFramePass';
 
 function sanitizeIdentifier(name: string): string {
   return name.replace(/[^a-zA-Z0-9_$]/g, '_');
@@ -149,7 +149,7 @@ export function decompileFunction(
     const ssaFunc = buildSsa(cfg, moduleInfo, localFuncIndex);
     optimizeSsa(ssaFunc);
     const dominance = computeDominance(ssaFunc);
-    const structured = structureFunction(ssaFunc, dominance, cfg.blockEndTargets);
+    const structured = structureFunction(ssaFunc, dominance);
 
     const nameProvider: LoweringNameProvider = {
       functionName(globalIdx: number): string {

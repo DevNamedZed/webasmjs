@@ -31,11 +31,6 @@ function buildByteRanges(data: Uint8Array): ByteRangeMap {
     1: 'Type', 2: 'Import', 3: 'Function', 4: 'Table', 5: 'Memory',
     6: 'Global', 7: 'Export', 9: 'Element', 10: 'Code', 11: 'Data', 0: 'Custom',
   };
-  const sectionToByteRange: Record<number, ByteRangeSection> = {
-    1: 'type', 2: 'import', 3: 'function', 4: 'table', 5: 'memory',
-    6: 'global', 7: 'export', 9: 'element', 11: 'data',
-  };
-
   let offset = 8; // skip magic + version
   while (offset < data.length) {
     const sectionId = data[offset];
@@ -97,11 +92,11 @@ function buildByteRanges(data: Uint8Array): ByteRangeMap {
     },
   };
 }
-import { parseDwarfDebugInfo, getLineEntriesForAddressRange } from '../src/DwarfParser';
-import type { DwarfDebugInfo, DwarfLineInfo } from '../src/DwarfParser';
+import { parseDwarfDebugInfo } from '../src/DwarfParser';
+import type { DwarfDebugInfo } from '../src/DwarfParser';
 import { decompileFunction, createNameResolver } from './WasmDecompiler';
 import type { NameResolver, FieldResolver } from './WasmDecompiler';
-import { parseSourceMap, lookupMapping, getSourceLine } from '../src/SourceMapParser';
+import { parseSourceMap, lookupMapping } from '../src/SourceMapParser';
 import type { ParsedSourceMap, SourceMapping } from '../src/SourceMapParser';
 
 interface TreeNode {
@@ -323,11 +318,10 @@ function renderHighlightedC(container: HTMLElement, source: string, options?: Hi
     if (char === '(' && position + 1 < source.length) {
       let end = position + 1;
       while (end < source.length && source[end] === ' ') { end++; }
-      let wordStart = end;
+      const wordStart = end;
       while (end < source.length && /[a-zA-Z]/.test(source[end])) { end++; }
       const castWord = source.slice(wordStart, end);
       // Allow "unsigned long", "unsigned int" etc.
-      let fullCast = castWord;
       let castEnd = end;
       while (castEnd < source.length && source[castEnd] === ' ') { castEnd++; }
       if (castEnd < source.length && /[a-zA-Z]/.test(source[castEnd])) {
@@ -335,7 +329,6 @@ function renderHighlightedC(container: HTMLElement, source: string, options?: Hi
         while (nextWordEnd < source.length && /[a-zA-Z]/.test(source[nextWordEnd])) { nextWordEnd++; }
         const nextWord = source.slice(castEnd, nextWordEnd);
         if (C_CAST_TYPES.has(nextWord)) {
-          fullCast = castWord + ' ' + nextWord;
           castEnd = nextWordEnd;
         }
       }
@@ -434,7 +427,6 @@ function buildInstructionByteClasses(bytes: Uint8Array): Map<number, string> {
   try {
     const instructions = InstructionDecoder.decodeFunctionBody(bytes);
     for (const instruction of instructions) {
-      const opcodeEnd = instruction.offset + (instruction.length - (instruction.immediates.values.length > 0 ? 1 : 0));
       for (let bytePos = instruction.offset; bytePos < instruction.offset + instruction.length; bytePos++) {
         if (bytePos < instruction.offset + 1 || (instruction.opCode.prefix !== undefined && bytePos < instruction.offset + 2)) {
           classes.set(bytePos, 'hex-opcode');
@@ -443,7 +435,7 @@ function buildInstructionByteClasses(bytes: Uint8Array): Map<number, string> {
         }
       }
     }
-  } catch (decodeError) {
+  } catch {
     // fall back to uncolored
   }
   return classes;
@@ -2448,14 +2440,14 @@ export default class Explorer {
       this.addInfoRow(table, 'Kind', 'array');
       this.addInfoRow(table, 'Element type', getValueTypeName(typeEntry.elementType));
       this.addInfoRow(table, 'Mutable', String(typeEntry.mutable));
-      if ((typeEntry as any).superTypes && (typeEntry as any).superTypes.length > 0) {
-        for (const superIdx of (typeEntry as any).superTypes) {
+      if (typeEntry.superTypes && typeEntry.superTypes.length > 0) {
+        for (const superIdx of typeEntry.superTypes) {
           const topLevelIdx = this.findTopLevelTypeIndex(superIdx);
           this.addLinkedInfoRow(table, 'Extends', `type ${superIdx}`, 'type', topLevelIdx);
         }
       }
-      if ((typeEntry as any).final !== undefined) {
-        this.addInfoRow(table, 'Final', String((typeEntry as any).final));
+      if (typeEntry.final !== undefined) {
+        this.addInfoRow(table, 'Final', String(typeEntry.final));
       }
       detail.appendChild(table);
     } else if (typeEntry.kind === 'rec') {
@@ -3729,7 +3721,7 @@ export default class Explorer {
       const globalIndex = importedFuncCount + funcIndex;
 
       for (const instruction of instructions) {
-        const feature = (instruction.opCode as any).feature as string | undefined;
+        const feature = instruction.opCode.feature;
         if (feature) {
           if (!featureOpcodes.has(feature)) {
             featureOpcodes.set(feature, []);
@@ -3770,7 +3762,7 @@ export default class Explorer {
           const name = readStr();
           targetFeatures.set(name, prefixLabels[prefix] || 'unknown');
         }
-      } catch (parseError) {
+      } catch {
         // ignore parse failures
       }
     }
@@ -3782,7 +3774,6 @@ export default class Explorer {
     for (const name of targetFeatures.keys()) { allFeatureNames.add(name); }
 
     // Determine target spec level
-    const postMvpOpcodeFeatures = new Set(['bulk-memory', 'sign-extend', 'sat-trunc', 'mutable-globals', 'multi-value', 'reference-types', 'simd', 'tail-call', 'relaxed-simd', 'extended-const']);
     const postMvpFeatures = new Set<string>();
     for (const name of allFeatureNames) { postMvpFeatures.add(name); }
     for (const name of targetFeatures.keys()) { postMvpFeatures.add(name); }
@@ -4440,7 +4431,7 @@ export default class Explorer {
         }
         detail.appendChild(table);
       }
-    } catch (parseError) {
+    } catch {
       const errorElement = document.createElement('div');
       errorElement.className = 'detail-description';
       errorElement.textContent = 'Failed to parse producers section.';
@@ -4834,7 +4825,7 @@ export default class Explorer {
     let instructions: import('../src/InstructionDecoder').DecodedInstruction[];
     try {
       instructions = InstructionDecoder.decodeFunctionBody(funcBody);
-    } catch (decodeError) {
+    } catch {
       this.appendByteRange(parent, 'function', funcIndex);
       return;
     }

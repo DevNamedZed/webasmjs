@@ -1,5 +1,4 @@
 import { ModuleInfo, FuncTypeInfo, TypeInfo } from '../BinaryReader';
-import { DecodedInstruction } from '../InstructionDecoder';
 import OpCodes from '../OpCodes';
 import type { OpCodeDef } from '../types';
 import { BasicBlock, ControlFlowGraph } from './ControlFlowGraph';
@@ -296,7 +295,7 @@ export function buildSsa(
           const phiInstr: SsaInstr & { kind: 'phi' } = {
             kind: 'phi',
             result: phiVar,
-            inputs: cfgBlock.predecessors.map((pred, predIdx) => {
+            inputs: cfgBlock.predecessors.map((pred) => {
               const predStack = stackAtExit.get(pred.id) || [];
               return { blockId: pred.id, value: predStack[slotIndex] || values[0] };
             }),
@@ -310,7 +309,7 @@ export function buildSsa(
             stack.push(values[0]);
           } else {
             const phiVar = newVariable(`stack_${slotIndex}_b${cfgBlock.id}`, 'i32', cfgBlock.id);
-            ssaBlock.instructions.push({ kind: 'phi', result: phiVar, inputs: cfgBlock.predecessors.map((pred, predIdx) => ({ blockId: pred.id, value: (stackAtExit.get(pred.id) || [])[slotIndex] || values[0] })) });
+            ssaBlock.instructions.push({ kind: 'phi', result: phiVar, inputs: cfgBlock.predecessors.map((pred) => ({ blockId: pred.id, value: (stackAtExit.get(pred.id) || [])[slotIndex] || values[0] })) });
             stack.push(phiVar);
           }
         }
@@ -517,14 +516,17 @@ export function buildSsa(
           const address = stack.pop();
           if (address && expected && replacement) {
             const result = newVariable(`t${variableCounter}`, resultTypeFromOpCode(opCode), cfgBlock.id);
-            const offsetAddr: SsaValue = offset > 0
-              ? (() => { const r = newVariable(`t${variableCounter}`, 'i32', cfgBlock.id); ssaBlock.instructions.push({ kind: 'binary', result: r, op: '+', left: address, right: { kind: 'const', value: offset, type: 'i32' } }); return r; })()
-              : address;
-            ssaBlock.instructions.push({ kind: 'call', result, target: -3, args: [offsetAddr, expected, replacement] });
+            let effectiveAddress: SsaValue = address;
+            if (offset > 0) {
+              const offsetVar = newVariable(`t${variableCounter}`, 'i32', cfgBlock.id);
+              ssaBlock.instructions.push({ kind: 'binary', result: offsetVar, op: '+', left: address, right: { kind: 'const', value: offset, type: 'i32' } });
+              effectiveAddress = offsetVar;
+            }
+            ssaBlock.instructions.push({ kind: 'call', result, target: -3, args: [effectiveAddress, expected, replacement] });
             stack.push(result);
           }
         } else {
-          const value = stack.pop();
+          stack.pop(); // value operand (consumed but modeled as load)
           const address = stack.pop();
           if (address) {
             const result = newVariable(`t${variableCounter}`, resultTypeFromOpCode(opCode), cfgBlock.id);
@@ -537,8 +539,8 @@ export function buildSsa(
 
       // Atomic wait/notify
       if (opCode.mnemonic.includes('atomic.notify') || opCode.mnemonic.includes('atomic.wait')) {
-        const extra = opCode.mnemonic.includes('wait') ? stack.pop() : undefined;
-        const value = stack.pop();
+        if (opCode.mnemonic.includes('wait')) { stack.pop(); } // timeout operand
+        stack.pop(); // value/expected operand
         const address = stack.pop();
         if (address) {
           const result = newVariable(`t${variableCounter}`, 'i32', cfgBlock.id);

@@ -327,11 +327,11 @@ export function lowerSsaToStatements(
         return { kind: 'store', address: resolveValue(instr.address), offset: instr.offset, storeType: instr.storeType, value: resolveValue(instr.value) };
       case 'call': {
         const funcName = instr.target >= 0 ? names.functionName(instr.target) : (instr.target === -1 ? 'memory.size' : instr.target === -2 ? 'memory.grow' : 'atomic_cmpxchg');
-        let resultName = instr.result ? resolveVarName(instr.result) : null;
+        const resultName = instr.result ? resolveVarName(instr.result) : null;
         return { kind: 'call', name: funcName, args: instr.args.map(a => resolveValue(a)), result: resultName };
       }
       case 'call_indirect': {
-        let resultName = instr.result ? resolveVarName(instr.result) : null;
+        const resultName = instr.result ? resolveVarName(instr.result) : null;
         return { kind: 'call_indirect', tableIndex: resolveValue(instr.tableIndex), args: instr.args.map(a => resolveValue(a)), result: resultName };
       }
       case 'convert': {
@@ -423,8 +423,6 @@ export function lowerSsaToStatements(
 }
 
 // ─── Helpers ───
-
-// Duplicated in OptimizationPasses.ts; kept local since these are trivial type guards.
 
 function getResult(instr: SsaInstr): SsaVariable | null {
   switch (instr.kind) {
@@ -699,31 +697,6 @@ function walkAssigns(node: LoweredNode, callback: (stmt: Statement & { kind: 'as
   // Don't recurse into if/while/switch — those are conditional and not safe to hoist from
 }
 
-function getFirstAssign(node: LoweredNode): (Statement & { kind: 'assign' }) | null {
-  if (node.kind === 'block' && node.body.length > 0 && node.body[0].kind === 'assign') {
-    return node.body[0];
-  }
-  if (node.kind === 'sequence' && node.children.length > 0) {
-    return getFirstAssign(node.children[0]);
-  }
-  return null;
-}
-
-function removeFirstAssign(node: LoweredNode): LoweredNode {
-  if (node.kind === 'block' && node.body.length > 0 && node.body[0].kind === 'assign') {
-    if (node.body.length === 1) { return { kind: 'sequence', children: [] }; }
-    return { kind: 'block', body: node.body.slice(1) };
-  }
-  if (node.kind === 'sequence' && node.children.length > 0) {
-    const first = removeFirstAssign(node.children[0]);
-    const rest = isEmptyLowered(first) ? node.children.slice(1) : [first, ...node.children.slice(1)];
-    if (rest.length === 0) { return { kind: 'sequence', children: [] }; }
-    if (rest.length === 1) { return rest[0]; }
-    return { kind: 'sequence', children: rest };
-  }
-  return node;
-}
-
 /**
  * Collects variables that are assigned exactly once in the node.
  * Returns a map of target → statement for variables with a single assignment.
@@ -989,7 +962,7 @@ function reduceNesting(node: LoweredNode): LoweredNode {
   switch (node.kind) {
     case 'sequence': {
       const children = node.children.map(child => reduceNesting(child));
-      const flattened = flattenGuardClauses(children, false);
+      const flattened = flattenGuardClauses(children);
       if (flattened.length === 1) { return flattened[0]; }
       return { kind: 'sequence', children: flattened };
     }
@@ -1046,7 +1019,7 @@ function reduceLoopBody(body: LoweredNode): LoweredNode {
  * In a sequence, when an if-without-else ends with return/break/continue,
  * pull the subsequent siblings out of the nesting.
  */
-function flattenGuardClauses(children: LoweredNode[], insideLoop: boolean): LoweredNode[] {
+function flattenGuardClauses(children: LoweredNode[]): LoweredNode[] {
   const result: LoweredNode[] = [];
   for (let index = 0; index < children.length; index++) {
     const child = children[index];
@@ -1058,7 +1031,7 @@ function flattenGuardClauses(children: LoweredNode[], insideLoop: boolean): Lowe
       const innerChildren = getChildren(child.thenBody);
       if (innerChildren.length >= 2) {
         const guardCondition = negateExpression(child.condition);
-        const exitNode: LoweredNode = insideLoop ? { kind: 'continue' } : { kind: 'return', value: null };
+        const exitNode: LoweredNode = { kind: 'return', value: null };
         result.push({ kind: 'if', condition: guardCondition, thenBody: exitNode, elseBody: null });
         result.push(...innerChildren);
         continue;
@@ -1249,17 +1222,27 @@ function removeIncrementAndContinue(node: LoweredNode, variableName: string): Lo
     return { kind: 'sequence', children: filtered };
   }
   if (node.kind === 'block') {
-    // Strip trailing continue statement if present
-    let body = node.body;
-    if (body.length > 0 && body[body.length - 1].kind === 'expr' &&
-        (body[body.length - 1] as any).value?.kind === 'var') {
-      // Not a continue — leave as is
-    }
-    const cleaned: LoweredNode & { kind: 'block' } = { kind: 'block', body };
-    return removeTrailingAssignTo(cleaned, variableName) || { kind: 'sequence', children: [] };
+    return removeTrailingAssignTo(node, variableName) || { kind: 'sequence', children: [] };
   }
   if (node.kind === 'continue') {
     return { kind: 'sequence', children: [] };
+  }
+  if (node.kind === 'if') {
+    return {
+      kind: 'if',
+      condition: node.condition,
+      thenBody: removeIncrementAndContinue(node.thenBody, variableName),
+      elseBody: node.elseBody ? removeIncrementAndContinue(node.elseBody, variableName) : null,
+    };
+  }
+  if (node.kind === 'for') {
+    return {
+      kind: 'for',
+      init: node.init,
+      condition: node.condition,
+      increment: node.increment,
+      body: removeIncrementAndContinue(node.body, variableName),
+    };
   }
   return node;
 }
