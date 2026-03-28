@@ -9,7 +9,7 @@
  * 5. Resolves string literal addresses
  */
 
-import { SsaFunction, SsaInstr, SsaValue, SsaVariable, SsaConst, COMPARE_INVERT } from './SsaBuilder';
+import { SsaFunction, SsaInstr, SsaValue, SsaVariable, SsaConst, COMPARE_INVERT, isVariable, isConst } from './SsaBuilder';
 import { StructuredNode } from './StructuralAnalysis';
 import { Expression, Statement, LoweredNode } from './ExpressionIR';
 import { lookupKnownFunction } from './KnownFunctions';
@@ -276,7 +276,7 @@ export function lowerSsaToStatements(
         return resolveValue(instr.value);
       case 'call':
         if (instr.result) {
-          const funcName = instr.target >= 0 ? names.functionName(instr.target) : (instr.target === -1 ? 'memory.size' : 'memory.grow');
+          const funcName = instr.target >= 0 ? names.functionName(instr.target) : (instr.target === -1 ? 'memory.size' : instr.target === -2 ? 'memory.grow' : 'atomic_cmpxchg');
           return { kind: 'call', name: funcName, args: instr.args.map(a => resolveValue(a)) };
         }
         return null;
@@ -326,7 +326,7 @@ export function lowerSsaToStatements(
       case 'store':
         return { kind: 'store', address: resolveValue(instr.address), offset: instr.offset, storeType: instr.storeType, value: resolveValue(instr.value) };
       case 'call': {
-        const funcName = instr.target >= 0 ? names.functionName(instr.target) : (instr.target === -1 ? 'memory.size' : 'memory.grow');
+        const funcName = instr.target >= 0 ? names.functionName(instr.target) : (instr.target === -1 ? 'memory.size' : instr.target === -2 ? 'memory.grow' : 'atomic_cmpxchg');
         let resultName = instr.result ? resolveVarName(instr.result) : null;
         return { kind: 'call', name: funcName, args: instr.args.map(a => resolveValue(a)), result: resultName };
       }
@@ -425,14 +425,6 @@ export function lowerSsaToStatements(
 // ─── Helpers ───
 
 // Duplicated in OptimizationPasses.ts; kept local since these are trivial type guards.
-function isConst(value: SsaValue): value is SsaConst {
-  return 'kind' in value && value.kind === 'const';
-}
-
-// Duplicated in OptimizationPasses.ts; kept local since these are trivial type guards.
-function isVariable(value: SsaValue): value is SsaVariable {
-  return 'id' in value && !('kind' in value);
-}
 
 function getResult(instr: SsaInstr): SsaVariable | null {
   switch (instr.kind) {
@@ -453,9 +445,9 @@ function canInline(instr: SsaInstr): boolean {
     }
     return true;
   }
-  // Calls can be inlined when they have a single use (the lowering preserves block order)
+  // Calls have side effects — never inline them into expression positions
   if (instr.kind === 'call' || instr.kind === 'call_indirect') {
-    return true;
+    return false;
   }
   return instr.kind === 'const' || instr.kind === 'binary' || instr.kind === 'unary' ||
     instr.kind === 'compare' || instr.kind === 'convert' || instr.kind === 'global_get' ||
@@ -1066,8 +1058,8 @@ function flattenGuardClauses(children: LoweredNode[], insideLoop: boolean): Lowe
       const innerChildren = getChildren(child.thenBody);
       if (innerChildren.length >= 2) {
         const guardCondition = negateExpression(child.condition);
-        const exitKind: LoweredNode = { kind: 'return', value: null };
-        result.push({ kind: 'if', condition: guardCondition, thenBody: exitKind, elseBody: null });
+        const exitNode: LoweredNode = insideLoop ? { kind: 'continue' } : { kind: 'return', value: null };
+        result.push({ kind: 'if', condition: guardCondition, thenBody: exitNode, elseBody: null });
         result.push(...innerChildren);
         continue;
       }
@@ -1257,7 +1249,17 @@ function removeIncrementAndContinue(node: LoweredNode, variableName: string): Lo
     return { kind: 'sequence', children: filtered };
   }
   if (node.kind === 'block') {
-    return removeTrailingAssignTo(node, variableName) || { kind: 'sequence', children: [] };
+    // Strip trailing continue statement if present
+    let body = node.body;
+    if (body.length > 0 && body[body.length - 1].kind === 'expr' &&
+        (body[body.length - 1] as any).value?.kind === 'var') {
+      // Not a continue — leave as is
+    }
+    const cleaned: LoweredNode & { kind: 'block' } = { kind: 'block', body };
+    return removeTrailingAssignTo(cleaned, variableName) || { kind: 'sequence', children: [] };
+  }
+  if (node.kind === 'continue') {
+    return { kind: 'sequence', children: [] };
   }
   return node;
 }

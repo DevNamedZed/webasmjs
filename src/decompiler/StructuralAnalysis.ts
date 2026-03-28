@@ -560,8 +560,8 @@ export function structureFunction(
     const trueInlineable = trueBlock && trueBlock.predecessors.length === 1 && !processed.has(trueTarget);
     const falseInlineable = falseBlock && falseBlock.predecessors.length === 1 && !processed.has(falseTarget);
 
-    // Find where the two branches converge
-    const mergePoint = findMergePoint(trueTarget, falseTarget);
+    // Use post-dominator as merge point (more accurate than BFS intersection)
+    const mergePoint = dominance.postImmediateDominator.get(block.id) ?? findMergePoint(trueTarget, falseTarget);
 
     // Both inlineable: if/else with merge at convergence point
     if (trueInlineable && falseInlineable) {
@@ -595,7 +595,16 @@ export function structureFunction(
   }
 
   function findSingleExit(loop: NaturalLoop): number | null {
-    if (loop.exitIds.size > 0) {
+    if (loop.exitIds.size === 1) {
+      return loop.exitIds.values().next().value ?? null;
+    }
+    if (loop.exitIds.size > 1) {
+      // Multiple exits — use post-dominator of loop header as the merge point
+      const postDom = dominance.postImmediateDominator.get(loop.headerId);
+      if (postDom !== undefined && !loop.bodyIds.has(postDom)) {
+        return postDom;
+      }
+      // Fallback: pick the first exit
       return loop.exitIds.values().next().value ?? null;
     }
     return null;

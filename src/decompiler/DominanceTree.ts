@@ -175,23 +175,30 @@ function computeReversePostOrder(
     blockMap.set(block.id, block);
   }
 
-  function visit(blockId: number): void {
-    if (visited.has(blockId)) {
-      return;
-    }
-    visited.add(blockId);
-    const block = blockMap.get(blockId);
+  const stack: { blockId: number; childIndex: number }[] = [{ blockId: rootId, childIndex: 0 }];
+  visited.add(rootId);
+
+  while (stack.length > 0) {
+    const frame = stack[stack.length - 1];
+    const block = blockMap.get(frame.blockId);
     if (!block) {
-      return;
+      stack.pop();
+      continue;
     }
     const successors = forward ? block.successors : block.predecessors;
-    for (const successorId of successors) {
-      visit(successorId);
+    if (frame.childIndex < successors.length) {
+      const childId = successors[frame.childIndex];
+      frame.childIndex++;
+      if (!visited.has(childId)) {
+        visited.add(childId);
+        stack.push({ blockId: childId, childIndex: 0 });
+      }
+    } else {
+      order.push(frame.blockId);
+      stack.pop();
     }
-    order.push(blockId);
   }
 
-  visit(rootId);
   order.reverse();
   return order;
 }

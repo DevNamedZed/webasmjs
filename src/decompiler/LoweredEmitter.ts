@@ -42,16 +42,32 @@ const UNSIGNED_OPS: Record<string, string> = {
   '<u': '<', '>u': '>', '<=u': '<=', '>=u': '>=', '/u': '/', '%u': '%',
 };
 
+export interface FieldResolver {
+  resolveField(baseName: string, offset: number): string | null;
+}
+
 export function emitLowered(
   node: LoweredNode,
   funcSignature: string,
   paramNames: Set<string>,
+  fieldResolver?: FieldResolver,
 ): string {
   const lines: string[] = [];
   let indent = 0;
 
   function emit(text: string): void {
     lines.push('  '.repeat(indent) + text);
+  }
+
+  function formatFieldAccess(base: Expression, offset: number): string {
+    const baseStr = formatExpression(base, 100);
+    if (fieldResolver && base.kind === 'var') {
+      const fieldName = fieldResolver.resolveField(base.name, offset);
+      if (fieldName) {
+        return `${baseStr}->${fieldName}`;
+      }
+    }
+    return `${baseStr}[${offset}]`;
   }
 
   emit(`${funcSignature} {`);
@@ -253,8 +269,7 @@ export function emitLowered(
         break;
       case 'store': {
         if (stmt.address.kind === 'field_access') {
-          const base = formatExpression(stmt.address.base, 100);
-          emit(`${base}[${stmt.address.offset}] = ${formatExpression(stmt.value, 0)};`);
+          emit(`${formatFieldAccess(stmt.address.base, stmt.address.offset)} = ${formatExpression(stmt.value, 0)};`);
         } else {
           const addr = formatExpression(stmt.address, 0);
           const offsetStr = stmt.offset > 0 ? (addr === '0' ? String(stmt.offset) : `${addr} + ${stmt.offset}`) : addr;
@@ -354,8 +369,7 @@ export function emitLowered(
       }
       case 'load': {
         if (expr.address.kind === 'field_access') {
-          const base = formatExpression(expr.address.base, 100);
-          const fieldAccess = `${base}[${expr.address.offset}]`;
+          const fieldAccess = formatFieldAccess(expr.address.base, expr.address.offset);
           const loadCast = LOAD_TYPE_CAST[expr.loadType];
           if (loadCast) {
             return `(${loadCast})${fieldAccess}`;
@@ -388,8 +402,7 @@ export function emitLowered(
         return `${expr.op}(${formatExpression(expr.operand, 0)})`;
       }
       case 'field_access': {
-        const base = formatExpression(expr.base, 100);
-        return `${base}[${expr.offset}]`;
+        return formatFieldAccess(expr.base, expr.offset);
       }
     }
   }

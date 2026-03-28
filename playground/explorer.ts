@@ -100,7 +100,7 @@ function buildByteRanges(data: Uint8Array): ByteRangeMap {
 import { parseDwarfDebugInfo, getLineEntriesForAddressRange } from '../src/DwarfParser';
 import type { DwarfDebugInfo, DwarfLineInfo } from '../src/DwarfParser';
 import { decompileFunction, createNameResolver } from './WasmDecompiler';
-import type { NameResolver } from './WasmDecompiler';
+import type { NameResolver, FieldResolver } from './WasmDecompiler';
 import { parseSourceMap, lookupMapping, getSourceLine } from '../src/SourceMapParser';
 import type { ParsedSourceMap, SourceMapping } from '../src/SourceMapParser';
 
@@ -782,6 +782,112 @@ export default class Explorer {
     return this.dwarfFunctionMap;
   }
 
+  private buildFieldResolver(funcGlobalIndex: number): FieldResolver | undefined {
+    const dwarfData = this.getDwarfInfo();
+    if (!dwarfData || dwarfData.types.size === 0) {
+      return undefined;
+    }
+
+    // Find the DWARF function for this global index
+    const dwarfFunc = this.findDwarfFunctionByGlobalIndex(funcGlobalIndex);
+    if (!dwarfFunc) {
+      return undefined;
+    }
+
+    // For each parameter with a pointer-to-struct type, build varName → field map
+    const varFieldMaps = new Map<string, Map<number, string>>();
+
+    for (const param of dwarfFunc.parameters) {
+      if (!param.name || param.typeOffset === null) {
+        continue;
+      }
+
+      const structFields = this.resolvePointerToStructFields(param.typeOffset, dwarfData.types);
+      if (structFields && structFields.size > 0) {
+        const paramName = param.name.replace(/[^a-zA-Z0-9_$]/g, '_');
+        varFieldMaps.set(paramName, structFields);
+      }
+    }
+
+    // Also check local variables
+    for (const variable of dwarfFunc.variables) {
+      if (!variable.name || variable.typeOffset === null) {
+        continue;
+      }
+
+      const structFields = this.resolvePointerToStructFields(variable.typeOffset, dwarfData.types);
+      if (structFields && structFields.size > 0) {
+        const varName = variable.name.replace(/[^a-zA-Z0-9_$]/g, '_');
+        if (!varFieldMaps.has(varName)) {
+          varFieldMaps.set(varName, structFields);
+        }
+      }
+    }
+
+    if (varFieldMaps.size === 0) {
+      return undefined;
+    }
+
+    return {
+      resolveField(baseName: string, offset: number): string | null {
+        const fieldMap = varFieldMaps.get(baseName);
+        if (fieldMap) {
+          return fieldMap.get(offset) || null;
+        }
+        return null;
+      },
+    };
+  }
+
+  private resolvePointerToStructFields(typeOffset: number, types: Map<number, import('../src/DwarfParser').DwarfTypeInfo>): Map<number, string> | null {
+    const typeInfo = types.get(typeOffset);
+    if (!typeInfo) {
+      return null;
+    }
+
+    // Follow pointer → struct
+    if (typeInfo.tag === 'pointer' && typeInfo.referencedType !== null) {
+      return this.resolvePointerToStructFields(typeInfo.referencedType, types);
+    }
+
+    // Follow typedef → target
+    if (typeInfo.tag === 'typedef' && typeInfo.referencedType !== null) {
+      return this.resolvePointerToStructFields(typeInfo.referencedType, types);
+    }
+
+    // Follow const → target
+    if (typeInfo.tag === 'const' && typeInfo.referencedType !== null) {
+      return this.resolvePointerToStructFields(typeInfo.referencedType, types);
+    }
+
+    // Struct with fields
+    if (typeInfo.tag === 'struct' && typeInfo.fields && typeInfo.fields.length > 0) {
+      const fieldMap = new Map<number, string>();
+      for (const field of typeInfo.fields) {
+        fieldMap.set(field.byteOffset, field.name);
+      }
+      return fieldMap;
+    }
+
+    return null;
+  }
+
+  private findDwarfFunctionByGlobalIndex(globalIndex: number): import('../src/DwarfParser').DwarfFunction | null {
+    const dwarfFuncMap = this.getDwarfFunctionMap();
+    if (!dwarfFuncMap) {
+      return null;
+    }
+    const funcName = dwarfFuncMap.get(globalIndex);
+    if (!funcName) {
+      return null;
+    }
+    const dwarfData = this.getDwarfInfo();
+    if (!dwarfData) {
+      return null;
+    }
+    return dwarfData.functions.find(func => func.name === funcName) || null;
+  }
+
   private buildDwarfParameterTypeMap(): Map<number, Map<number, string>> | null {
     const dwarfData = this.getDwarfInfo();
     if (!dwarfData || dwarfData.functions.length === 0 || !this.moduleInfo) {
@@ -1171,6 +1277,18 @@ export default class Explorer {
           return funcParams?.get(paramIndex) || null;
         } : undefined,
       );
+
+      // Add global variable address resolution from DWARF
+      const dwarfGlobalVars = this.dwarfInfo?.globalVariables;
+      if (dwarfGlobalVars && dwarfGlobalVars.length > 0) {
+        const globalAddrMap = new Map<number, string>();
+        for (const globalVar of dwarfGlobalVars) {
+          globalAddrMap.set(globalVar.address, globalVar.name);
+        }
+        this.nameResolver.resolveGlobalAddress = (address: number): string | null => {
+          return globalAddrMap.get(address) || null;
+        };
+      }
       this.parsedSourceMap = null;
       this.detectSourceMappingUrl();
       this.renderExplorer();
@@ -2561,7 +2679,8 @@ export default class Explorer {
 
       if (activeTab === 'decompiled') {
         if (this.nameResolver && this.moduleInfo) {
-          const decompiledCode = decompileFunction(this.moduleInfo, funcIndex, this.nameResolver);
+          const globalFuncIdx = this.getImportedCount(0) + funcIndex;
+          const decompiledCode = decompileFunction(this.moduleInfo, funcIndex, this.nameResolver, this.buildFieldResolver(globalFuncIdx));
 
           // Build function name → local index map for clickable calls
           const funcNameMap = new Map<string, number>();

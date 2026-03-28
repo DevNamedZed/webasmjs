@@ -25,6 +25,14 @@ export interface SsaConst {
   type: string;
 }
 
+export function isVariable(value: SsaValue): value is SsaVariable {
+  return 'id' in value;
+}
+
+export function isConst(value: SsaValue): value is SsaConst {
+  return 'kind' in value && (value as SsaConst).kind === 'const';
+}
+
 export type SsaInstr =
   | { kind: 'phi'; result: SsaVariable; inputs: { blockId: number; value: SsaValue }[] }
   | { kind: 'assign'; result: SsaVariable; value: SsaValue }
@@ -507,9 +515,12 @@ export function buildSsa(
           const replacement = stack.pop();
           const expected = stack.pop();
           const address = stack.pop();
-          if (address) {
+          if (address && expected && replacement) {
             const result = newVariable(`t${variableCounter}`, resultTypeFromOpCode(opCode), cfgBlock.id);
-            ssaBlock.instructions.push({ kind: 'load', result, address, offset, loadType: opCode.mnemonic });
+            const offsetAddr: SsaValue = offset > 0
+              ? (() => { const r = newVariable(`t${variableCounter}`, 'i32', cfgBlock.id); ssaBlock.instructions.push({ kind: 'binary', result: r, op: '+', left: address, right: { kind: 'const', value: offset, type: 'i32' } }); return r; })()
+              : address;
+            ssaBlock.instructions.push({ kind: 'call', result, target: -3, args: [offsetAddr, expected, replacement] });
             stack.push(result);
           }
         } else {
@@ -576,6 +587,12 @@ export function buildSsa(
             stack.push(result);
           }
           ssaBlock.instructions.push({ kind: 'call', result, target: targetIndex, args });
+          // Push dummy values for additional return values to keep stack balanced
+          for (let retIdx = 1; retIdx < targetType.returnTypes.length; retIdx++) {
+            const extraResult = newVariable(`t${variableCounter}`, wasmTypeStr(targetType.returnTypes[retIdx]), cfgBlock.id);
+            ssaBlock.instructions.push({ kind: 'assign', result: extraResult, value: result! });
+            stack.push(extraResult);
+          }
         }
         continue;
       }
@@ -596,6 +613,11 @@ export function buildSsa(
             stack.push(result);
           }
           ssaBlock.instructions.push({ kind: 'call_indirect', result, tableIndex, typeIndex: typeIdx, args });
+          for (let retIdx = 1; retIdx < calleeType.returnTypes.length; retIdx++) {
+            const extraResult = newVariable(`t${variableCounter}`, wasmTypeStr(calleeType.returnTypes[retIdx]), cfgBlock.id);
+            ssaBlock.instructions.push({ kind: 'assign', result: extraResult, value: result! });
+            stack.push(extraResult);
+          }
         }
         continue;
       }
@@ -788,13 +810,24 @@ export function buildSsa(
 function computeReversePostOrder(cfg: ControlFlowGraph): BasicBlock[] {
   const visited = new Set<number>();
   const order: BasicBlock[] = [];
-  function visit(block: BasicBlock): void {
-    if (visited.has(block.id)) { return; }
-    visited.add(block.id);
-    for (const successor of block.successors) { visit(successor); }
-    order.push(block);
+  const blockStack: { block: BasicBlock; childIndex: number }[] = [{ block: cfg.entry, childIndex: 0 }];
+  visited.add(cfg.entry.id);
+
+  while (blockStack.length > 0) {
+    const frame = blockStack[blockStack.length - 1];
+    if (frame.childIndex < frame.block.successors.length) {
+      const child = frame.block.successors[frame.childIndex];
+      frame.childIndex++;
+      if (!visited.has(child.id)) {
+        visited.add(child.id);
+        blockStack.push({ block: child, childIndex: 0 });
+      }
+    } else {
+      order.push(frame.block);
+      blockStack.pop();
+    }
   }
-  visit(cfg.entry);
+
   order.reverse();
   return order;
 }

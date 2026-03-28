@@ -64,12 +64,20 @@ export interface DwarfTypeInfo {
   fields?: DwarfStructField[];
 }
 
+export interface DwarfGlobalVariable {
+  name: string;
+  address: number;
+  typeOffset: number | null;
+  typeName: string | null;
+}
+
 export interface DwarfDebugInfo {
   lineInfo: DwarfLineInfo | null;
   sourceFiles: string[];
   compilationUnits: DwarfCompilationUnit[];
   functions: DwarfFunction[];
   types: Map<number, DwarfTypeInfo>;
+  globalVariables: DwarfGlobalVariable[];
 }
 
 export function parseDwarfDebugInfo(customSections: { name: string; data: Uint8Array }[]): DwarfDebugInfo {
@@ -101,6 +109,7 @@ export function parseDwarfDebugInfo(customSections: { name: string; data: Uint8A
   let compilationUnits: DwarfCompilationUnit[] = [];
   let allFunctions: DwarfFunction[] = [];
   let allTypes = new Map<number, DwarfTypeInfo>();
+  let allGlobalVariables: DwarfGlobalVariable[] = [];
   if (debugInfoSection && debugAbbrevSection) {
     try {
       const parseResult = parseDebugInfo(
@@ -111,6 +120,7 @@ export function parseDwarfDebugInfo(customSections: { name: string; data: Uint8A
       );
       compilationUnits = parseResult.units;
       allTypes = parseResult.types;
+      allGlobalVariables = parseResult.globalVariables;
       for (const compilationUnit of compilationUnits) {
         allFunctions = allFunctions.concat(compilationUnit.functions);
       }
@@ -120,7 +130,7 @@ export function parseDwarfDebugInfo(customSections: { name: string; data: Uint8A
     }
   }
 
-  return { lineInfo, sourceFiles, compilationUnits, functions: allFunctions, types: allTypes };
+  return { lineInfo, sourceFiles, compilationUnits, functions: allFunctions, types: allTypes, globalVariables: allGlobalVariables };
 }
 
 export function getLineEntriesForAddressRange(lineInfo: DwarfLineInfo, startAddress: number, endAddress: number): DwarfLineEntry[] {
@@ -462,6 +472,7 @@ const DW_AT_decl_file = 0x3a;
 const DW_AT_decl_line = 0x3b;
 const DW_AT_external = 0x3f;
 const DW_AT_type = 0x49;
+const DW_AT_abstract_origin = 0x31;
 const DW_AT_linkage_name = 0x6e;
 
 // DWARF forms
@@ -742,10 +753,11 @@ function parseDebugInfo(
   debugAbbrevData: Uint8Array,
   debugStr: Uint8Array | undefined,
   debugLineStr: Uint8Array | undefined,
-): { units: DwarfCompilationUnit[]; types: Map<number, DwarfTypeInfo> } {
+): { units: DwarfCompilationUnit[]; types: Map<number, DwarfTypeInfo>; globalVariables: DwarfGlobalVariable[] } {
   const reader = new DwarfReader(debugInfoData);
   const compilationUnits: DwarfCompilationUnit[] = [];
   const typeMap = new Map<number, DwarfTypeInfo>();
+  const allGlobalVars: DwarfGlobalVariable[] = [];
 
   while (reader.offset < debugInfoData.length) {
     const unitStart = reader.offset;
@@ -780,6 +792,9 @@ function parseDebugInfo(
     let functionDepth = -1;
     let currentStructType: DwarfTypeInfo | null = null;
     let structDepth = -1;
+    const subprogramMap = new Map<number, DwarfFunction>();
+    const pendingAbstractOrigin: { func: DwarfFunction; abstractOriginOffset: number }[] = [];
+    const unitGlobalVars: DwarfGlobalVariable[] = [];
 
     while (reader.offset < unitEnd) {
       const dieOffset = reader.offset;
@@ -827,14 +842,15 @@ function parseDebugInfo(
         const declFile = attrs.get(DW_AT_decl_file);
         const declLine = attrs.get(DW_AT_decl_line);
         const isExternal = attrs.get(DW_AT_external);
+        const abstractOrigin = attrs.get(DW_AT_abstract_origin);
+
+        let resolvedHighPc = typeof highPc === 'number' ? highPc : 0;
+        const resolvedLowPc = typeof lowPc === 'number' ? lowPc : 0;
+        if (resolvedHighPc > 0 && resolvedHighPc < resolvedLowPc) {
+          resolvedHighPc = resolvedLowPc + resolvedHighPc;
+        }
 
         if (typeof funcName === 'string' || typeof linkageName === 'string') {
-          let resolvedHighPc = typeof highPc === 'number' ? highPc : 0;
-          const resolvedLowPc = typeof lowPc === 'number' ? lowPc : 0;
-          if (resolvedHighPc > 0 && resolvedHighPc < resolvedLowPc) {
-            resolvedHighPc = resolvedLowPc + resolvedHighPc;
-          }
-
           const func: DwarfFunction = {
             name: typeof funcName === 'string' ? funcName : (typeof linkageName === 'string' ? linkageName : ''),
             linkageName: typeof linkageName === 'string' ? linkageName : null,
@@ -846,6 +862,25 @@ function parseDebugInfo(
             parameters: [],
             variables: [],
           };
+          // Store by DIE offset for abstract_origin lookups
+          subprogramMap.set(dieOffset, func);
+          unitFunctions.push(func);
+          currentFunction = func;
+          functionDepth = depth;
+        } else if (typeof abstractOrigin === 'number' && resolvedLowPc > 0) {
+          // Concrete inline instance with address but no name — resolve later
+          const func: DwarfFunction = {
+            name: '',
+            linkageName: null,
+            lowPc: resolvedLowPc,
+            highPc: resolvedHighPc,
+            declFile: typeof declFile === 'number' ? declFile : 0,
+            declLine: typeof declLine === 'number' ? declLine : 0,
+            isExternal: isExternal === true,
+            parameters: [],
+            variables: [],
+          };
+          pendingAbstractOrigin.push({ func, abstractOriginOffset: abstractOrigin });
           unitFunctions.push(func);
           currentFunction = func;
           functionDepth = depth;
@@ -880,6 +915,21 @@ function parseDebugInfo(
               typeOffset: typeof varTypeRef === 'number' ? varTypeRef : null,
             });
           }
+        }
+      }
+
+      // CU-scope variables (global variables with DW_OP_addr addresses)
+      if (!currentFunction && abbrev.tag === DW_TAG_variable) {
+        const varName = attrs.get(DW_AT_name);
+        const location = attrs.get(DW_AT_location);
+        const varTypeRef = attrs.get(DW_AT_type);
+        if (typeof varName === 'string' && typeof location === 'number' && location > 0) {
+          unitGlobalVars.push({
+            name: varName,
+            address: location,
+            typeOffset: typeof varTypeRef === 'number' ? varTypeRef : null,
+            typeName: null,
+          });
         }
       }
 
@@ -930,6 +980,30 @@ function parseDebugInfo(
       }
     }
 
+    // Resolve abstract_origin references: copy name/params from abstract instance to concrete instance
+    for (const pending of pendingAbstractOrigin) {
+      const abstract = subprogramMap.get(pending.abstractOriginOffset);
+      if (abstract) {
+        if (!pending.func.name && abstract.name) {
+          pending.func.name = abstract.name;
+        }
+        if (!pending.func.linkageName && abstract.linkageName) {
+          pending.func.linkageName = abstract.linkageName;
+        }
+        if (pending.func.parameters.length === 0 && abstract.parameters.length > 0) {
+          pending.func.parameters = [...abstract.parameters];
+        }
+        if (pending.func.declFile === 0 && abstract.declFile > 0) {
+          pending.func.declFile = abstract.declFile;
+          pending.func.declLine = abstract.declLine;
+        }
+      }
+    }
+
+    for (const globalVar of unitGlobalVars) {
+      allGlobalVars.push(globalVar);
+    }
+
     compilationUnits.push({
       name: unitName,
       producer: unitProducer,
@@ -941,7 +1015,7 @@ function parseDebugInfo(
     reader.offset = unitEnd;
   }
 
-  return { units: compilationUnits, types: typeMap };
+  return { units: compilationUnits, types: typeMap, globalVariables: allGlobalVars };
 }
 
 /**
@@ -956,6 +1030,11 @@ function parseLocationBlock(data: Uint8Array, offset: number, length: number): n
     return null;
   }
   const opCode = data[offset];
+  // DW_OP_addr = 0x03 — used for global variable addresses
+  if (opCode === 0x03 && length >= 5) {
+    const address = data[offset + 1] | (data[offset + 2] << 8) | (data[offset + 3] << 16) | (data[offset + 4] << 24);
+    return address >>> 0;
+  }
   // DW_OP_WASM_location = 0xED
   if (opCode === 0xED) {
     const locationType = data[offset + 1];

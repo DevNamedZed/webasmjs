@@ -1,4 +1,4 @@
-import { SsaFunction, SsaBlock, SsaInstr, SsaValue, SsaVariable, SsaConst, COMPARE_INVERT } from './SsaBuilder';
+import { SsaFunction, SsaBlock, SsaInstr, SsaValue, SsaVariable, SsaConst, COMPARE_INVERT, isVariable, isConst } from './SsaBuilder';
 
 export function optimizeSsa(ssaFunc: SsaFunction): void {
   stackFrameDetection(ssaFunc);
@@ -68,16 +68,6 @@ function stackFrameDetection(ssaFunc: SsaFunction): void {
     }
     entryBlock.instructions.splice(0, prologueEnd, ...filtered);
   }
-}
-
-// Duplicated in SsaLowering.ts; kept local since these are trivial type guards.
-function isConst(value: SsaValue): value is SsaConst {
-  return 'kind' in value && value.kind === 'const';
-}
-
-// Duplicated in SsaLowering.ts; kept local since these are trivial type guards.
-function isVariable(value: SsaValue): value is SsaVariable {
-  return 'id' in value && !('kind' in value);
 }
 
 function getConstValue(value: SsaValue, defMap?: Map<number, { block: SsaBlock; instruction: SsaInstr }>): number | null {
@@ -461,6 +451,10 @@ function evaluateBinaryOp(op: string, left: number, right: number): number | nul
     case '<<': return left << (right & 31);
     case '>>': return left >> (right & 31);
     case '>>>': return left >>> (right & 31);
+    case '/': return right !== 0 ? (left / right) | 0 : null;
+    case '%': return right !== 0 ? (left % right) | 0 : null;
+    case '/u': return right !== 0 ? ((left >>> 0) / (right >>> 0)) | 0 : null;
+    case '%u': return right !== 0 ? ((left >>> 0) % (right >>> 0)) | 0 : null;
     default: return null;
   }
 }

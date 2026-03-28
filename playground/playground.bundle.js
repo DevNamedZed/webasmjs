@@ -20029,6 +20029,7 @@ log(mod.toString());`
     let compilationUnits = [];
     let allFunctions = [];
     let allTypes = /* @__PURE__ */ new Map();
+    let allGlobalVariables = [];
     if (debugInfoSection && debugAbbrevSection) {
       try {
         const parseResult = parseDebugInfo(
@@ -20039,6 +20040,7 @@ log(mod.toString());`
         );
         compilationUnits = parseResult.units;
         allTypes = parseResult.types;
+        allGlobalVariables = parseResult.globalVariables;
         for (const compilationUnit of compilationUnits) {
           allFunctions = allFunctions.concat(compilationUnit.functions);
         }
@@ -20046,7 +20048,7 @@ log(mod.toString());`
       } catch (parseError) {
       }
     }
-    return { lineInfo, sourceFiles, compilationUnits, functions: allFunctions, types: allTypes };
+    return { lineInfo, sourceFiles, compilationUnits, functions: allFunctions, types: allTypes, globalVariables: allGlobalVariables };
   }
   function parseDebugLine(data, debugStr, debugLineStr) {
     const reader = new DwarfReader(data);
@@ -20341,6 +20343,7 @@ log(mod.toString());`
   var DW_AT_decl_line = 59;
   var DW_AT_external = 63;
   var DW_AT_type = 73;
+  var DW_AT_abstract_origin = 49;
   var DW_AT_linkage_name = 110;
   var DW_FORM_addr = 1;
   var DW_FORM_block2 = 3;
@@ -20691,6 +20694,7 @@ log(mod.toString());`
     const reader = new DwarfReader(debugInfoData);
     const compilationUnits = [];
     const typeMap = /* @__PURE__ */ new Map();
+    const allGlobalVars = [];
     while (reader.offset < debugInfoData.length) {
       const unitStart = reader.offset;
       const unitLength = reader.readUint32();
@@ -20720,6 +20724,9 @@ log(mod.toString());`
       let functionDepth = -1;
       let currentStructType = null;
       let structDepth = -1;
+      const subprogramMap = /* @__PURE__ */ new Map();
+      const pendingAbstractOrigin = [];
+      const unitGlobalVars = [];
       while (reader.offset < unitEnd) {
         const dieOffset = reader.offset;
         const abbrevCode = reader.readULEB128();
@@ -20770,12 +20777,13 @@ log(mod.toString());`
           const declFile = attrs.get(DW_AT_decl_file);
           const declLine = attrs.get(DW_AT_decl_line);
           const isExternal = attrs.get(DW_AT_external);
+          const abstractOrigin = attrs.get(DW_AT_abstract_origin);
+          let resolvedHighPc = typeof highPc === "number" ? highPc : 0;
+          const resolvedLowPc = typeof lowPc === "number" ? lowPc : 0;
+          if (resolvedHighPc > 0 && resolvedHighPc < resolvedLowPc) {
+            resolvedHighPc = resolvedLowPc + resolvedHighPc;
+          }
           if (typeof funcName === "string" || typeof linkageName === "string") {
-            let resolvedHighPc = typeof highPc === "number" ? highPc : 0;
-            const resolvedLowPc = typeof lowPc === "number" ? lowPc : 0;
-            if (resolvedHighPc > 0 && resolvedHighPc < resolvedLowPc) {
-              resolvedHighPc = resolvedLowPc + resolvedHighPc;
-            }
             const func = {
               name: typeof funcName === "string" ? funcName : typeof linkageName === "string" ? linkageName : "",
               linkageName: typeof linkageName === "string" ? linkageName : null,
@@ -20787,6 +20795,23 @@ log(mod.toString());`
               parameters: [],
               variables: []
             };
+            subprogramMap.set(dieOffset, func);
+            unitFunctions.push(func);
+            currentFunction = func;
+            functionDepth = depth;
+          } else if (typeof abstractOrigin === "number" && resolvedLowPc > 0) {
+            const func = {
+              name: "",
+              linkageName: null,
+              lowPc: resolvedLowPc,
+              highPc: resolvedHighPc,
+              declFile: typeof declFile === "number" ? declFile : 0,
+              declLine: typeof declLine === "number" ? declLine : 0,
+              isExternal: isExternal === true,
+              parameters: [],
+              variables: []
+            };
+            pendingAbstractOrigin.push({ func, abstractOriginOffset: abstractOrigin });
             unitFunctions.push(func);
             currentFunction = func;
             functionDepth = depth;
@@ -20818,6 +20843,19 @@ log(mod.toString());`
                 typeOffset: typeof varTypeRef === "number" ? varTypeRef : null
               });
             }
+          }
+        }
+        if (!currentFunction && abbrev.tag === DW_TAG_variable) {
+          const varName = attrs.get(DW_AT_name);
+          const location2 = attrs.get(DW_AT_location);
+          const varTypeRef = attrs.get(DW_AT_type);
+          if (typeof varName === "string" && typeof location2 === "number" && location2 > 0) {
+            unitGlobalVars.push({
+              name: varName,
+              address: location2,
+              typeOffset: typeof varTypeRef === "number" ? varTypeRef : null,
+              typeName: null
+            });
           }
         }
         const typeTagMap = {
@@ -20861,6 +20899,27 @@ log(mod.toString());`
           depth++;
         }
       }
+      for (const pending of pendingAbstractOrigin) {
+        const abstract = subprogramMap.get(pending.abstractOriginOffset);
+        if (abstract) {
+          if (!pending.func.name && abstract.name) {
+            pending.func.name = abstract.name;
+          }
+          if (!pending.func.linkageName && abstract.linkageName) {
+            pending.func.linkageName = abstract.linkageName;
+          }
+          if (pending.func.parameters.length === 0 && abstract.parameters.length > 0) {
+            pending.func.parameters = [...abstract.parameters];
+          }
+          if (pending.func.declFile === 0 && abstract.declFile > 0) {
+            pending.func.declFile = abstract.declFile;
+            pending.func.declLine = abstract.declLine;
+          }
+        }
+      }
+      for (const globalVar of unitGlobalVars) {
+        allGlobalVars.push(globalVar);
+      }
       compilationUnits.push({
         name: unitName,
         producer: unitProducer,
@@ -20870,13 +20929,17 @@ log(mod.toString());`
       });
       reader.offset = unitEnd;
     }
-    return { units: compilationUnits, types: typeMap };
+    return { units: compilationUnits, types: typeMap, globalVariables: allGlobalVars };
   }
   function parseLocationBlock(data, offset, length) {
     if (length < 2) {
       return null;
     }
     const opCode = data[offset];
+    if (opCode === 3 && length >= 5) {
+      const address = data[offset + 1] | data[offset + 2] << 8 | data[offset + 3] << 16 | data[offset + 4] << 24;
+      return address >>> 0;
+    }
     if (opCode === 237) {
       const locationType = data[offset + 1];
       let index = 0;
@@ -21471,6 +21534,12 @@ log(mod.toString());`
     "<=u": ">u",
     ">=u": "<u"
   };
+  function isVariable(value) {
+    return "id" in value;
+  }
+  function isConst(value) {
+    return "kind" in value && value.kind === "const";
+  }
   var BINARY_OPS = /* @__PURE__ */ new Map([
     [OpCodes_default.i32_add, "+"],
     [OpCodes_default.i64_add, "+"],
@@ -21953,9 +22022,14 @@ log(mod.toString());`
             const replacement = stack.pop();
             const expected = stack.pop();
             const address = stack.pop();
-            if (address) {
+            if (address && expected && replacement) {
               const result = newVariable(`t${variableCounter}`, resultTypeFromOpCode(opCode), cfgBlock.id);
-              ssaBlock.instructions.push({ kind: "load", result, address, offset, loadType: opCode.mnemonic });
+              const offsetAddr = offset > 0 ? (() => {
+                const r = newVariable(`t${variableCounter}`, "i32", cfgBlock.id);
+                ssaBlock.instructions.push({ kind: "binary", result: r, op: "+", left: address, right: { kind: "const", value: offset, type: "i32" } });
+                return r;
+              })() : address;
+              ssaBlock.instructions.push({ kind: "call", result, target: -3, args: [offsetAddr, expected, replacement] });
               stack.push(result);
             }
           } else {
@@ -22016,6 +22090,11 @@ log(mod.toString());`
               stack.push(result);
             }
             ssaBlock.instructions.push({ kind: "call", result, target: targetIndex, args });
+            for (let retIdx = 1; retIdx < targetType.returnTypes.length; retIdx++) {
+              const extraResult = newVariable(`t${variableCounter}`, wasmTypeStr(targetType.returnTypes[retIdx]), cfgBlock.id);
+              ssaBlock.instructions.push({ kind: "assign", result: extraResult, value: result });
+              stack.push(extraResult);
+            }
           }
           continue;
         }
@@ -22037,6 +22116,11 @@ log(mod.toString());`
               stack.push(result);
             }
             ssaBlock.instructions.push({ kind: "call_indirect", result, tableIndex, typeIndex: typeIdx, args });
+            for (let retIdx = 1; retIdx < calleeType.returnTypes.length; retIdx++) {
+              const extraResult = newVariable(`t${variableCounter}`, wasmTypeStr(calleeType.returnTypes[retIdx]), cfgBlock.id);
+              ssaBlock.instructions.push({ kind: "assign", result: extraResult, value: result });
+              stack.push(extraResult);
+            }
           }
           continue;
         }
@@ -22200,17 +22284,22 @@ log(mod.toString());`
   function computeReversePostOrder(cfg) {
     const visited = /* @__PURE__ */ new Set();
     const order = [];
-    function visit(block) {
-      if (visited.has(block.id)) {
-        return;
+    const blockStack = [{ block: cfg.entry, childIndex: 0 }];
+    visited.add(cfg.entry.id);
+    while (blockStack.length > 0) {
+      const frame = blockStack[blockStack.length - 1];
+      if (frame.childIndex < frame.block.successors.length) {
+        const child = frame.block.successors[frame.childIndex];
+        frame.childIndex++;
+        if (!visited.has(child.id)) {
+          visited.add(child.id);
+          blockStack.push({ block: child, childIndex: 0 });
+        }
+      } else {
+        order.push(frame.block);
+        blockStack.pop();
       }
-      visited.add(block.id);
-      for (const successor of block.successors) {
-        visit(successor);
-      }
-      order.push(block);
     }
-    visit(cfg.entry);
     order.reverse();
     return order;
   }
@@ -22349,22 +22438,28 @@ log(mod.toString());`
     for (const block of blocks) {
       blockMap.set(block.id, block);
     }
-    function visit(blockId) {
-      if (visited.has(blockId)) {
-        return;
-      }
-      visited.add(blockId);
-      const block = blockMap.get(blockId);
+    const stack = [{ blockId: rootId, childIndex: 0 }];
+    visited.add(rootId);
+    while (stack.length > 0) {
+      const frame = stack[stack.length - 1];
+      const block = blockMap.get(frame.blockId);
       if (!block) {
-        return;
+        stack.pop();
+        continue;
       }
       const successors = forward ? block.successors : block.predecessors;
-      for (const successorId of successors) {
-        visit(successorId);
+      if (frame.childIndex < successors.length) {
+        const childId = successors[frame.childIndex];
+        frame.childIndex++;
+        if (!visited.has(childId)) {
+          visited.add(childId);
+          stack.push({ blockId: childId, childIndex: 0 });
+        }
+      } else {
+        order.push(frame.blockId);
+        stack.pop();
       }
-      order.push(blockId);
     }
-    visit(rootId);
     order.reverse();
     return order;
   }
@@ -23087,7 +23182,7 @@ log(mod.toString());`
       const falseBlock = blockMap.get(falseTarget);
       const trueInlineable = trueBlock && trueBlock.predecessors.length === 1 && !processed.has(trueTarget);
       const falseInlineable = falseBlock && falseBlock.predecessors.length === 1 && !processed.has(falseTarget);
-      const mergePoint = findMergePoint(trueTarget, falseTarget);
+      const mergePoint = dominance.postImmediateDominator.get(block.id) ?? findMergePoint(trueTarget, falseTarget);
       if (trueInlineable && falseInlineable) {
         const thenBody = structureRegion(trueTarget, mergePoint);
         const elseBody = structureRegion(falseTarget, mergePoint);
@@ -23112,7 +23207,14 @@ log(mod.toString());`
       return { node: labeledBody, mergeBlockId: null };
     }
     function findSingleExit(loop) {
-      if (loop.exitIds.size > 0) {
+      if (loop.exitIds.size === 1) {
+        return loop.exitIds.values().next().value ?? null;
+      }
+      if (loop.exitIds.size > 1) {
+        const postDom = dominance.postImmediateDominator.get(loop.headerId);
+        if (postDom !== void 0 && !loop.bodyIds.has(postDom)) {
+          return postDom;
+        }
         return loop.exitIds.values().next().value ?? null;
       }
       return null;
@@ -23223,12 +23325,6 @@ log(mod.toString());`
       }
       entryBlock.instructions.splice(0, prologueEnd, ...filtered);
     }
-  }
-  function isConst(value) {
-    return "kind" in value && value.kind === "const";
-  }
-  function isVariable(value) {
-    return "id" in value && !("kind" in value);
   }
   function getConstValue(value, defMap) {
     if (isConst(value)) {
@@ -23594,6 +23690,14 @@ log(mod.toString());`
         return left >> (right & 31);
       case ">>>":
         return left >>> (right & 31);
+      case "/":
+        return right !== 0 ? left / right | 0 : null;
+      case "%":
+        return right !== 0 ? left % right | 0 : null;
+      case "/u":
+        return right !== 0 ? (left >>> 0) / (right >>> 0) | 0 : null;
+      case "%u":
+        return right !== 0 ? (left >>> 0) % (right >>> 0) | 0 : null;
       default:
         return null;
     }
@@ -24154,7 +24258,7 @@ log(mod.toString());`
       for (const instr of block.instructions) {
         if (instr.kind === "select") {
           for (const operand of [instr.condition, instr.trueVal, instr.falseVal]) {
-            if (isVariable2(operand)) {
+            if (isVariable(operand)) {
               usedInSelect.add(operand.id);
             }
           }
@@ -24181,7 +24285,7 @@ log(mod.toString());`
       }
     }
     function resolveValue(value) {
-      if (isConst2(value)) {
+      if (isConst(value)) {
         const numVal = Number(value.value);
         if (names.resolveAddress && numVal > MIN_STRING_ADDRESS) {
           const resolved = names.resolveAddress(numVal);
@@ -24191,7 +24295,7 @@ log(mod.toString());`
         }
         return { kind: "const", value: value.value, type: value.type };
       }
-      if (isVariable2(value)) {
+      if (isVariable(value)) {
         const cached = exprCache.get(value.id);
         if (cached) {
           return cached;
@@ -24284,7 +24388,7 @@ log(mod.toString());`
           return "cond";
         }
         if (def.kind === "binary" && (def.op === "+" || def.op === "-")) {
-          if (isVariable2(def.left)) {
+          if (isVariable(def.left)) {
             const leftDef = defMap.get(def.left.id);
             if (leftDef && leftDef.kind === "global_get") {
               const leftGlobalName = names.globalName(leftDef.globalIndex);
@@ -24337,7 +24441,7 @@ log(mod.toString());`
           return resolveValue(instr.value);
         case "call":
           if (instr.result) {
-            const funcName = instr.target >= 0 ? names.functionName(instr.target) : instr.target === -1 ? "memory.size" : "memory.grow";
+            const funcName = instr.target >= 0 ? names.functionName(instr.target) : instr.target === -1 ? "memory.size" : instr.target === -2 ? "memory.grow" : "atomic_cmpxchg";
             return { kind: "call", name: funcName, args: instr.args.map((a) => resolveValue(a)) };
           }
           return null;
@@ -24383,7 +24487,7 @@ log(mod.toString());`
         case "store":
           return { kind: "store", address: resolveValue(instr.address), offset: instr.offset, storeType: instr.storeType, value: resolveValue(instr.value) };
         case "call": {
-          const funcName = instr.target >= 0 ? names.functionName(instr.target) : instr.target === -1 ? "memory.size" : "memory.grow";
+          const funcName = instr.target >= 0 ? names.functionName(instr.target) : instr.target === -1 ? "memory.size" : instr.target === -2 ? "memory.grow" : "atomic_cmpxchg";
           let resultName = instr.result ? resolveVarName(instr.result) : null;
           return { kind: "call", name: funcName, args: instr.args.map((a) => resolveValue(a)), result: resultName };
         }
@@ -24476,12 +24580,6 @@ log(mod.toString());`
     }
     return reduceNesting2(cleanupLowered(detectForLoops(hoistCommonAssigns(eliminateDeadAssigns(lowerNode(node))))));
   }
-  function isConst2(value) {
-    return "kind" in value && value.kind === "const";
-  }
-  function isVariable2(value) {
-    return "id" in value && !("kind" in value);
-  }
   function getResult(instr) {
     switch (instr.kind) {
       case "phi":
@@ -24510,7 +24608,7 @@ log(mod.toString());`
       return true;
     }
     if (instr.kind === "call" || instr.kind === "call_indirect") {
-      return true;
+      return false;
     }
     return instr.kind === "const" || instr.kind === "binary" || instr.kind === "unary" || instr.kind === "compare" || instr.kind === "convert" || instr.kind === "global_get" || instr.kind === "load" || instr.kind === "select";
   }
@@ -24529,7 +24627,7 @@ log(mod.toString());`
   function buildUseCount(ssaFunc) {
     const useCount = /* @__PURE__ */ new Map();
     function count(value) {
-      if (isVariable2(value)) {
+      if (isVariable(value)) {
         useCount.set(value.id, (useCount.get(value.id) || 0) + 1);
       }
     }
@@ -24546,7 +24644,7 @@ log(mod.toString());`
   function buildUseSiteContext(ssaFunc) {
     const contextMap = /* @__PURE__ */ new Map();
     function addContext(value, context) {
-      if (isVariable2(value)) {
+      if (isVariable(value)) {
         let contexts = contextMap.get(value.id);
         if (!contexts) {
           contexts = /* @__PURE__ */ new Set();
@@ -24572,7 +24670,7 @@ log(mod.toString());`
       }
       for (const instr of block.instructions) {
         if (instr.kind === "binary" && (instr.op === "+" || instr.op === "-")) {
-          if (isVariable2(instr.left) && !isVariable2(instr.right)) {
+          if (isVariable(instr.left) && !isVariable(instr.right)) {
             const constVal = Number(instr.right.value);
             if (constVal === 1 || constVal === -1 || constVal === 2 || constVal === 4 || constVal === 8) {
               addContext(instr.left, "incremented");
@@ -25096,8 +25194,8 @@ log(mod.toString());`
         const innerChildren = getChildren(child.thenBody);
         if (innerChildren.length >= 2) {
           const guardCondition = negateExpression(child.condition);
-          const exitKind = { kind: "return", value: null };
-          result.push({ kind: "if", condition: guardCondition, thenBody: exitKind, elseBody: null });
+          const exitNode = insideLoop ? { kind: "continue" } : { kind: "return", value: null };
+          result.push({ kind: "if", condition: guardCondition, thenBody: exitNode, elseBody: null });
           result.push(...innerChildren);
           continue;
         }
@@ -25295,7 +25393,14 @@ log(mod.toString());`
       return { kind: "sequence", children: filtered };
     }
     if (node.kind === "block") {
-      return removeTrailingAssignTo(node, variableName) || { kind: "sequence", children: [] };
+      let body = node.body;
+      if (body.length > 0 && body[body.length - 1].kind === "expr" && body[body.length - 1].value?.kind === "var") {
+      }
+      const cleaned = { kind: "block", body };
+      return removeTrailingAssignTo(cleaned, variableName) || { kind: "sequence", children: [] };
+    }
+    if (node.kind === "continue") {
+      return { kind: "sequence", children: [] };
     }
     return node;
   }
@@ -25396,11 +25501,21 @@ log(mod.toString());`
     "/u": "/",
     "%u": "%"
   };
-  function emitLowered(node, funcSignature, paramNames) {
+  function emitLowered(node, funcSignature, paramNames, fieldResolver) {
     const lines = [];
     let indent = 0;
     function emit(text) {
       lines.push("  ".repeat(indent) + text);
+    }
+    function formatFieldAccess(base, offset) {
+      const baseStr = formatExpression(base, 100);
+      if (fieldResolver && base.kind === "var") {
+        const fieldName = fieldResolver.resolveField(base.name, offset);
+        if (fieldName) {
+          return `${baseStr}->${fieldName}`;
+        }
+      }
+      return `${baseStr}[${offset}]`;
     }
     emit(`${funcSignature} {`);
     indent++;
@@ -25575,8 +25690,7 @@ log(mod.toString());`
           break;
         case "store": {
           if (stmt.address.kind === "field_access") {
-            const base = formatExpression(stmt.address.base, 100);
-            emit(`${base}[${stmt.address.offset}] = ${formatExpression(stmt.value, 0)};`);
+            emit(`${formatFieldAccess(stmt.address.base, stmt.address.offset)} = ${formatExpression(stmt.value, 0)};`);
           } else {
             const addr = formatExpression(stmt.address, 0);
             const offsetStr = stmt.offset > 0 ? addr === "0" ? String(stmt.offset) : `${addr} + ${stmt.offset}` : addr;
@@ -25674,8 +25788,7 @@ log(mod.toString());`
         }
         case "load": {
           if (expr.address.kind === "field_access") {
-            const base = formatExpression(expr.address.base, 100);
-            const fieldAccess = `${base}[${expr.address.offset}]`;
+            const fieldAccess = formatFieldAccess(expr.address.base, expr.address.offset);
             const loadCast2 = LOAD_TYPE_CAST[expr.loadType];
             if (loadCast2) {
               return `(${loadCast2})${fieldAccess}`;
@@ -25708,8 +25821,7 @@ log(mod.toString());`
           return `${expr.op}(${formatExpression(expr.operand, 0)})`;
         }
         case "field_access": {
-          const base = formatExpression(expr.base, 100);
-          return `${base}[${expr.offset}]`;
+          return formatFieldAccess(expr.base, expr.offset);
         }
       }
     }
@@ -26249,7 +26361,7 @@ log(mod.toString());`
         const spGlobalName = statement.value.name;
         for (let nextIdx = statementIdx + 1; nextIdx < Math.min(statements.length, statementIdx + 4); nextIdx++) {
           const nextStatement = statements[nextIdx];
-          if (nextStatement.kind === "assign" && nextStatement.value.kind === "binary" && nextStatement.value.op === "sub") {
+          if (nextStatement.kind === "assign" && nextStatement.value.kind === "binary" && nextStatement.value.op === "-") {
             if (nextStatement.value.left.kind === "var" && nextStatement.value.left.name === spVarName && nextStatement.value.right.kind === "const") {
               const frameSize = Number(nextStatement.value.right.value);
               return {
@@ -26499,7 +26611,7 @@ log(mod.toString());`
     }
     return flat;
   }
-  function decompileFunction(moduleInfo, localFuncIndex, nameResolver) {
+  function decompileFunction(moduleInfo, localFuncIndex, nameResolver, fieldResolver) {
     const importedFuncCount = moduleInfo.imports.filter((imp) => imp.kind === 0).length;
     const globalFuncIndex = importedFuncCount + localFuncIndex;
     const func = moduleInfo.functions[localFuncIndex];
@@ -26536,6 +26648,10 @@ log(mod.toString());`
           return nameResolver.globalName(globalIdx).name;
         },
         resolveAddress(address) {
+          const globalName = nameResolver.resolveGlobalAddress?.(address);
+          if (globalName) {
+            return globalName;
+          }
           for (const dataSegment of moduleInfo.data) {
             if (dataSegment.passive) {
               continue;
@@ -26563,7 +26679,7 @@ log(mod.toString());`
       for (let paramIndex = 0; paramIndex < funcTypeEntry.parameterTypes.length; paramIndex++) {
         paramNames.add(nameResolver.localName(globalFuncIndex, paramIndex).name);
       }
-      return emitLowered(lowered, signature, paramNames);
+      return emitLowered(lowered, signature, paramNames, fieldResolver);
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
       return `${signature} {
@@ -27524,6 +27640,89 @@ log(mod.toString());`
       }
       return this.dwarfFunctionMap;
     }
+    buildFieldResolver(funcGlobalIndex) {
+      const dwarfData = this.getDwarfInfo();
+      if (!dwarfData || dwarfData.types.size === 0) {
+        return void 0;
+      }
+      const dwarfFunc = this.findDwarfFunctionByGlobalIndex(funcGlobalIndex);
+      if (!dwarfFunc) {
+        return void 0;
+      }
+      const varFieldMaps = /* @__PURE__ */ new Map();
+      for (const param of dwarfFunc.parameters) {
+        if (!param.name || param.typeOffset === null) {
+          continue;
+        }
+        const structFields = this.resolvePointerToStructFields(param.typeOffset, dwarfData.types);
+        if (structFields && structFields.size > 0) {
+          const paramName = param.name.replace(/[^a-zA-Z0-9_$]/g, "_");
+          varFieldMaps.set(paramName, structFields);
+        }
+      }
+      for (const variable of dwarfFunc.variables) {
+        if (!variable.name || variable.typeOffset === null) {
+          continue;
+        }
+        const structFields = this.resolvePointerToStructFields(variable.typeOffset, dwarfData.types);
+        if (structFields && structFields.size > 0) {
+          const varName = variable.name.replace(/[^a-zA-Z0-9_$]/g, "_");
+          if (!varFieldMaps.has(varName)) {
+            varFieldMaps.set(varName, structFields);
+          }
+        }
+      }
+      if (varFieldMaps.size === 0) {
+        return void 0;
+      }
+      return {
+        resolveField(baseName, offset) {
+          const fieldMap = varFieldMaps.get(baseName);
+          if (fieldMap) {
+            return fieldMap.get(offset) || null;
+          }
+          return null;
+        }
+      };
+    }
+    resolvePointerToStructFields(typeOffset, types) {
+      const typeInfo = types.get(typeOffset);
+      if (!typeInfo) {
+        return null;
+      }
+      if (typeInfo.tag === "pointer" && typeInfo.referencedType !== null) {
+        return this.resolvePointerToStructFields(typeInfo.referencedType, types);
+      }
+      if (typeInfo.tag === "typedef" && typeInfo.referencedType !== null) {
+        return this.resolvePointerToStructFields(typeInfo.referencedType, types);
+      }
+      if (typeInfo.tag === "const" && typeInfo.referencedType !== null) {
+        return this.resolvePointerToStructFields(typeInfo.referencedType, types);
+      }
+      if (typeInfo.tag === "struct" && typeInfo.fields && typeInfo.fields.length > 0) {
+        const fieldMap = /* @__PURE__ */ new Map();
+        for (const field of typeInfo.fields) {
+          fieldMap.set(field.byteOffset, field.name);
+        }
+        return fieldMap;
+      }
+      return null;
+    }
+    findDwarfFunctionByGlobalIndex(globalIndex) {
+      const dwarfFuncMap = this.getDwarfFunctionMap();
+      if (!dwarfFuncMap) {
+        return null;
+      }
+      const funcName = dwarfFuncMap.get(globalIndex);
+      if (!funcName) {
+        return null;
+      }
+      const dwarfData = this.getDwarfInfo();
+      if (!dwarfData) {
+        return null;
+      }
+      return dwarfData.functions.find((func) => func.name === funcName) || null;
+    }
     buildDwarfParameterTypeMap() {
       const dwarfData = this.getDwarfInfo();
       if (!dwarfData || dwarfData.functions.length === 0 || !this.moduleInfo) {
@@ -27858,6 +28057,16 @@ log(mod.toString());`
             return funcParams?.get(paramIndex) || null;
           } : void 0
         );
+        const dwarfGlobalVars = this.dwarfInfo?.globalVariables;
+        if (dwarfGlobalVars && dwarfGlobalVars.length > 0) {
+          const globalAddrMap = /* @__PURE__ */ new Map();
+          for (const globalVar of dwarfGlobalVars) {
+            globalAddrMap.set(globalVar.address, globalVar.name);
+          }
+          this.nameResolver.resolveGlobalAddress = (address) => {
+            return globalAddrMap.get(address) || null;
+          };
+        }
         this.parsedSourceMap = null;
         this.detectSourceMappingUrl();
         this.renderExplorer();
@@ -29111,12 +29320,13 @@ ${funcEntry.body.length} bytes, ${totalLocals} locals`,
         });
         if (activeTab === "decompiled") {
           if (this.nameResolver && this.moduleInfo) {
-            const decompiledCode = decompileFunction(this.moduleInfo, funcIndex, this.nameResolver);
+            const globalFuncIdx = this.getImportedCount(0) + funcIndex;
+            const decompiledCode = decompileFunction(this.moduleInfo, funcIndex, this.nameResolver, this.buildFieldResolver(globalFuncIdx));
             const funcNameMap = /* @__PURE__ */ new Map();
             const importedFuncCount2 = this.getImportedCount(0);
             for (let localFuncIdx = 0; localFuncIdx < this.moduleInfo.functions.length; localFuncIdx++) {
-              const globalFuncIdx = importedFuncCount2 + localFuncIdx;
-              const nameRes = this.nameResolver.functionName(globalFuncIdx);
+              const globalFuncIdx2 = importedFuncCount2 + localFuncIdx;
+              const nameRes = this.nameResolver.functionName(globalFuncIdx2);
               funcNameMap.set(nameRes.name, localFuncIdx);
             }
             const highlightOptions = {

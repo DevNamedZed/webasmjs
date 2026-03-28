@@ -1,9 +1,10 @@
 import { ModuleInfo } from '../src/BinaryReader';
 import { decompileFunction, createNameResolver } from '../src/decompiler/Decompiler';
 import type { NameResolver, NameResolution } from '../src/decompiler/Decompiler';
+import type { FieldResolver } from '../src/decompiler/LoweredEmitter';
 import type { DwarfDebugInfo, DwarfFunction } from '../src/DwarfParser';
 
-export type { NameResolver, NameResolution };
+export type { NameResolver, NameResolution, FieldResolver };
 export { decompileFunction, createNameResolver };
 
 export function createNameResolverWithDwarf(

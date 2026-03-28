@@ -8,7 +8,7 @@ import { structureFunction } from './StructuralAnalysis';
 import { optimizeSsa } from './OptimizationPasses';
 import { lowerSsaToStatements } from './SsaLowering';
 import type { LoweringNameProvider } from './SsaLowering';
-import { emitLowered, WASM_TO_C_TYPE } from './LoweredEmitter';
+import { emitLowered, WASM_TO_C_TYPE, FieldResolver } from './LoweredEmitter';
 import { annotateMemoryPatterns } from './MemoryPatterns';
 import { removeStackFrame, StackFrameResult } from './StackFramePass';
 
@@ -20,6 +20,7 @@ export interface NameResolver {
   functionName(globalIndex: number): NameResolution;
   localName(funcGlobalIndex: number, localIndex: number): NameResolution;
   parameterType?(funcGlobalIndex: number, paramIndex: number): string | null;
+  resolveGlobalAddress?(address: number): string | null;
   globalName(globalIndex: number): NameResolution;
   typeName(typeIndex: number): string | null;
 }
@@ -116,6 +117,7 @@ export function decompileFunction(
   moduleInfo: ModuleInfo,
   localFuncIndex: number,
   nameResolver: NameResolver,
+  fieldResolver?: FieldResolver,
 ): string {
   const importedFuncCount = moduleInfo.imports.filter(imp => imp.kind === 0).length;
   const globalFuncIndex = importedFuncCount + localFuncIndex;
@@ -160,6 +162,11 @@ export function decompileFunction(
         return nameResolver.globalName(globalIdx).name;
       },
       resolveAddress(address: number): string | null {
+        // Check named global variables first
+        const globalName = nameResolver.resolveGlobalAddress?.(address);
+        if (globalName) {
+          return globalName;
+        }
         for (const dataSegment of moduleInfo.data) {
           if (dataSegment.passive) { continue; }
           const segmentOffset = getDataSegmentOffset(dataSegment);
@@ -186,7 +193,7 @@ export function decompileFunction(
       paramNames.add(nameResolver.localName(globalFuncIndex, paramIndex).name);
     }
 
-    return emitLowered(lowered, signature, paramNames);
+    return emitLowered(lowered, signature, paramNames, fieldResolver);
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : String(error);
     return `${signature} {\n  // Decompilation failed: ${errorMessage}\n}`;

@@ -38,7 +38,7 @@ function extractFrameAlloc(statements: Statement[]): StackFrameInfo | null {
       // Look for fp = sp - N in next statements
       for (let nextIdx = statementIdx + 1; nextIdx < Math.min(statements.length, statementIdx + 4); nextIdx++) {
         const nextStatement = statements[nextIdx];
-        if (nextStatement.kind === 'assign' && nextStatement.value.kind === 'binary' && nextStatement.value.op === 'sub') {
+        if (nextStatement.kind === 'assign' && nextStatement.value.kind === 'binary' && nextStatement.value.op === '-') {
           if (nextStatement.value.left.kind === 'var' && nextStatement.value.left.name === spVarName &&
               nextStatement.value.right.kind === 'const') {
             const frameSize = Number(nextStatement.value.right.value);
