@@ -25406,6 +25406,11 @@ log(mod.toString());`
     indent++;
     const declaredVars = /* @__PURE__ */ new Set();
     collectAssignTargets(node, declaredVars);
+    const referencedVars = /* @__PURE__ */ new Set();
+    collectReferencedVars(node, referencedVars);
+    for (const refVar of referencedVars) {
+      declaredVars.add(refVar);
+    }
     const varTypes = /* @__PURE__ */ new Map();
     collectAssignTypes(node, varTypes);
     for (const varName of declaredVars) {
@@ -25825,6 +25830,127 @@ log(mod.toString());`
         break;
     }
   }
+  function collectReferencedVars(node, refs) {
+    function scanExpr(expr) {
+      if (expr.kind === "var") {
+        refs.add(expr.name);
+      }
+      if (expr.kind === "binary") {
+        scanExpr(expr.left);
+        scanExpr(expr.right);
+      }
+      if (expr.kind === "unary") {
+        scanExpr(expr.operand);
+      }
+      if (expr.kind === "compare") {
+        scanExpr(expr.left);
+        scanExpr(expr.right);
+      }
+      if (expr.kind === "load") {
+        scanExpr(expr.address);
+      }
+      if (expr.kind === "call") {
+        for (const arg of expr.args) {
+          scanExpr(arg);
+        }
+      }
+      if (expr.kind === "call_indirect") {
+        scanExpr(expr.tableIndex);
+        for (const arg of expr.args) {
+          scanExpr(arg);
+        }
+      }
+      if (expr.kind === "select") {
+        scanExpr(expr.condition);
+        scanExpr(expr.trueVal);
+        scanExpr(expr.falseVal);
+      }
+      if (expr.kind === "convert") {
+        scanExpr(expr.operand);
+      }
+      if (expr.kind === "field_access") {
+        scanExpr(expr.base);
+      }
+    }
+    function scanStmt(stmt) {
+      if (stmt.kind === "assign") {
+        scanExpr(stmt.value);
+      }
+      if (stmt.kind === "store") {
+        scanExpr(stmt.address);
+        scanExpr(stmt.value);
+      }
+      if (stmt.kind === "call") {
+        for (const arg of stmt.args) {
+          scanExpr(arg);
+        }
+      }
+      if (stmt.kind === "call_indirect") {
+        scanExpr(stmt.tableIndex);
+        for (const arg of stmt.args) {
+          scanExpr(arg);
+        }
+      }
+      if (stmt.kind === "global_set") {
+        scanExpr(stmt.value);
+      }
+      if (stmt.kind === "return" && stmt.value) {
+        scanExpr(stmt.value);
+      }
+    }
+    switch (node.kind) {
+      case "sequence":
+        for (const child of node.children) {
+          collectReferencedVars(child, refs);
+        }
+        break;
+      case "block":
+        for (const stmt of node.body) {
+          scanStmt(stmt);
+        }
+        break;
+      case "if":
+        if (node.condition) {
+          scanExpr(node.condition);
+        }
+        collectReferencedVars(node.thenBody, refs);
+        if (node.elseBody) {
+          collectReferencedVars(node.elseBody, refs);
+        }
+        break;
+      case "while":
+        if (node.condition) {
+          scanExpr(node.condition);
+        }
+        collectReferencedVars(node.body, refs);
+        break;
+      case "do_while":
+        collectReferencedVars(node.body, refs);
+        scanExpr(node.condition);
+        break;
+      case "for":
+        scanStmt(node.init);
+        scanExpr(node.condition);
+        scanStmt(node.increment);
+        collectReferencedVars(node.body, refs);
+        break;
+      case "labeled_block":
+        collectReferencedVars(node.body, refs);
+        break;
+      case "switch":
+        scanExpr(node.selector);
+        for (const c of node.cases) {
+          collectReferencedVars(c.body, refs);
+        }
+        collectReferencedVars(node.defaultBody, refs);
+        break;
+      case "return":
+        if (node.value) {
+          scanExpr(node.value);
+        }
+        break;
+    }
+  }
   function alwaysTerminates(node) {
     switch (node.kind) {
       case "return":
@@ -26136,13 +26262,22 @@ log(mod.toString());`
         }
       }
       if (statement.value.kind === "binary" && statement.value.op === "-") {
-        if (statement.value.left.kind === "global" && isStackPointerGlobal(statement.value.left.name) && statement.value.right.kind === "const") {
-          const frameSize = Number(statement.value.right.value);
-          return {
-            stackPointerName: statement.value.left.name,
-            frameVarName: statement.target,
-            frameSize
-          };
+        if (statement.value.left.kind === "global" && isStackPointerGlobal(statement.value.left.name)) {
+          const rightSide = statement.value.right;
+          if (rightSide.kind === "const") {
+            return {
+              stackPointerName: statement.value.left.name,
+              frameVarName: statement.target,
+              frameSize: Number(rightSide.value)
+            };
+          }
+          if (rightSide.kind === "string_literal") {
+            return {
+              stackPointerName: statement.value.left.name,
+              frameVarName: statement.target,
+              frameSize: rightSide.address
+            };
+          }
         }
       }
     }
@@ -26154,8 +26289,11 @@ log(mod.toString());`
       return false;
     }
     if (globalSet.value.kind === "binary" && globalSet.value.op === "+") {
-      if (globalSet.value.left.kind === "var" && globalSet.value.left.name === frameInfo.frameVarName && globalSet.value.right.kind === "const" && Number(globalSet.value.right.value) === frameInfo.frameSize) {
-        return true;
+      if (globalSet.value.left.kind === "var" && globalSet.value.left.name === frameInfo.frameVarName) {
+        const rightSide = globalSet.value.right;
+        if (rightSide.kind === "const" && Number(rightSide.value) === frameInfo.frameSize || rightSide.kind === "string_literal" && rightSide.address === frameInfo.frameSize) {
+          return true;
+        }
       }
     }
     if (globalSet.value.kind === "var") {
@@ -26164,10 +26302,10 @@ log(mod.toString());`
     return false;
   }
   function isStackFramePrologue(statement, frameInfo) {
-    if (statement.kind === "assign" && statement.value.kind === "global" && statement.value.name === frameInfo.stackPointerName) {
+    if (statement.kind === "assign" && statement.value.kind === "global" && isStackPointerGlobal(statement.value.name)) {
       return true;
     }
-    if (statement.kind === "assign" && statement.target === frameInfo.frameVarName && statement.value.kind === "binary" && statement.value.op === "-") {
+    if (statement.kind === "assign" && statement.target === frameInfo.frameVarName) {
       return true;
     }
     if (statement.kind === "global_set" && isStackPointerGlobal(statement.name)) {
@@ -26220,6 +26358,38 @@ log(mod.toString());`
         return node;
     }
   }
+  function removeBareSPReferences(node) {
+    switch (node.kind) {
+      case "block": {
+        const filtered = node.body.filter((statement) => {
+          if (statement.kind === "global_set" && isStackPointerGlobal(statement.name)) {
+            return false;
+          }
+          if (statement.kind === "assign" && statement.value.kind === "global" && isStackPointerGlobal(statement.value.name)) {
+            return false;
+          }
+          return true;
+        });
+        return { kind: "block", body: filtered };
+      }
+      case "sequence":
+        return { kind: "sequence", children: node.children.map((child) => removeBareSPReferences(child)) };
+      case "if":
+        return { kind: "if", condition: node.condition, thenBody: removeBareSPReferences(node.thenBody), elseBody: node.elseBody ? removeBareSPReferences(node.elseBody) : null };
+      case "while":
+        return { kind: "while", condition: node.condition, body: removeBareSPReferences(node.body) };
+      case "do_while":
+        return { kind: "do_while", body: removeBareSPReferences(node.body), condition: node.condition };
+      case "for":
+        return { kind: "for", init: node.init, condition: node.condition, increment: node.increment, body: removeBareSPReferences(node.body) };
+      case "labeled_block":
+        return { kind: "labeled_block", label: node.label, body: removeBareSPReferences(node.body) };
+      case "switch":
+        return { kind: "switch", selector: node.selector, cases: node.cases.map((c) => ({ values: c.values, body: removeBareSPReferences(c.body) })), defaultBody: removeBareSPReferences(node.defaultBody) };
+      default:
+        return node;
+    }
+  }
   function getFirstBlock(node) {
     if (node.kind === "block") {
       return node.body;
@@ -26236,7 +26406,7 @@ log(mod.toString());`
     }
     const frameInfo = extractFrameAlloc(firstBlock);
     if (!frameInfo) {
-      return { node, frameVarName: null, frameSize: 0 };
+      return { node: removeBareSPReferences(node), frameVarName: null, frameSize: 0 };
     }
     return {
       node: processNode(node, frameInfo),
@@ -30844,6 +31014,17 @@ ${funcEntry.body.length} bytes, ${totalLocals} locals`,
       }
       let selectedInstrIdx = -1;
       const instrRows = [];
+      const clearHighlight = () => {
+        if (selectedInstrIdx >= 0 && selectedInstrIdx < instrRows.length) {
+          instrRows[selectedInstrIdx].classList.remove("hex-instr-active");
+        }
+        for (const spans of byteSpans.values()) {
+          for (const span of spans) {
+            span.classList.remove("hex-byte-active");
+          }
+        }
+        selectedInstrIdx = -1;
+      };
       const highlightInstruction = (targetIdx) => {
         if (selectedInstrIdx >= 0 && selectedInstrIdx < instrRows.length) {
           instrRows[selectedInstrIdx].classList.remove("hex-instr-active");
@@ -30883,24 +31064,25 @@ ${funcEntry.body.length} bytes, ${totalLocals} locals`,
           immediates.textContent = instruction.immediates.values.join(", ");
           row.appendChild(immediates);
         }
-        row.addEventListener("click", () => highlightInstruction(instrIdx));
+        row.addEventListener("mouseenter", () => highlightInstruction(instrIdx));
         instrList.appendChild(row);
         instrRows.push(row);
       }
-      hexView.addEventListener("click", (event) => {
+      instrList.addEventListener("mouseleave", () => clearHighlight());
+      hexView.addEventListener("mouseover", (event) => {
         const target = event.target;
         if (target.dataset.offset !== void 0) {
-          const clickedOffset = parseInt(target.dataset.offset, 10);
+          const hoveredOffset = parseInt(target.dataset.offset, 10);
           for (let instrIdx = 0; instrIdx < instructions.length; instrIdx++) {
             const instruction = instructions[instrIdx];
-            if (clickedOffset >= instruction.offset && clickedOffset < instruction.offset + instruction.length) {
+            if (hoveredOffset >= instruction.offset && hoveredOffset < instruction.offset + instruction.length) {
               highlightInstruction(instrIdx);
-              instrRows[instrIdx].scrollIntoView({ block: "nearest" });
               break;
             }
           }
         }
       });
+      hexView.addEventListener("mouseleave", () => clearHighlight());
       splitContainer.appendChild(instrList);
       splitContainer.appendChild(hexView);
       parent.appendChild(splitContainer);

@@ -60,6 +60,12 @@ export function emitLowered(
   // Collect and emit local declarations
   const declaredVars = new Set<string>();
   collectAssignTargets(node, declaredVars);
+  const referencedVars = new Set<string>();
+  collectReferencedVars(node, referencedVars);
+  // Add referenced-but-not-assigned variables (e.g., stack frame pointers after prologue removal)
+  for (const refVar of referencedVars) {
+    declaredVars.add(refVar);
+  }
   const varTypes = new Map<string, string>();
   collectAssignTypes(node, varTypes);
   for (const varName of declaredVars) {
@@ -469,6 +475,40 @@ function collectAssignTypes(node: LoweredNode, types: Map<string, string>): void
       for (const c of node.cases) { collectAssignTypes(c.body, types); }
       collectAssignTypes(node.defaultBody, types);
       break;
+  }
+}
+
+function collectReferencedVars(node: LoweredNode, refs: Set<string>): void {
+  function scanExpr(expr: Expression): void {
+    if (expr.kind === 'var') { refs.add(expr.name); }
+    if (expr.kind === 'binary') { scanExpr(expr.left); scanExpr(expr.right); }
+    if (expr.kind === 'unary') { scanExpr(expr.operand); }
+    if (expr.kind === 'compare') { scanExpr(expr.left); scanExpr(expr.right); }
+    if (expr.kind === 'load') { scanExpr(expr.address); }
+    if (expr.kind === 'call') { for (const arg of expr.args) { scanExpr(arg); } }
+    if (expr.kind === 'call_indirect') { scanExpr(expr.tableIndex); for (const arg of expr.args) { scanExpr(arg); } }
+    if (expr.kind === 'select') { scanExpr(expr.condition); scanExpr(expr.trueVal); scanExpr(expr.falseVal); }
+    if (expr.kind === 'convert') { scanExpr(expr.operand); }
+    if (expr.kind === 'field_access') { scanExpr(expr.base); }
+  }
+  function scanStmt(stmt: Statement): void {
+    if (stmt.kind === 'assign') { scanExpr(stmt.value); }
+    if (stmt.kind === 'store') { scanExpr(stmt.address); scanExpr(stmt.value); }
+    if (stmt.kind === 'call') { for (const arg of stmt.args) { scanExpr(arg); } }
+    if (stmt.kind === 'call_indirect') { scanExpr(stmt.tableIndex); for (const arg of stmt.args) { scanExpr(arg); } }
+    if (stmt.kind === 'global_set') { scanExpr(stmt.value); }
+    if (stmt.kind === 'return' && stmt.value) { scanExpr(stmt.value); }
+  }
+  switch (node.kind) {
+    case 'sequence': for (const child of node.children) { collectReferencedVars(child, refs); } break;
+    case 'block': for (const stmt of node.body) { scanStmt(stmt); } break;
+    case 'if': if (node.condition) { scanExpr(node.condition); } collectReferencedVars(node.thenBody, refs); if (node.elseBody) { collectReferencedVars(node.elseBody, refs); } break;
+    case 'while': if (node.condition) { scanExpr(node.condition); } collectReferencedVars(node.body, refs); break;
+    case 'do_while': collectReferencedVars(node.body, refs); scanExpr(node.condition); break;
+    case 'for': scanStmt(node.init); scanExpr(node.condition); scanStmt(node.increment); collectReferencedVars(node.body, refs); break;
+    case 'labeled_block': collectReferencedVars(node.body, refs); break;
+    case 'switch': scanExpr(node.selector); for (const c of node.cases) { collectReferencedVars(c.body, refs); } collectReferencedVars(node.defaultBody, refs); break;
+    case 'return': if (node.value) { scanExpr(node.value); } break;
   }
 }
 

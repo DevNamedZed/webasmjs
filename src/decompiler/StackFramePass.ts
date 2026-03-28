@@ -53,15 +53,24 @@ function extractFrameAlloc(statements: Statement[]): StackFrameInfo | null {
     }
 
     // Check if this is fp = __stack_pointer - N directly
+    // Also match when N was falsely resolved to a string literal
     if (statement.value.kind === 'binary' && statement.value.op === '-') {
-      if (statement.value.left.kind === 'global' && isStackPointerGlobal(statement.value.left.name) &&
-          statement.value.right.kind === 'const') {
-        const frameSize = Number(statement.value.right.value);
-        return {
-          stackPointerName: statement.value.left.name,
-          frameVarName: statement.target,
-          frameSize,
-        };
+      if (statement.value.left.kind === 'global' && isStackPointerGlobal(statement.value.left.name)) {
+        const rightSide = statement.value.right;
+        if (rightSide.kind === 'const') {
+          return {
+            stackPointerName: statement.value.left.name,
+            frameVarName: statement.target,
+            frameSize: Number(rightSide.value),
+          };
+        }
+        if (rightSide.kind === 'string_literal') {
+          return {
+            stackPointerName: statement.value.left.name,
+            frameVarName: statement.target,
+            frameSize: rightSide.address,
+          };
+        }
       }
     }
   }
@@ -75,11 +84,14 @@ function isEpilogueRestore(statement: Statement, frameInfo: StackFrameInfo): boo
     return false;
   }
 
-  // __stack_pointer = fp + N
+  // __stack_pointer = fp + N (or fp + "string" when falsely resolved)
   if (globalSet.value.kind === 'binary' && globalSet.value.op === '+') {
-    if (globalSet.value.left.kind === 'var' && globalSet.value.left.name === frameInfo.frameVarName &&
-        globalSet.value.right.kind === 'const' && Number(globalSet.value.right.value) === frameInfo.frameSize) {
-      return true;
+    if (globalSet.value.left.kind === 'var' && globalSet.value.left.name === frameInfo.frameVarName) {
+      const rightSide = globalSet.value.right;
+      if ((rightSide.kind === 'const' && Number(rightSide.value) === frameInfo.frameSize) ||
+          (rightSide.kind === 'string_literal' && rightSide.address === frameInfo.frameSize)) {
+        return true;
+      }
     }
   }
 
@@ -92,15 +104,14 @@ function isEpilogueRestore(statement: Statement, frameInfo: StackFrameInfo): boo
 }
 
 function isStackFramePrologue(statement: Statement, frameInfo: StackFrameInfo): boolean {
-  // sp = global_get(__stack_pointer)
+  // sp = global_get(__stack_pointer) — any read of the stack pointer global
   if (statement.kind === 'assign' && statement.value.kind === 'global' &&
-      statement.value.name === frameInfo.stackPointerName) {
+      isStackPointerGlobal(statement.value.name)) {
     return true;
   }
 
-  // fp = sp - N
-  if (statement.kind === 'assign' && statement.target === frameInfo.frameVarName &&
-      statement.value.kind === 'binary' && statement.value.op === '-') {
+  // fp = sp - N (frame allocation)
+  if (statement.kind === 'assign' && statement.target === frameInfo.frameVarName) {
     return true;
   }
 
@@ -159,6 +170,39 @@ function processNode(node: LoweredNode, frameInfo: StackFrameInfo): LoweredNode 
   }
 }
 
+function removeBareSPReferences(node: LoweredNode): LoweredNode {
+  switch (node.kind) {
+    case 'block': {
+      const filtered = node.body.filter(statement => {
+        if (statement.kind === 'global_set' && isStackPointerGlobal(statement.name)) {
+          return false;
+        }
+        if (statement.kind === 'assign' && statement.value.kind === 'global' && isStackPointerGlobal(statement.value.name)) {
+          return false;
+        }
+        return true;
+      });
+      return { kind: 'block', body: filtered };
+    }
+    case 'sequence':
+      return { kind: 'sequence', children: node.children.map(child => removeBareSPReferences(child)) };
+    case 'if':
+      return { kind: 'if', condition: node.condition, thenBody: removeBareSPReferences(node.thenBody), elseBody: node.elseBody ? removeBareSPReferences(node.elseBody) : null };
+    case 'while':
+      return { kind: 'while', condition: node.condition, body: removeBareSPReferences(node.body) };
+    case 'do_while':
+      return { kind: 'do_while', body: removeBareSPReferences(node.body), condition: node.condition };
+    case 'for':
+      return { kind: 'for', init: node.init, condition: node.condition, increment: node.increment, body: removeBareSPReferences(node.body) };
+    case 'labeled_block':
+      return { kind: 'labeled_block', label: node.label, body: removeBareSPReferences(node.body) };
+    case 'switch':
+      return { kind: 'switch', selector: node.selector, cases: node.cases.map(c => ({ values: c.values, body: removeBareSPReferences(c.body) })), defaultBody: removeBareSPReferences(node.defaultBody) };
+    default:
+      return node;
+  }
+}
+
 function getFirstBlock(node: LoweredNode): Statement[] | null {
   if (node.kind === 'block') {
     return node.body;
@@ -183,7 +227,8 @@ export function removeStackFrame(node: LoweredNode): StackFrameResult {
 
   const frameInfo = extractFrameAlloc(firstBlock);
   if (!frameInfo) {
-    return { node, frameVarName: null, frameSize: 0 };
+    // Even without a frame allocation, remove bare __stack_pointer global_set/global_get
+    return { node: removeBareSPReferences(node), frameVarName: null, frameSize: 0 };
   }
 
   return {

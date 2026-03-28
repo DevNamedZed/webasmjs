@@ -4794,6 +4794,18 @@ export default class Explorer {
     let selectedInstrIdx = -1;
     const instrRows: HTMLElement[] = [];
 
+    const clearHighlight = (): void => {
+      if (selectedInstrIdx >= 0 && selectedInstrIdx < instrRows.length) {
+        instrRows[selectedInstrIdx].classList.remove('hex-instr-active');
+      }
+      for (const spans of byteSpans.values()) {
+        for (const span of spans) {
+          span.classList.remove('hex-byte-active');
+        }
+      }
+      selectedInstrIdx = -1;
+    };
+
     const highlightInstruction = (targetIdx: number): void => {
       if (selectedInstrIdx >= 0 && selectedInstrIdx < instrRows.length) {
         instrRows[selectedInstrIdx].classList.remove('hex-instr-active');
@@ -4839,26 +4851,29 @@ export default class Explorer {
         row.appendChild(immediates);
       }
 
-      row.addEventListener('click', () => highlightInstruction(instrIdx));
+      row.addEventListener('mouseenter', () => highlightInstruction(instrIdx));
       instrList.appendChild(row);
       instrRows.push(row);
     }
 
-    // Click hex bytes to highlight instruction
-    hexView.addEventListener('click', (event) => {
+    instrList.addEventListener('mouseleave', () => clearHighlight());
+
+    // Hover hex bytes to highlight instruction
+    hexView.addEventListener('mouseover', (event) => {
       const target = event.target as HTMLElement;
       if (target.dataset.offset !== undefined) {
-        const clickedOffset = parseInt(target.dataset.offset, 10);
+        const hoveredOffset = parseInt(target.dataset.offset, 10);
         for (let instrIdx = 0; instrIdx < instructions.length; instrIdx++) {
           const instruction = instructions[instrIdx];
-          if (clickedOffset >= instruction.offset && clickedOffset < instruction.offset + instruction.length) {
+          if (hoveredOffset >= instruction.offset && hoveredOffset < instruction.offset + instruction.length) {
             highlightInstruction(instrIdx);
-            instrRows[instrIdx].scrollIntoView({ block: 'nearest' });
             break;
           }
         }
       }
     });
+
+    hexView.addEventListener('mouseleave', () => clearHighlight());
 
     splitContainer.appendChild(instrList);
     splitContainer.appendChild(hexView);
