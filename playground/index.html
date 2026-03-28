@@ -7,6 +7,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css" crossorigin="anonymous">
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body {
@@ -867,6 +868,7 @@
   .tree-row:hover .tree-chevron { color: #a6adc8; }
 
   .tree-chevron-spacer { width: 16px; flex-shrink: 0; }
+  .tree-icon { flex-shrink: 0; width: 18px; font-size: 12px; text-align: center; margin-right: 4px; opacity: 0.85; }
   .tree-label { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 
   /* ─── Detail panel ─── */
@@ -1046,6 +1048,52 @@
 
   .call-graph-link:hover { color: #b4befe; text-decoration: underline; }
 
+  /* ─── Call graph visual ─── */
+
+  .callgraph-flow {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    align-items: center;
+    padding: 4px 20px;
+    line-height: 1.8;
+  }
+
+  .callgraph-col-label {
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: #585b70;
+    font-weight: 600;
+  }
+
+  .callgraph-node {
+    display: inline-block;
+    padding: 2px 8px;
+    background: #181825;
+    border: 1px solid #313244;
+    border-radius: 4px;
+    font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', 'SF Mono', monospace;
+    font-size: 11px;
+    color: #89b4fa;
+    text-decoration: none;
+    white-space: nowrap;
+    cursor: pointer;
+    transition: all 0.1s;
+  }
+
+  .callgraph-node:hover {
+    background: #313244;
+    border-color: #89b4fa;
+    color: #b4befe;
+  }
+
+  .callgraph-more {
+    font-size: 11px;
+    color: #585b70;
+    font-style: italic;
+  }
+
   /* ─── Code view ─── */
 
   .detail-code {
@@ -1136,9 +1184,95 @@
 
   .hex-address { color: #585b70; margin-right: 16px; user-select: none; }
   .hex-ascii { color: #45475a; margin-left: 16px; }
-  .hex-opcode { color: #89b4fa; font-weight: 500; }
-  .hex-immediate { color: #a6e3a1; }
+  .hex-opcode { color: #89b4fa; font-weight: 500; cursor: pointer; }
+  .hex-immediate { color: #a6e3a1; cursor: pointer; }
+  .hex-byte-active { background: rgba(137, 180, 250, 0.3); border-radius: 2px; }
   .detail-byte-range-info { padding: 4px 20px; font-size: 11px; color: #585b70; font-family: 'JetBrains Mono', 'Fira Code', 'SF Mono', monospace; }
+
+  /* ─── Interactive hex split view ─── */
+
+  .hex-split-view {
+    display: flex;
+    gap: 0;
+    margin: 8px 20px;
+    border: 1px solid #313244;
+    border-radius: 8px;
+    overflow: hidden;
+    max-height: 500px;
+  }
+
+  .hex-instr-list {
+    flex: 0 0 280px;
+    overflow-y: auto;
+    background: #11111b;
+    border-right: 1px solid #313244;
+    font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', 'SF Mono', monospace;
+    font-size: 12px;
+  }
+
+  .hex-instr-list::-webkit-scrollbar { width: 6px; }
+  .hex-instr-list::-webkit-scrollbar-track { background: transparent; }
+  .hex-instr-list::-webkit-scrollbar-thumb { background: #313244; border-radius: 3px; }
+
+  .hex-instr-row {
+    display: flex;
+    gap: 8px;
+    padding: 2px 12px;
+    cursor: pointer;
+    transition: background 0.08s;
+    white-space: nowrap;
+  }
+
+  .hex-instr-row:hover { background: rgba(49, 50, 68, 0.5); }
+  .hex-instr-active { background: rgba(137, 180, 250, 0.15) !important; border-left: 2px solid #89b4fa; padding-left: 10px; }
+
+  .hex-instr-offset { color: #585b70; min-width: 48px; }
+  .hex-instr-mnemonic { color: #cba6f7; font-weight: 500; min-width: 100px; }
+  .hex-instr-imm { color: #fab387; }
+
+  .hex-interactive {
+    flex: 1;
+    overflow: auto;
+    margin: 0;
+    border: none;
+    border-radius: 0;
+  }
+
+  .hex-interactive::-webkit-scrollbar { width: 6px; height: 6px; }
+  .hex-interactive::-webkit-scrollbar-track { background: transparent; }
+  .hex-interactive::-webkit-scrollbar-thumb { background: #313244; border-radius: 3px; }
+
+  /* ─── Module summary cards ─── */
+
+  .module-summary-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(100px, 1fr));
+    gap: 10px;
+    padding: 8px 20px 16px 20px;
+  }
+
+  .module-summary-card {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 2px;
+    padding: 14px 8px;
+    background: #181825;
+    border: 1px solid #313244;
+    border-radius: 10px;
+    cursor: pointer;
+    transition: all 0.15s;
+  }
+
+  .module-summary-card:hover {
+    background: #1e1e2e;
+    border-color: #89b4fa;
+    transform: translateY(-1px);
+  }
+
+  .module-summary-icon { font-size: 16px; margin-bottom: 4px; }
+  .module-summary-count { font-size: 20px; font-weight: 700; color: #cdd6f4; letter-spacing: -0.02em; }
+  .module-summary-label { font-size: 11px; color: #6c7086; text-transform: uppercase; letter-spacing: 0.04em; }
 
   /* ─── Function detail columns ─── */
 
@@ -1148,7 +1282,14 @@
     gap: 0 20px;
     padding: 0 20px;
     align-items: start;
-    min-height: 120px;
+  }
+
+  @container (max-width: 600px) {
+    .func-detail-columns { grid-template-columns: 1fr; }
+  }
+
+  @media (max-width: 900px) {
+    .func-detail-columns { grid-template-columns: 1fr; }
   }
 
   .func-detail-columns .detail-info-table {
@@ -1202,6 +1343,15 @@
     border-radius: 4px;
     min-width: 2px;
     transition: width 0.3s ease;
+  }
+
+  .category-dot {
+    display: inline-block;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    margin-right: 8px;
+    vertical-align: middle;
   }
 
   .size-value {
@@ -1274,6 +1424,34 @@
 
   .source-highlight { background: rgba(166, 227, 161, 0.1); border-left: 3px solid #a6e3a1; }
 
+  /* ─── Memory map ─── */
+
+  .memory-map {
+    position: relative;
+    height: 32px;
+    margin: 8px 20px;
+    background: #11111b;
+    border: 1px solid #313244;
+    border-radius: 6px;
+    overflow: hidden;
+  }
+
+  .memory-map-segment {
+    position: absolute;
+    top: 4px;
+    height: 24px;
+    background: linear-gradient(180deg, #89b4fa, #74c7ec);
+    border-radius: 3px;
+    cursor: pointer;
+    transition: opacity 0.15s;
+    min-width: 2px;
+  }
+
+  .memory-map-segment:hover {
+    opacity: 0.8;
+    outline: 1px solid #cdd6f4;
+  }
+
   .detail-placeholder {
     padding: 24px 20px;
     color: #6c7086;
@@ -1345,12 +1523,130 @@
     margin-bottom: 2px;
   }
 
+  .feature-card-expand {
+    cursor: pointer;
+    text-decoration: none;
+    color: #89b4fa;
+  }
+
+  .feature-card-expand:hover { text-decoration: underline; }
+
+  .feature-card-funclist {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    margin-top: 6px;
+    padding-top: 6px;
+    border-top: 1px solid #313244;
+  }
+
   .feature-card-opcodes {
     font-size: 11px;
     color: #6c7086;
     font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', 'SF Mono', monospace;
     line-height: 1.5;
     margin-top: 4px;
+  }
+  /* ─── Responsive ─── */
+
+  @media (max-width: 768px) {
+    header {
+      flex-wrap: wrap;
+      gap: 8px;
+      padding: 8px 12px;
+    }
+
+    header h1 { font-size: 15px; }
+
+    .hint { display: none; }
+
+    .main {
+      flex-direction: column;
+    }
+
+    .editor-pane {
+      min-height: 200px;
+    }
+
+    .resize-handle {
+      display: none;
+    }
+
+    .wat-pane {
+      width: 100% !important;
+      max-width: 100%;
+      border-left: none;
+      border-top: 1px solid #313244;
+    }
+
+    .explorer-split {
+      flex-direction: column;
+    }
+
+    .explorer-tree-pane {
+      width: 100% !important;
+      max-width: 100%;
+      max-height: 40vh;
+      border-right: none;
+      border-bottom: 1px solid #313244;
+    }
+
+    .explorer-resize-handle {
+      display: none;
+    }
+
+    .explorer-detail-pane {
+      min-height: 300px;
+    }
+
+    .explorer-toolbar {
+      flex-wrap: wrap;
+    }
+
+    .func-detail-columns {
+      grid-template-columns: 1fr;
+    }
+
+    .feature-grid {
+      grid-template-columns: 1fr;
+    }
+
+    .module-summary-grid {
+      grid-template-columns: repeat(auto-fill, minmax(80px, 1fr));
+    }
+
+    .hex-split-view {
+      flex-direction: column;
+    }
+
+    .hex-instr-list {
+      flex: none;
+      max-height: 200px;
+    }
+
+    .output-body {
+      height: 120px;
+    }
+  }
+
+  @media (max-width: 480px) {
+    header h1 { font-size: 13px; }
+
+    .mode-toggle { margin-left: 0; }
+
+    #examplesBtn { font-size: 11px; padding: 4px 8px; }
+
+    #runBtn { padding: 4px 12px; font-size: 12px; }
+
+    .github-link span { display: none; }
+
+    .detail-heading { font-size: 15px; padding: 12px 12px 0 12px; }
+
+    .detail-info-label { flex: 0 0 100px; font-size: 11px; }
+
+    .detail-code { margin: 8px 8px; }
+
+    .detail-hex { margin: 8px 8px; }
   }
 </style>
 </head>

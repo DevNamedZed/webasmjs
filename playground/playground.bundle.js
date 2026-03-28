@@ -19536,6 +19536,236 @@ log('');
 log('Same module, different instances: ' + (inst1 !== inst2));
 log('Same compiled module: ' + (wasmModule === wasmModule));`
     },
+    "rich-name-section": {
+      label: "Rich Name Section",
+      group: "Debug",
+      description: "Build a module with function names, local names, and global names \u2014 then inspect them.",
+      target: "mvp",
+      features: [],
+      imports: ["ModuleBuilder", "ValueType", "BinaryReader"],
+      code: `// Rich Name Section \u2014 inspect debug names embedded in a WASM binary
+const mod = new ModuleBuilder('mathLib');
+
+mod.defineFunction('add', [ValueType.Int32],
+  [ValueType.Int32, ValueType.Int32], (f, a) => {
+  a.get_local(f.getParameter(0));
+  a.get_local(f.getParameter(1));
+  a.add_i32();
+}).withExport();
+
+mod.defineFunction('multiply', [ValueType.Int32],
+  [ValueType.Int32, ValueType.Int32], (f, a) => {
+  a.get_local(f.getParameter(0));
+  a.get_local(f.getParameter(1));
+  a.mul_i32();
+}).withExport();
+
+mod.defineFunction('square', [ValueType.Int32],
+  [ValueType.Int32], (f, a) => {
+  a.get_local(f.getParameter(0));
+  a.get_local(f.getParameter(0));
+  a.mul_i32();
+}).withExport();
+
+// Build and read back the name section
+const bytes = mod.toBytes();
+const reader = new BinaryReader(bytes);
+const info = reader.read();
+
+log('=== Name Section Contents ===');
+log('');
+log('Module name: ' + (info.nameSection?.moduleName || '(none)'));
+log('');
+
+if (info.nameSection?.functionNames) {
+  log('Function names (' + info.nameSection.functionNames.size + '):');
+  for (const [idx, name] of info.nameSection.functionNames) {
+    log('  func ' + idx + ' = "' + name + '"');
+  }
+} else {
+  log('No function names found.');
+}
+log('');
+
+log('Exports:');
+for (const exp of info.exports) {
+  const kindNames = ['func', 'table', 'memory', 'global', 'tag'];
+  log('  "' + exp.name + '" -> ' + (kindNames[exp.kind] || 'unknown') + ' ' + exp.index);
+}
+log('');
+log('Types:');
+for (let i = 0; i < info.types.length; i++) {
+  const t = info.types[i];
+  if (t.kind === 'func') {
+    const params = t.parameterTypes.map(() => 'i32').join(', ');
+    const returns = t.returnTypes.map(() => 'i32').join(', ');
+    log('  type ' + i + ': (' + params + ') -> (' + returns + ')');
+  }
+}
+log('');
+log('Click "Explore" on the WAT card to inspect in the explorer!');`
+    },
+    "disassembler-usage": {
+      label: "Disassembler",
+      group: "Debug",
+      description: "Build a module and use TextModuleWriter to get the WAT.",
+      target: "mvp",
+      features: [],
+      imports: ["ModuleBuilder", "ValueType", "TextModuleWriter"],
+      code: `// Disassembler \u2014 build a module and convert to WAT
+const mod = new ModuleBuilder('demo');
+
+mod.defineFunction('add', [ValueType.Int32],
+  [ValueType.Int32, ValueType.Int32], (f, a) => {
+  a.get_local(f.getParameter(0));
+  a.get_local(f.getParameter(1));
+  a.add_i32();
+}).withExport();
+
+mod.defineFunction('max', [ValueType.Int32],
+  [ValueType.Int32, ValueType.Int32], (f, a) => {
+  const x = f.getParameter(0);
+  const y = f.getParameter(1);
+  a.get_local(x);
+  a.get_local(y);
+  a.gt_i32();
+  a.if(ValueType.Int32);
+    a.get_local(x);
+  a.else();
+    a.get_local(y);
+  a.end();
+}).withExport();
+
+// Get full WAT via TextModuleWriter
+const wat = mod.toString();
+log('Full WAT:');
+log(wat);
+
+// Get binary and inspect
+const bytes = mod.toBytes();
+log('');
+log('Binary size: ' + bytes.length + ' bytes');
+log('Magic: 0x' + Array.from(bytes.slice(0, 4)).map(b => b.toString(16).padStart(2, '0')).join(''));
+log('Version: ' + (bytes[4] | (bytes[5] << 8) | (bytes[6] << 16) | (bytes[7] << 24)));
+log('');
+log('Click "Explore" on the WAT card to inspect the binary structure!');`
+    },
+    "binary-structure": {
+      label: "Binary Structure",
+      group: "Debug",
+      description: "Build a module and inspect its raw binary structure section by section.",
+      target: "mvp",
+      features: [],
+      imports: ["ModuleBuilder", "ValueType", "BinaryReader"],
+      code: `// Binary Structure \u2014 inspect the section layout of a WASM binary
+const mod = new ModuleBuilder('sections');
+
+mod.defineMemory(1, 4);
+mod.defineGlobal(ValueType.Int32, true, 0);
+
+mod.defineFunction('store', [],
+  [ValueType.Int32, ValueType.Int32], (f, a) => {
+  a.get_local(f.getParameter(0));
+  a.get_local(f.getParameter(1));
+  a.store_i32();
+}).withExport();
+
+mod.defineFunction('load', [ValueType.Int32],
+  [ValueType.Int32], (f, a) => {
+  a.get_local(f.getParameter(0));
+  a.load_i32();
+}).withExport();
+
+const bytes = mod.toBytes();
+const reader = new BinaryReader(bytes);
+const info = reader.read();
+
+const sectionNames = {
+  1: 'Type', 2: 'Import', 3: 'Function', 4: 'Table', 5: 'Memory',
+  6: 'Global', 7: 'Export', 8: 'Start', 9: 'Element', 10: 'Code',
+  11: 'Data', 12: 'DataCount', 0: 'Custom',
+};
+
+log('Module version: ' + info.version);
+log('Total size: ' + bytes.length + ' bytes');
+log('');
+log('Types: ' + info.types.length);
+log('Functions: ' + info.functions.length);
+log('Memories: ' + info.memories.length);
+log('Globals: ' + info.globals.length);
+log('Exports: ' + info.exports.length);
+log('');
+
+// Parse sections manually
+let offset = 8;
+while (offset < bytes.length) {
+  const sectionId = bytes[offset];
+  let sizeOffset = offset + 1;
+  let sectionSize = 0;
+  let shift = 0;
+  while (sizeOffset < bytes.length) {
+    const byte = bytes[sizeOffset++];
+    sectionSize |= (byte & 0x7f) << shift;
+    shift += 7;
+    if (!(byte & 0x80)) break;
+  }
+  const name = sectionNames[sectionId] || 'Unknown(' + sectionId + ')';
+  log(name + ' section: offset 0x' + offset.toString(16) + ', ' + sectionSize + ' bytes');
+  offset = sizeOffset + sectionSize;
+}`
+    },
+    "custom-metadata": {
+      label: "Structured Custom Section",
+      group: "Debug",
+      description: "Embed structured metadata in a custom section and read it back.",
+      target: "mvp",
+      features: [],
+      imports: ["ModuleBuilder", "ValueType", "BinaryReader"],
+      code: `// Structured Custom Section \u2014 embed and read back build metadata
+const mod = new ModuleBuilder('app');
+
+mod.defineFunction('main', [], [], (f, a) => {
+  a.nop();
+}).withExport();
+
+// Embed build metadata as a custom section
+const metadata = {
+  buildTime: new Date().toISOString(),
+  compiler: 'webasmjs playground',
+  version: '1.0.0',
+  features: ['debug-names', 'custom-sections'],
+};
+
+const jsonStr = JSON.stringify(metadata);
+const encoder = new TextEncoder();
+const metadataBytes = encoder.encode(jsonStr);
+mod.defineCustomSection('build-metadata', metadataBytes);
+
+// Also add a producers-style section
+const producerStr = 'webasmjs;1.0.0';
+mod.defineCustomSection('source-info', encoder.encode(producerStr));
+
+const bytes = mod.toBytes();
+const reader = new BinaryReader(bytes);
+const info = reader.read();
+
+log('Custom sections found: ' + info.customSections.length);
+log('');
+for (const section of info.customSections) {
+  if (section.name === 'name') { continue; }
+  log('Section: "' + section.name + '" (' + section.data.length + ' bytes)');
+  const decoder = new TextDecoder();
+  const content = decoder.decode(section.data);
+  try {
+    const parsed = JSON.parse(content);
+    log('  ' + JSON.stringify(parsed, null, 2));
+  } catch {
+    log('  ' + content);
+  }
+  log('');
+}
+log('Click "Explore" to see the custom sections in the explorer!');`
+    },
     // ─── Imports ───
     "import-memory": {
       label: "Import Memory",
@@ -19812,6 +20042,7 @@ log(mod.toString());`
         for (const compilationUnit of compilationUnits) {
           allFunctions = allFunctions.concat(compilationUnit.functions);
         }
+        resolveParameterTypes(allFunctions, allTypes);
       } catch (parseError) {
       }
     }
@@ -20088,6 +20319,7 @@ log(mod.toString());`
     }
   }
   var DW_TAG_formal_parameter = 5;
+  var DW_TAG_member = 13;
   var DW_TAG_pointer_type = 15;
   var DW_TAG_compile_unit = 17;
   var DW_TAG_structure_type = 19;
@@ -20099,6 +20331,7 @@ log(mod.toString());`
   var DW_AT_location = 2;
   var DW_AT_name = 3;
   var DW_AT_byte_size = 11;
+  var DW_AT_data_member_location = 56;
   var DW_AT_low_pc = 17;
   var DW_AT_high_pc = 18;
   var DW_AT_language = 19;
@@ -20400,6 +20633,60 @@ log(mod.toString());`
         return null;
     }
   }
+  function resolveTypeName(typeOffset, types, depth = 0) {
+    if (depth > 10) {
+      return null;
+    }
+    const typeInfo = types.get(typeOffset);
+    if (!typeInfo) {
+      return null;
+    }
+    if (typeInfo.tag === "base" && typeInfo.name) {
+      return typeInfo.name;
+    }
+    if (typeInfo.tag === "pointer") {
+      if (typeInfo.referencedType !== null) {
+        const innerType = resolveTypeName(typeInfo.referencedType, types, depth + 1);
+        if (innerType) {
+          return `${innerType} *`;
+        }
+      }
+      return "void *";
+    }
+    if (typeInfo.tag === "const") {
+      if (typeInfo.referencedType !== null) {
+        const innerType = resolveTypeName(typeInfo.referencedType, types, depth + 1);
+        if (innerType) {
+          return `const ${innerType}`;
+        }
+      }
+      return null;
+    }
+    if (typeInfo.tag === "typedef" && typeInfo.name) {
+      return typeInfo.name;
+    }
+    if (typeInfo.tag === "struct" && typeInfo.name) {
+      return `struct ${typeInfo.name}`;
+    }
+    if (typeInfo.referencedType !== null) {
+      return resolveTypeName(typeInfo.referencedType, types, depth + 1);
+    }
+    return typeInfo.name;
+  }
+  function resolveParameterTypes(functions, types) {
+    for (const func of functions) {
+      for (const param of func.parameters) {
+        if (param.typeOffset !== null) {
+          param.typeName = resolveTypeName(param.typeOffset, types) || null;
+        }
+      }
+      for (const variable of func.variables) {
+        if (variable.typeOffset !== null) {
+          variable.typeName = resolveTypeName(variable.typeOffset, types) || null;
+        }
+      }
+    }
+  }
   function parseDebugInfo(debugInfoData, debugAbbrevData, debugStr, debugLineStr) {
     const reader = new DwarfReader(debugInfoData);
     const compilationUnits = [];
@@ -20431,6 +20718,8 @@ log(mod.toString());`
       let depth = 0;
       let currentFunction = null;
       let functionDepth = -1;
+      let currentStructType = null;
+      let structDepth = -1;
       while (reader.offset < unitEnd) {
         const dieOffset = reader.offset;
         const abbrevCode = reader.readULEB128();
@@ -20439,6 +20728,10 @@ log(mod.toString());`
           if (currentFunction && depth <= functionDepth) {
             currentFunction = null;
             functionDepth = -1;
+          }
+          if (currentStructType && depth <= structDepth) {
+            currentStructType = null;
+            structDepth = -1;
           }
           continue;
         }
@@ -20503,22 +20796,26 @@ log(mod.toString());`
           if (abbrev.tag === DW_TAG_formal_parameter) {
             const paramName = attrs.get(DW_AT_name);
             const location2 = attrs.get(DW_AT_location);
+            const paramTypeRef = attrs.get(DW_AT_type);
             if (typeof paramName === "string") {
               currentFunction.parameters.push({
                 name: paramName,
                 wasmLocal: extractWasmLocal(location2 ?? null),
-                typeName: null
+                typeName: null,
+                typeOffset: typeof paramTypeRef === "number" ? paramTypeRef : null
               });
             }
           }
           if (abbrev.tag === DW_TAG_variable) {
             const varName = attrs.get(DW_AT_name);
             const location2 = attrs.get(DW_AT_location);
+            const varTypeRef = attrs.get(DW_AT_type);
             if (typeof varName === "string") {
               currentFunction.variables.push({
                 name: varName,
                 wasmLocal: extractWasmLocal(location2 ?? null),
-                typeName: null
+                typeName: null,
+                typeOffset: typeof varTypeRef === "number" ? varTypeRef : null
               });
             }
           }
@@ -20535,12 +20832,30 @@ log(mod.toString());`
           const typeName = attrs.get(DW_AT_name);
           const byteSize = attrs.get(DW_AT_byte_size);
           const typeRef = attrs.get(DW_AT_type);
-          typeMap.set(dieOffset, {
+          const typeEntry = {
             tag: typeTag,
             name: typeof typeName === "string" ? typeName : null,
             byteSize: typeof byteSize === "number" ? byteSize : 0,
             referencedType: typeof typeRef === "number" ? typeRef : null
-          });
+          };
+          if (typeTag === "struct" && abbrev.hasChildren) {
+            typeEntry.fields = [];
+            currentStructType = typeEntry;
+            structDepth = depth;
+          }
+          typeMap.set(dieOffset, typeEntry);
+        }
+        if (abbrev.tag === DW_TAG_member && currentStructType && depth > structDepth) {
+          const memberName = attrs.get(DW_AT_name);
+          const memberLocation = attrs.get(DW_AT_data_member_location);
+          const memberTypeRef = attrs.get(DW_AT_type);
+          if (typeof memberName === "string" && currentStructType.fields) {
+            currentStructType.fields.push({
+              name: memberName,
+              byteOffset: typeof memberLocation === "number" ? memberLocation : 0,
+              typeOffset: typeof memberTypeRef === "number" ? memberTypeRef : null
+            });
+          }
         }
         if (abbrev.hasChildren) {
           depth++;
@@ -23823,7 +24138,13 @@ log(mod.toString());`
           continue;
         }
         const usedCount = nameUsageCount.get(candidateName) || 0;
-        const finalName = usedCount === 0 ? candidateName : `${candidateName}${usedCount + 1}`;
+        let finalName;
+        if (candidateName === "i" && usedCount > 0) {
+          const loopCounterNames = ["i", "j", "k", "n", "m"];
+          finalName = usedCount < loopCounterNames.length ? loopCounterNames[usedCount] : `i${usedCount + 1}`;
+        } else {
+          finalName = usedCount === 0 ? candidateName : `${candidateName}${usedCount + 1}`;
+        }
         nameUsageCount.set(candidateName, usedCount + 1);
         resolvedNames.set(result.id, finalName);
       }
@@ -23846,7 +24167,7 @@ log(mod.toString());`
         if (!result) {
           continue;
         }
-        if ((instr.kind === "call" || instr.kind === "call_indirect") && usedInSelect.has(result.id)) {
+        if (instr.kind === "call" || instr.kind === "call_indirect") {
           continue;
         }
         const uses = useCount.get(result.id) || 0;
@@ -23919,27 +24240,78 @@ log(mod.toString());`
           if (known && known.returnName) {
             return known.returnName;
           }
-          return "val";
+          if (rawName.startsWith("is_") || rawName.startsWith("has_") || rawName.startsWith("can_")) {
+            return rawName.replace(/^(is_|has_|can_)/, "");
+          }
+          if (rawName.startsWith("get_")) {
+            return rawName.replace(/^get_/, "");
+          }
+          if (rawName.startsWith("find_") || rawName.startsWith("search_") || rawName.startsWith("lookup_")) {
+            return "found";
+          }
+          if (rawName.includes("alloc") || rawName.includes("malloc")) {
+            return "buf";
+          }
+          if (rawName.includes("len") || rawName.includes("length") || rawName.includes("size") || rawName.includes("count")) {
+            return "len";
+          }
+          return "result";
         }
         if (def.kind === "call_indirect") {
+          return "result";
+        }
+        if (def.kind === "select") {
           return "val";
         }
         if (def.kind === "load") {
+          const loadMnemonic = def.loadType;
+          if (loadMnemonic.includes("load8")) {
+            return "byte";
+          }
+          if (loadMnemonic.includes("load16")) {
+            return "word";
+          }
           return "val";
         }
         if (def.kind === "global_get") {
-          return names.globalName(def.globalIndex);
+          const globalName = names.globalName(def.globalIndex);
+          if (globalName === "__stack_pointer" || globalName === "stack_pointer") {
+            return "sp";
+          }
+          return globalName;
+        }
+        if (def.kind === "compare") {
+          return "cond";
+        }
+        if (def.kind === "binary" && (def.op === "+" || def.op === "-")) {
+          if (isVariable2(def.left)) {
+            const leftDef = defMap.get(def.left.id);
+            if (leftDef && leftDef.kind === "global_get") {
+              const leftGlobalName = names.globalName(leftDef.globalIndex);
+              if (leftGlobalName === "__stack_pointer" || leftGlobalName === "stack_pointer") {
+                return "fp";
+              }
+            }
+          }
         }
         if (def.kind === "const") {
           const constValue = Number(def.value);
           if (constValue === 0 || constValue === 1) {
-            return "ok";
+            return "flag";
           }
         }
       }
       const contexts = useSiteContext.get(variable.id);
-      if (contexts && contexts.has("address")) {
-        return "ptr";
+      if (contexts) {
+        if (contexts.has("compared") && contexts.has("incremented")) {
+          return "i";
+        }
+        if (contexts.has("address")) {
+          return "ptr";
+        }
+        if (contexts.has("shifted")) {
+          return "idx";
+        }
       }
       return "val";
     }
@@ -24189,6 +24561,23 @@ log(mod.toString());`
           addContext(instr.address, "address");
         } else if (instr.kind === "store") {
           addContext(instr.address, "address");
+        } else if (instr.kind === "compare") {
+          addContext(instr.left, "compared");
+          addContext(instr.right, "compared");
+        } else if (instr.kind === "binary") {
+          if (instr.op === "shl" || instr.op === "shr_u" || instr.op === "shr_s") {
+            addContext(instr.left, "shifted");
+          }
+        }
+      }
+      for (const instr of block.instructions) {
+        if (instr.kind === "binary" && (instr.op === "+" || instr.op === "-")) {
+          if (isVariable2(instr.left) && !isVariable2(instr.right)) {
+            const constVal = Number(instr.right.value);
+            if (constVal === 1 || constVal === -1 || constVal === 2 || constVal === 4 || constVal === 8) {
+              addContext(instr.left, "incremented");
+            }
+          }
         }
       }
     }
@@ -25457,12 +25846,35 @@ log(mod.toString());`
   }
 
   // src/decompiler/MemoryPatterns.ts
-  function annotateMemoryPatterns(node) {
+  function extractArrayIndex(expression) {
+    if (expression.kind === "binary" && expression.op === "<<" && expression.right.kind === "const") {
+      const shift = Number(expression.right.value);
+      if (shift >= 1 && shift <= 4) {
+        return expression.left;
+      }
+    }
+    if (expression.kind === "binary" && expression.op === "*") {
+      if (expression.right.kind === "const") {
+        const elementSize = Number(expression.right.value);
+        if (elementSize >= 2 && elementSize <= 256) {
+          return expression.left;
+        }
+      }
+      if (expression.left.kind === "const") {
+        const elementSize = Number(expression.left.value);
+        if (elementSize >= 2 && elementSize <= 256) {
+          return expression.right;
+        }
+      }
+    }
+    return null;
+  }
+  function annotateMemoryPatterns(node, frameVarName) {
     const baseOffsets = /* @__PURE__ */ new Map();
     collectMemoryBases(node, baseOffsets);
     const structBases = /* @__PURE__ */ new Set();
     for (const [baseName, offsets] of baseOffsets) {
-      if (offsets.size >= 2) {
+      if (offsets.size >= 2 && baseName !== frameVarName) {
         structBases.add(baseName);
       }
     }
@@ -25618,6 +26030,13 @@ log(mod.toString());`
         if (structStore) {
           return { kind: "store", address: structStore, offset: 0, storeType: statement.storeType, value };
         }
+        if (address.kind === "binary" && address.op === "+") {
+          const arrayIndex = extractArrayIndex(address.right) || extractArrayIndex(address.left);
+          const arrayBase = arrayIndex === address.right ? address.left : address.right;
+          if (arrayIndex && arrayBase !== arrayIndex) {
+            return { kind: "store", address: { kind: "binary", op: "[]", left: arrayBase, right: arrayIndex }, offset: statement.offset, storeType: statement.storeType, value };
+          }
+        }
         return { kind: "store", address, offset: statement.offset, storeType: statement.storeType, value };
       }
       case "call":
@@ -25654,18 +26073,10 @@ log(mod.toString());`
           return { kind: "load", address: structAccess, offset: 0, loadType: expression.loadType };
         }
         if (address.kind === "binary" && address.op === "+") {
-          const right = address.right;
-          if (right.kind === "binary" && right.op === "<<" && right.right.kind === "const") {
-            const shift = Number(right.right.value);
-            if (shift >= 1 && shift <= 3) {
-              return { kind: "load", address: { kind: "binary", op: "[]", left: address.left, right: right.left }, offset: expression.offset, loadType: expression.loadType };
-            }
-          }
-          if (right.kind === "binary" && right.op === "*" && right.right.kind === "const") {
-            const elementSize = Number(right.right.value);
-            if (elementSize === 4 || elementSize === 8 || elementSize === 2) {
-              return { kind: "load", address: { kind: "binary", op: "[]", left: address.left, right: right.left }, offset: expression.offset, loadType: expression.loadType };
-            }
+          const arrayIndex = extractArrayIndex(address.right) || extractArrayIndex(address.left);
+          const arrayBase = arrayIndex === address.right ? address.left : address.right;
+          if (arrayIndex && arrayBase !== arrayIndex) {
+            return { kind: "load", address: { kind: "binary", op: "[]", left: arrayBase, right: arrayIndex }, offset: expression.offset, loadType: expression.loadType };
           }
         }
         return { kind: "load", address, offset: expression.offset, loadType: expression.loadType };
@@ -25691,19 +26102,165 @@ log(mod.toString());`
     }
   }
 
+  // src/decompiler/StackFramePass.ts
+  function isStackPointerGlobal(name) {
+    return name === "__stack_pointer" || name === "sp" || name === "stack_pointer";
+  }
+  function isGlobalSetToStackPointer(statement) {
+    if (statement.kind === "global_set" && isStackPointerGlobal(statement.name)) {
+      return { name: statement.name, value: statement.value };
+    }
+    return null;
+  }
+  function extractFrameAlloc(statements) {
+    for (let statementIdx = 0; statementIdx < Math.min(statements.length, 5); statementIdx++) {
+      const statement = statements[statementIdx];
+      if (statement.kind !== "assign") {
+        continue;
+      }
+      if (statement.value.kind === "global" && isStackPointerGlobal(statement.value.name)) {
+        const spVarName = statement.target;
+        const spGlobalName = statement.value.name;
+        for (let nextIdx = statementIdx + 1; nextIdx < Math.min(statements.length, statementIdx + 4); nextIdx++) {
+          const nextStatement = statements[nextIdx];
+          if (nextStatement.kind === "assign" && nextStatement.value.kind === "binary" && nextStatement.value.op === "sub") {
+            if (nextStatement.value.left.kind === "var" && nextStatement.value.left.name === spVarName && nextStatement.value.right.kind === "const") {
+              const frameSize = Number(nextStatement.value.right.value);
+              return {
+                stackPointerName: spGlobalName,
+                frameVarName: nextStatement.target,
+                frameSize
+              };
+            }
+          }
+        }
+      }
+      if (statement.value.kind === "binary" && statement.value.op === "-") {
+        if (statement.value.left.kind === "global" && isStackPointerGlobal(statement.value.left.name) && statement.value.right.kind === "const") {
+          const frameSize = Number(statement.value.right.value);
+          return {
+            stackPointerName: statement.value.left.name,
+            frameVarName: statement.target,
+            frameSize
+          };
+        }
+      }
+    }
+    return null;
+  }
+  function isEpilogueRestore(statement, frameInfo) {
+    const globalSet = isGlobalSetToStackPointer(statement);
+    if (!globalSet) {
+      return false;
+    }
+    if (globalSet.value.kind === "binary" && globalSet.value.op === "+") {
+      if (globalSet.value.left.kind === "var" && globalSet.value.left.name === frameInfo.frameVarName && globalSet.value.right.kind === "const" && Number(globalSet.value.right.value) === frameInfo.frameSize) {
+        return true;
+      }
+    }
+    if (globalSet.value.kind === "var") {
+      return true;
+    }
+    return false;
+  }
+  function isStackFramePrologue(statement, frameInfo) {
+    if (statement.kind === "assign" && statement.value.kind === "global" && statement.value.name === frameInfo.stackPointerName) {
+      return true;
+    }
+    if (statement.kind === "assign" && statement.target === frameInfo.frameVarName && statement.value.kind === "binary" && statement.value.op === "-") {
+      return true;
+    }
+    if (statement.kind === "global_set" && isStackPointerGlobal(statement.name)) {
+      if (statement.value.kind === "var" && statement.value.name === frameInfo.frameVarName) {
+        return true;
+      }
+    }
+    return false;
+  }
+  function filterStatements(statements, frameInfo) {
+    return statements.filter((statement) => {
+      if (isStackFramePrologue(statement, frameInfo)) {
+        return false;
+      }
+      if (isEpilogueRestore(statement, frameInfo)) {
+        return false;
+      }
+      return true;
+    });
+  }
+  function processNode(node, frameInfo) {
+    switch (node.kind) {
+      case "block":
+        return { kind: "block", body: filterStatements(node.body, frameInfo) };
+      case "sequence":
+        return { kind: "sequence", children: node.children.map((child) => processNode(child, frameInfo)) };
+      case "if":
+        return {
+          kind: "if",
+          condition: node.condition,
+          thenBody: processNode(node.thenBody, frameInfo),
+          elseBody: node.elseBody ? processNode(node.elseBody, frameInfo) : null
+        };
+      case "while":
+        return { kind: "while", condition: node.condition, body: processNode(node.body, frameInfo) };
+      case "do_while":
+        return { kind: "do_while", body: processNode(node.body, frameInfo), condition: node.condition };
+      case "for":
+        return { kind: "for", init: node.init, condition: node.condition, increment: node.increment, body: processNode(node.body, frameInfo) };
+      case "labeled_block":
+        return { kind: "labeled_block", label: node.label, body: processNode(node.body, frameInfo) };
+      case "switch":
+        return {
+          kind: "switch",
+          selector: node.selector,
+          cases: node.cases.map((caseEntry) => ({ values: caseEntry.values, body: processNode(caseEntry.body, frameInfo) })),
+          defaultBody: processNode(node.defaultBody, frameInfo)
+        };
+      default:
+        return node;
+    }
+  }
+  function getFirstBlock(node) {
+    if (node.kind === "block") {
+      return node.body;
+    }
+    if (node.kind === "sequence" && node.children.length > 0) {
+      return getFirstBlock(node.children[0]);
+    }
+    return null;
+  }
+  function removeStackFrame(node) {
+    const firstBlock = getFirstBlock(node);
+    if (!firstBlock) {
+      return { node, frameVarName: null, frameSize: 0 };
+    }
+    const frameInfo = extractFrameAlloc(firstBlock);
+    if (!frameInfo) {
+      return { node, frameVarName: null, frameSize: 0 };
+    }
+    return {
+      node: processNode(node, frameInfo),
+      frameVarName: frameInfo.frameVarName,
+      frameSize: frameInfo.frameSize
+    };
+  }
+
   // src/decompiler/Decompiler.ts
-  function createNameResolver(moduleInfo, functionNameProvider, localNameProvider) {
+  function sanitizeIdentifier(name) {
+    return name.replace(/[^a-zA-Z0-9_$]/g, "_");
+  }
+  function createNameResolver(moduleInfo, functionNameProvider, localNameProvider, parameterTypeProvider) {
     const nameSection = moduleInfo.nameSection;
     return {
       functionName(globalIndex) {
         if (nameSection?.functionNames?.has(globalIndex)) {
           const rawName = nameSection.functionNames.get(globalIndex);
-          return { name: demangleName(rawName), source: "name-section" };
+          return { name: sanitizeIdentifier(demangleName(rawName)), source: "name-section" };
         }
         if (functionNameProvider) {
           const externalName = functionNameProvider(globalIndex);
           if (externalName) {
-            return { name: demangleName(externalName), source: "dwarf" };
+            return { name: sanitizeIdentifier(demangleName(externalName)), source: "dwarf" };
           }
         }
         return { name: `func_${globalIndex}`, source: "generated" };
@@ -25712,24 +26269,30 @@ log(mod.toString());`
         if (nameSection?.localNames?.has(funcGlobalIndex)) {
           const locals = nameSection.localNames.get(funcGlobalIndex);
           if (locals.has(localIndex)) {
-            return { name: locals.get(localIndex), source: "name-section" };
+            return { name: sanitizeIdentifier(locals.get(localIndex)), source: "name-section" };
           }
         }
         if (localNameProvider) {
           const dwarfName = localNameProvider(funcGlobalIndex, localIndex);
           if (dwarfName) {
-            return { name: dwarfName, source: "dwarf" };
+            return { name: sanitizeIdentifier(dwarfName), source: "dwarf" };
           }
         }
         return { name: `var${localIndex}`, source: "generated" };
       },
       globalName(globalIndex) {
         if (nameSection?.globalNames?.has(globalIndex)) {
-          return { name: nameSection.globalNames.get(globalIndex), source: "name-section" };
+          return { name: sanitizeIdentifier(nameSection.globalNames.get(globalIndex)), source: "name-section" };
         }
         return { name: `global_${globalIndex}`, source: "generated" };
       },
       typeName(_typeIndex) {
+        return null;
+      },
+      parameterType(funcGlobalIndex, paramIndex) {
+        if (parameterTypeProvider) {
+          return parameterTypeProvider(funcGlobalIndex, paramIndex);
+        }
         return null;
       }
     };
@@ -25780,7 +26343,9 @@ log(mod.toString());`
     const params = [];
     for (let paramIndex = 0; paramIndex < funcTypeEntry.parameterTypes.length; paramIndex++) {
       const paramNameRes = nameResolver.localName(globalFuncIndex, paramIndex);
-      params.push(`${typeStr(funcTypeEntry.parameterTypes[paramIndex])} ${paramNameRes.name}`);
+      const dwarfType = nameResolver.parameterType?.(globalFuncIndex, paramIndex);
+      const paramType = dwarfType || typeStr(funcTypeEntry.parameterTypes[paramIndex]);
+      params.push(`${paramType} ${paramNameRes.name}`);
     }
     const signature = `${returnType} ${funcNameRes.name}(${params.join(", ")})`;
     try {
@@ -25822,7 +26387,8 @@ log(mod.toString());`
         }
       };
       const rawLowered = lowerSsaToStatements(structured, ssaFunc, nameProvider);
-      const lowered = annotateMemoryPatterns(rawLowered);
+      const stackFrameResult = removeStackFrame(rawLowered);
+      const lowered = annotateMemoryPatterns(stackFrameResult.node, stackFrameResult.frameVarName);
       const paramNames = /* @__PURE__ */ new Set();
       for (let paramIndex = 0; paramIndex < funcTypeEntry.parameterTypes.length; paramIndex++) {
         paramNames.add(nameResolver.localName(globalFuncIndex, paramIndex).name);
@@ -26524,6 +27090,30 @@ log(mod.toString());`
       container.appendChild(document.createTextNode("\n"));
     }
   }
+  var TREE_ICONS = {
+    "module": { faClass: "fa-solid fa-cube", color: "#cba6f7" },
+    "types": { faClass: "fa-solid fa-shapes", color: "#89b4fa" },
+    "imports": { faClass: "fa-solid fa-arrow-right-to-bracket", color: "#94e2d5" },
+    "functions": { faClass: "fa-solid fa-code", color: "#a6e3a1" },
+    "tables": { faClass: "fa-solid fa-table-cells", color: "#f9e2af" },
+    "memories": { faClass: "fa-solid fa-memory", color: "#fab387" },
+    "globals": { faClass: "fa-solid fa-globe", color: "#74c7ec" },
+    "exports": { faClass: "fa-solid fa-arrow-right-from-bracket", color: "#89dceb" },
+    "elements": { faClass: "fa-solid fa-list-ol", color: "#f2cdcd" },
+    "data-segments": { faClass: "fa-solid fa-database", color: "#eba0ac" },
+    "tags": { faClass: "fa-solid fa-tag", color: "#f38ba8" },
+    "custom-sections": { faClass: "fa-solid fa-puzzle-piece", color: "#6c7086" },
+    "name-section": { faClass: "fa-solid fa-font", color: "#b4befe" },
+    "size-analysis": { faClass: "fa-solid fa-chart-pie", color: "#89b4fa" },
+    "instruction-stats": { faClass: "fa-solid fa-hashtag", color: "#cba6f7" },
+    "debug-info": { faClass: "fa-solid fa-bug", color: "#f38ba8" },
+    "strings": { faClass: "fa-solid fa-quote-left", color: "#a6e3a1" },
+    "feature-detection": { faClass: "fa-solid fa-microchip", color: "#94e2d5" },
+    "module-interface": { faClass: "fa-solid fa-plug", color: "#89dceb" },
+    "function-complexity": { faClass: "fa-solid fa-chart-line", color: "#fab387" },
+    "dead-code": { faClass: "fa-solid fa-skull", color: "#585b70" },
+    "producers": { faClass: "fa-solid fa-industry", color: "#6c7086" }
+  };
   var SECTION_NAMES = {
     0: "Custom",
     1: "Type",
@@ -26669,6 +27259,8 @@ log(mod.toString());`
       this.dwarfFunctionMap = null;
       this.nameResolver = null;
       this.searchQuery = "";
+      this.importedCounts = {};
+      this.textDecoder = new TextDecoder();
       this.visibleNodes = [];
       this.searchInput = null;
       this.parsedSourceMap = null;
@@ -26677,6 +27269,20 @@ log(mod.toString());`
     }
     loadSourceMap(json) {
       this.parsedSourceMap = parseSourceMap(json);
+    }
+    computeImportCounts() {
+      if (!this.moduleInfo) {
+        return;
+      }
+      this.importedCounts = { 0: 0, 1: 0, 2: 0, 3: 0, 4: 0 };
+      for (const importEntry of this.moduleInfo.imports) {
+        if (importEntry.kind in this.importedCounts) {
+          this.importedCounts[importEntry.kind]++;
+        }
+      }
+    }
+    getImportedCount(kind) {
+      return this.importedCounts[kind] || 0;
     }
     getFunctionName(globalIndex) {
       let name = null;
@@ -26702,13 +27308,14 @@ log(mod.toString());`
         return null;
       }
       this.dwarfFunctionMap = /* @__PURE__ */ new Map();
-      const importedFuncCount = this.moduleInfo.imports.filter((imp) => imp.kind === 0).length;
+      const importedFuncCount = this.getImportedCount(0);
       const codeSectionRange = this.byteRanges.sections.find((section) => section.sectionId === 10);
       if (!codeSectionRange) {
         return this.dwarfFunctionMap;
       }
       const codeSectionBodyOffset = this.findCodeSectionDataOffset(codeSectionRange.offset);
       const offsets = [codeSectionBodyOffset, codeSectionRange.offset, 0];
+      const sortedDwarfFuncs = [...dwarfData.functions].filter((dwarfFunc) => dwarfFunc.name.length > 0 && dwarfFunc.lowPc > 0).sort((funcA, funcB) => funcA.lowPc - funcB.lowPc);
       for (const baseOffset of offsets) {
         for (let funcIndex = 0; funcIndex < this.moduleInfo.functions.length; funcIndex++) {
           const globalIndex = importedFuncCount + funcIndex;
@@ -26717,25 +27324,69 @@ log(mod.toString());`
             continue;
           }
           const relativeOffset = byteRange.offset - baseOffset;
-          const match = dwarfData.functions.find(
-            (dwarfFunc) => dwarfFunc.lowPc >= relativeOffset && dwarfFunc.lowPc < relativeOffset + byteRange.length
+          const exactMatch = sortedDwarfFuncs.find(
+            (dwarfFunc) => dwarfFunc.lowPc === relativeOffset
           );
-          if (match) {
-            this.dwarfFunctionMap.set(globalIndex, match.name);
+          if (exactMatch) {
+            this.dwarfFunctionMap.set(globalIndex, exactMatch.name);
           }
         }
         if (this.dwarfFunctionMap.size > 0) {
+          for (let funcIndex = 0; funcIndex < this.moduleInfo.functions.length; funcIndex++) {
+            const globalIndex = importedFuncCount + funcIndex;
+            if (this.dwarfFunctionMap.has(globalIndex)) {
+              continue;
+            }
+            const byteRange = this.byteRanges.getItem("function", funcIndex);
+            if (!byteRange) {
+              continue;
+            }
+            const relativeOffset = byteRange.offset - baseOffset;
+            const rangeMatch = sortedDwarfFuncs.find(
+              (dwarfFunc) => dwarfFunc.lowPc >= relativeOffset && dwarfFunc.lowPc < relativeOffset + byteRange.length
+            );
+            if (rangeMatch) {
+              this.dwarfFunctionMap.set(globalIndex, rangeMatch.name);
+            }
+          }
           break;
         }
       }
-      if (this.dwarfFunctionMap.size === 0 && dwarfData.functions.length > 0) {
-        const sortedDwarfFuncs = [...dwarfData.functions].filter((dwarfFunc) => dwarfFunc.name.length > 0).sort((funcA, funcB) => funcA.lowPc - funcB.lowPc);
-        for (let funcIndex = 0; funcIndex < Math.min(this.moduleInfo.functions.length, sortedDwarfFuncs.length); funcIndex++) {
-          const globalIndex = importedFuncCount + funcIndex;
-          this.dwarfFunctionMap.set(globalIndex, sortedDwarfFuncs[funcIndex].name);
+      return this.dwarfFunctionMap;
+    }
+    buildDwarfParameterTypeMap() {
+      const dwarfData = this.getDwarfInfo();
+      if (!dwarfData || dwarfData.functions.length === 0 || !this.moduleInfo) {
+        return null;
+      }
+      const dwarfFuncMap = this.getDwarfFunctionMap();
+      if (!dwarfFuncMap || dwarfFuncMap.size === 0) {
+        return null;
+      }
+      const dwarfFuncByName = /* @__PURE__ */ new Map();
+      for (const func of dwarfData.functions) {
+        if (func.name) {
+          dwarfFuncByName.set(func.name, func);
         }
       }
-      return this.dwarfFunctionMap;
+      const result = /* @__PURE__ */ new Map();
+      for (const [globalIndex, funcName] of dwarfFuncMap) {
+        const dwarfFunc = dwarfFuncByName.get(funcName);
+        if (!dwarfFunc) {
+          continue;
+        }
+        const typeMap = /* @__PURE__ */ new Map();
+        for (let paramIdx = 0; paramIdx < dwarfFunc.parameters.length; paramIdx++) {
+          const param = dwarfFunc.parameters[paramIdx];
+          if (param.typeName) {
+            typeMap.set(paramIdx, param.typeName);
+          }
+        }
+        if (typeMap.size > 0) {
+          result.set(globalIndex, typeMap);
+        }
+      }
+      return result.size > 0 ? result : null;
     }
     buildDwarfLocalNameMap() {
       const dwarfData = this.getDwarfInfo();
@@ -26848,7 +27499,7 @@ log(mod.toString());`
       if (!sourceMappingSection) {
         return;
       }
-      const decoder = new TextDecoder("utf-8");
+      const decoder = this.textDecoder;
       const sourceMapUrl = decoder.decode(sourceMappingSection.data);
       if (sourceMapUrl.startsWith("data:application/json;base64,")) {
         const base64Data = sourceMapUrl.slice("data:application/json;base64,".length);
@@ -26992,15 +27643,24 @@ log(mod.toString());`
       this.container.appendChild(dropZone);
       this.container.appendChild(fileInput);
     }
+    loadBytes(name, bytes) {
+      this.fileName = name;
+      this.rawBytes = bytes;
+      this.loadModuleFromBytes();
+    }
     async loadFile(file) {
       this.fileName = file.name;
       const arrayBuffer = await file.arrayBuffer();
       this.rawBytes = new Uint8Array(arrayBuffer);
+      this.loadModuleFromBytes();
+    }
+    loadModuleFromBytes() {
       try {
         const reader = new BinaryReader(this.rawBytes);
         this.moduleInfo = reader.read();
         this.byteRanges = buildByteRanges(this.rawBytes);
         this.disassembler = new Disassembler(this.moduleInfo);
+        this.computeImportCounts();
         this.cachedFullWat = null;
         this.callGraph = null;
         this.cachedStrings = null;
@@ -27015,12 +27675,17 @@ log(mod.toString());`
         }
         const dwarfMap = this.getDwarfFunctionMap();
         const dwarfLocalNames = this.buildDwarfLocalNameMap();
+        const dwarfParamTypes = this.buildDwarfParameterTypeMap();
         this.nameResolver = createNameResolver(
           this.moduleInfo,
           dwarfMap ? (globalIndex) => dwarfMap.get(globalIndex) || null : void 0,
           dwarfLocalNames ? (funcGlobalIndex, localIndex) => {
             const funcLocals = dwarfLocalNames.get(funcGlobalIndex);
             return funcLocals?.get(localIndex) || null;
+          } : void 0,
+          dwarfParamTypes ? (funcGlobalIndex, paramIndex) => {
+            const funcParams = dwarfParamTypes.get(funcGlobalIndex);
+            return funcParams?.get(paramIndex) || null;
           } : void 0
         );
         this.parsedSourceMap = null;
@@ -27116,10 +27781,8 @@ log(mod.toString());`
       this.container.appendChild(splitView);
       this.buildTree();
       this.renderTree();
-      const restored = this.restoreFromHash();
-      if (!restored) {
-        this.selectNode(this.treeNodes[0]);
-      }
+      history.replaceState(null, "", "#explorer");
+      this.selectNode(this.treeNodes[0], "none");
       this.container.addEventListener("dragover", (event) => {
         event.preventDefault();
       });
@@ -27149,6 +27812,7 @@ log(mod.toString());`
         label: this.fileName,
         section: "module",
         index: -1,
+        icon: TREE_ICONS["module"],
         expanded: true,
         children: []
       };
@@ -27157,6 +27821,7 @@ log(mod.toString());`
           label: `Types (${moduleNode.types.length})`,
           section: "types",
           index: -1,
+          icon: TREE_ICONS["types"],
           expanded: false,
           children: []
         };
@@ -27195,6 +27860,7 @@ log(mod.toString());`
           label: `Imports (${moduleNode.imports.length})`,
           section: "imports",
           index: -1,
+          icon: TREE_ICONS["imports"],
           expanded: false,
           children: moduleNode.imports.map((importEntry, importIndex) => {
             let importTip = `${importEntry.moduleName}.${importEntry.fieldName}`;
@@ -27217,12 +27883,14 @@ pages: ${importEntry.memoryType.initial}..${importEntry.memoryType.maximum ?? ""
         root.children.push(importsNode);
       }
       if (moduleNode.functions.length > 0) {
-        const importedFuncCount = moduleNode.imports.filter((importEntry) => importEntry.kind === 0).length;
+        const importedFuncCount = this.getImportedCount(0);
         const allFlatTypes = flattenTypes3(moduleNode);
+        const maxBodySize = moduleNode.functions.reduce((max, func) => Math.max(max, func.body.length), 1);
         const functionsNode = {
           label: `Functions (${moduleNode.functions.length})`,
           section: "functions",
           index: -1,
+          icon: TREE_ICONS["functions"],
           expanded: false,
           children: moduleNode.functions.map((funcEntry, funcIndex) => {
             const globalIndex = importedFuncCount + funcIndex;
@@ -27233,24 +27901,35 @@ pages: ${importEntry.memoryType.initial}..${importEntry.memoryType.maximum ?? ""
             }
             const totalLocals = funcEntry.locals.reduce((sum, local) => sum + local.count, 0);
             const label = funcName ? funcName : `func_${globalIndex}`;
+            const sizeRatio = funcEntry.body.length / maxBodySize;
+            let heatColor;
+            if (sizeRatio > 0.7) {
+              heatColor = "#f38ba8";
+            } else if (sizeRatio > 0.4) {
+              heatColor = "#fab387";
+            } else if (sizeRatio > 0.15) {
+              heatColor = "#f9e2af";
+            }
             return {
               label,
               section: "function",
               index: funcIndex,
               tooltip: `func ${globalIndex}
 ${tipSignature}
-${funcEntry.body.length} bytes, ${totalLocals} locals`
+${funcEntry.body.length} bytes, ${totalLocals} locals`,
+              heatColor
             };
           })
         };
         root.children.push(functionsNode);
       }
       if (moduleNode.tables.length > 0) {
-        const importedTableCount = moduleNode.imports.filter((importEntry) => importEntry.kind === 1).length;
+        const importedTableCount = this.getImportedCount(1);
         const tablesNode = {
           label: `Tables (${moduleNode.tables.length})`,
           section: "tables",
           index: -1,
+          icon: TREE_ICONS["tables"],
           expanded: false,
           children: moduleNode.tables.map((tableEntry, tableIndex) => ({
             label: `table ${importedTableCount + tableIndex}: ${getValueTypeName2(tableEntry.elementType)} (${tableEntry.initial}..${tableEntry.maximum ?? ""})`,
@@ -27261,11 +27940,12 @@ ${funcEntry.body.length} bytes, ${totalLocals} locals`
         root.children.push(tablesNode);
       }
       if (moduleNode.memories.length > 0) {
-        const importedMemCount = moduleNode.imports.filter((importEntry) => importEntry.kind === 2).length;
+        const importedMemCount = this.getImportedCount(2);
         const memoriesNode = {
           label: `Memories (${moduleNode.memories.length})`,
           section: "memories",
           index: -1,
+          icon: TREE_ICONS["memories"],
           expanded: false,
           children: moduleNode.memories.map((memoryEntry, memIndex) => {
             const flags = [];
@@ -27286,11 +27966,12 @@ ${funcEntry.body.length} bytes, ${totalLocals} locals`
         root.children.push(memoriesNode);
       }
       if (moduleNode.globals.length > 0) {
-        const importedGlobalCount = moduleNode.imports.filter((importEntry) => importEntry.kind === 3).length;
+        const importedGlobalCount = this.getImportedCount(3);
         const globalsNode = {
           label: `Globals (${moduleNode.globals.length})`,
           section: "globals",
           index: -1,
+          icon: TREE_ICONS["globals"],
           expanded: false,
           children: moduleNode.globals.map((globalEntry, globalIndex) => {
             const globalIdx = importedGlobalCount + globalIndex;
@@ -27311,6 +27992,7 @@ ${funcEntry.body.length} bytes, ${totalLocals} locals`
           label: `Exports (${moduleNode.exports.length})`,
           section: "exports",
           index: -1,
+          icon: TREE_ICONS["exports"],
           expanded: false,
           children: moduleNode.exports.map((exportEntry, exportIndex) => ({
             label: `"${exportEntry.name}" -> ${EXPORT_KIND_NAMES[exportEntry.kind] || "unknown"} ${exportEntry.index}`,
@@ -27333,6 +28015,7 @@ ${funcEntry.body.length} bytes, ${totalLocals} locals`
           label: `Elements (${moduleNode.elements.length})`,
           section: "elements",
           index: -1,
+          icon: TREE_ICONS["elements"],
           expanded: false,
           children: moduleNode.elements.map((elementEntry, elemIndex) => {
             const passiveLabel = elementEntry.passive ? "passive" : `table ${elementEntry.tableIndex}`;
@@ -27350,6 +28033,7 @@ ${funcEntry.body.length} bytes, ${totalLocals} locals`
           label: `Data (${moduleNode.data.length})`,
           section: "data-segments",
           index: -1,
+          icon: TREE_ICONS["data-segments"],
           expanded: false,
           children: moduleNode.data.map((dataEntry, dataIndex) => {
             const passiveLabel = dataEntry.passive ? "passive" : `memory ${dataEntry.memoryIndex}`;
@@ -27367,6 +28051,7 @@ ${funcEntry.body.length} bytes, ${totalLocals} locals`
           label: `Tags (${moduleNode.tags.length})`,
           section: "tags",
           index: -1,
+          icon: TREE_ICONS["tags"],
           expanded: false,
           children: moduleNode.tags.map((tagEntry, tagIndex) => ({
             label: `tag ${tagIndex}: type ${tagEntry.typeIndex}`,
@@ -27381,6 +28066,7 @@ ${funcEntry.body.length} bytes, ${totalLocals} locals`
           label: `Custom Sections (${moduleNode.customSections.length})`,
           section: "custom-sections",
           index: -1,
+          icon: TREE_ICONS["custom-sections"],
           expanded: false,
           children: moduleNode.customSections.map((customEntry, customIndex) => ({
             label: `"${customEntry.name}" (${customEntry.data.length} bytes)`,
@@ -27394,7 +28080,8 @@ ${funcEntry.body.length} bytes, ${totalLocals} locals`
         root.children.push({
           label: "Name Section",
           section: "name-section",
-          index: -1
+          index: -1,
+          icon: TREE_ICONS["name-section"]
         });
       }
       {
@@ -27411,13 +28098,15 @@ ${funcEntry.body.length} bytes, ${totalLocals} locals`
           label: "Size Analysis",
           section: "size-analysis",
           index: -1,
+          icon: TREE_ICONS["size-analysis"],
           children: sizeChildren
         });
       }
       root.children.push({
         label: "Instruction Statistics",
         section: "instruction-stats",
-        index: -1
+        index: -1,
+        icon: TREE_ICONS["instruction-stats"]
       });
       const hasDebugSections = moduleNode.customSections.some(
         (section) => section.name.startsWith(".debug_")
@@ -27426,42 +28115,49 @@ ${funcEntry.body.length} bytes, ${totalLocals} locals`
         root.children.push({
           label: "Debug Info",
           section: "debug-info",
-          index: -1
+          index: -1,
+          icon: TREE_ICONS["debug-info"]
         });
       }
       if (moduleNode.data.length > 0) {
         root.children.push({
           label: "Strings",
           section: "strings",
-          index: -1
+          index: -1,
+          icon: TREE_ICONS["strings"]
         });
       }
       root.children.push({
         label: "Features",
         section: "feature-detection",
-        index: -1
+        index: -1,
+        icon: TREE_ICONS["feature-detection"]
       });
       root.children.push({
         label: "Module Interface",
         section: "module-interface",
-        index: -1
+        index: -1,
+        icon: TREE_ICONS["module-interface"]
       });
       root.children.push({
         label: "Function Complexity",
         section: "function-complexity",
-        index: -1
+        index: -1,
+        icon: TREE_ICONS["function-complexity"]
       });
       root.children.push({
         label: "Dead Code",
         section: "dead-code",
-        index: -1
+        index: -1,
+        icon: TREE_ICONS["dead-code"]
       });
       const hasProducers = moduleNode.customSections.some((section) => section.name === "producers");
       if (hasProducers) {
         root.children.push({
           label: "Producers",
           section: "producers",
-          index: -1
+          index: -1,
+          icon: TREE_ICONS["producers"]
         });
       }
       this.treeNodes = [root];
@@ -27531,9 +28227,18 @@ ${funcEntry.body.length} bytes, ${totalLocals} locals`
         spacer.className = "tree-chevron-spacer";
         row.appendChild(spacer);
       }
+      if (node.icon) {
+        const iconEl = document.createElement("i");
+        iconEl.className = `tree-icon ${node.icon.faClass}`;
+        iconEl.style.color = node.icon.color;
+        row.appendChild(iconEl);
+      }
       const label = document.createElement("span");
       label.className = "tree-label";
       label.textContent = node.label;
+      if (node.heatColor) {
+        label.style.color = node.heatColor;
+      }
       row.appendChild(label);
       row.addEventListener("click", () => {
         if (hasChildren && !this.searchQuery) {
@@ -27740,18 +28445,7 @@ ${funcEntry.body.length} bytes, ${totalLocals} locals`
       return sectionMap[kind] || null;
     }
     getExportTargetItemIndex(kind, globalIndex) {
-      if (!this.moduleInfo) {
-        return -1;
-      }
-      const importedCounts = {
-        0: this.moduleInfo.imports.filter((importEntry) => importEntry.kind === 0).length,
-        1: this.moduleInfo.imports.filter((importEntry) => importEntry.kind === 1).length,
-        2: this.moduleInfo.imports.filter((importEntry) => importEntry.kind === 2).length,
-        3: this.moduleInfo.imports.filter((importEntry) => importEntry.kind === 3).length,
-        4: this.moduleInfo.imports.filter((importEntry) => importEntry.kind === 4).length
-      };
-      const importedCount = importedCounts[kind] || 0;
-      return globalIndex - importedCount;
+      return globalIndex - this.getImportedCount(kind);
     }
     findTopLevelTypeIndex(flatTypeIndex) {
       if (!this.moduleInfo) {
@@ -27806,6 +28500,9 @@ ${funcEntry.body.length} bytes, ${totalLocals} locals`
         case "exports":
         case "elements":
         case "data-segments":
+          this.renderDataSegmentsSummary();
+          break;
+        case "data-segments-unused":
         case "tags":
         case "custom-sections":
           this.renderSectionSummary(node);
@@ -27893,21 +28590,55 @@ ${funcEntry.body.length} bytes, ${totalLocals} locals`
       }
       const detail = this.detailContainer;
       this.appendHeading(detail, this.fileName);
+      const sectionCards = [
+        { icon: TREE_ICONS["types"], label: "Types", count: this.moduleInfo.types.length, section: "types" },
+        { icon: TREE_ICONS["imports"], label: "Imports", count: this.moduleInfo.imports.length, section: "imports" },
+        { icon: TREE_ICONS["functions"], label: "Functions", count: this.moduleInfo.functions.length, section: "functions" },
+        { icon: TREE_ICONS["exports"], label: "Exports", count: this.moduleInfo.exports.length, section: "exports" },
+        { icon: TREE_ICONS["memories"], label: "Memories", count: this.moduleInfo.memories.length, section: "memories" },
+        { icon: TREE_ICONS["globals"], label: "Globals", count: this.moduleInfo.globals.length, section: "globals" },
+        { icon: TREE_ICONS["tables"], label: "Tables", count: this.moduleInfo.tables.length, section: "tables" },
+        { icon: TREE_ICONS["data-segments"], label: "Data", count: this.moduleInfo.data.length, section: "data-segments" },
+        { icon: TREE_ICONS["elements"], label: "Elements", count: this.moduleInfo.elements.length, section: "elements" },
+        { icon: TREE_ICONS["custom-sections"], label: "Custom", count: this.moduleInfo.customSections.length, section: "custom-sections" }
+      ];
+      if (this.moduleInfo.tags.length > 0) {
+        sectionCards.push({ icon: TREE_ICONS["tags"], label: "Tags", count: this.moduleInfo.tags.length, section: "tags" });
+      }
+      const grid = document.createElement("div");
+      grid.className = "module-summary-grid";
+      for (const cardData of sectionCards) {
+        if (cardData.count === 0 && cardData.label !== "Memories") {
+          continue;
+        }
+        const card = document.createElement("div");
+        card.className = "module-summary-card";
+        card.addEventListener("click", () => {
+          this.navigateToItem(cardData.section, -1);
+        });
+        if (cardData.icon) {
+          const iconEl = document.createElement("i");
+          iconEl.className = `module-summary-icon ${cardData.icon.faClass}`;
+          iconEl.style.color = cardData.icon.color;
+          card.appendChild(iconEl);
+        }
+        const countEl = document.createElement("span");
+        countEl.className = "module-summary-count";
+        countEl.textContent = String(cardData.count);
+        card.appendChild(countEl);
+        const labelEl = document.createElement("span");
+        labelEl.className = "module-summary-label";
+        labelEl.textContent = cardData.label;
+        card.appendChild(labelEl);
+        grid.appendChild(card);
+      }
+      detail.appendChild(grid);
       const table = this.createInfoTable();
       this.addInfoRow(table, "Version", String(this.moduleInfo.version));
       this.addInfoRow(table, "File size", this.formatFileSize(this.rawBytes.length));
-      this.addInfoRow(table, "Types", String(this.moduleInfo.types.length));
-      this.addInfoRow(table, "Imports", String(this.moduleInfo.imports.length));
-      this.addInfoRow(table, "Functions", String(this.moduleInfo.functions.length));
-      this.addInfoRow(table, "Tables", String(this.moduleInfo.tables.length));
-      this.addInfoRow(table, "Memories", String(this.moduleInfo.memories.length));
-      this.addInfoRow(table, "Globals", String(this.moduleInfo.globals.length));
-      this.addInfoRow(table, "Exports", String(this.moduleInfo.exports.length));
-      this.addInfoRow(table, "Start", this.moduleInfo.start !== null ? `func ${this.moduleInfo.start}` : "none");
-      this.addInfoRow(table, "Elements", String(this.moduleInfo.elements.length));
-      this.addInfoRow(table, "Data segments", String(this.moduleInfo.data.length));
-      this.addInfoRow(table, "Tags", String(this.moduleInfo.tags.length));
-      this.addInfoRow(table, "Custom sections", String(this.moduleInfo.customSections.length));
+      if (this.moduleInfo.start !== null) {
+        this.addInfoRow(table, "Start function", `func ${this.moduleInfo.start}`);
+      }
       detail.appendChild(table);
       if (this.byteRanges && this.byteRanges.sections.length > 0) {
         this.appendSubheading(detail, "Sections");
@@ -27926,11 +28657,16 @@ ${funcEntry.body.length} bytes, ${totalLocals} locals`
       showWatButton.textContent = "Generate full disassembly";
       showWatButton.addEventListener("click", () => {
         if (this.disassembler) {
-          if (!this.cachedFullWat) {
-            this.cachedFullWat = this.disassembler.disassemble();
-          }
-          showWatButton.remove();
-          this.appendCodeBlock(detail, this.cachedFullWat);
+          showWatButton.textContent = "Generating...";
+          showWatButton.style.opacity = "0.6";
+          showWatButton.style.pointerEvents = "none";
+          setTimeout(() => {
+            if (!this.cachedFullWat) {
+              this.cachedFullWat = this.disassembler.disassemble();
+            }
+            showWatButton.remove();
+            this.appendCodeBlock(detail, this.cachedFullWat);
+          }, 10);
         }
       });
       detail.appendChild(showWatButton);
@@ -27983,7 +28719,10 @@ ${funcEntry.body.length} bytes, ${totalLocals} locals`
         this.addInfoRow(table, "Kind", "struct");
         this.addInfoRow(table, "Fields", String(typeEntry.fields.length));
         if (typeEntry.superTypes && typeEntry.superTypes.length > 0) {
-          this.addInfoRow(table, "Super types", typeEntry.superTypes.join(", "));
+          for (const superIdx of typeEntry.superTypes) {
+            const topLevelIdx = this.findTopLevelTypeIndex(superIdx);
+            this.addLinkedInfoRow(table, "Extends", `type ${superIdx}`, "type", topLevelIdx);
+          }
         }
         if (typeEntry.final !== void 0) {
           this.addInfoRow(table, "Final", String(typeEntry.final));
@@ -28004,6 +28743,15 @@ ${funcEntry.body.length} bytes, ${totalLocals} locals`
         this.addInfoRow(table, "Kind", "array");
         this.addInfoRow(table, "Element type", getValueTypeName2(typeEntry.elementType));
         this.addInfoRow(table, "Mutable", String(typeEntry.mutable));
+        if (typeEntry.superTypes && typeEntry.superTypes.length > 0) {
+          for (const superIdx of typeEntry.superTypes) {
+            const topLevelIdx = this.findTopLevelTypeIndex(superIdx);
+            this.addLinkedInfoRow(table, "Extends", `type ${superIdx}`, "type", topLevelIdx);
+          }
+        }
+        if (typeEntry.final !== void 0) {
+          this.addInfoRow(table, "Final", String(typeEntry.final));
+        }
         detail.appendChild(table);
       } else if (typeEntry.kind === "rec") {
         const table = this.createInfoTable();
@@ -28078,7 +28826,7 @@ ${funcEntry.body.length} bytes, ${totalLocals} locals`
       }
       const detail = this.detailContainer;
       const funcEntry = this.moduleInfo.functions[funcIndex];
-      const importedFuncCount = this.moduleInfo.imports.filter((importEntry) => importEntry.kind === 0).length;
+      const importedFuncCount = this.getImportedCount(0);
       const globalFuncIndex = importedFuncCount + funcIndex;
       const funcName = this.getFunctionName(globalFuncIndex);
       const rawName = this.moduleInfo.nameSection?.functionNames?.get(globalFuncIndex) || null;
@@ -28123,7 +28871,11 @@ ${funcEntry.body.length} bytes, ${totalLocals} locals`
       if (nameSource) {
         allRows.push({ label: "Name source", value: nameSource });
       }
-      const midpoint = Math.ceil(allRows.length / 2);
+      const targetRowCount = 4;
+      while (allRows.length < targetRowCount * 2) {
+        allRows.push({ label: "\xA0", value: "\xA0" });
+      }
+      const midpoint = Math.max(targetRowCount, Math.ceil(allRows.length / 2));
       const leftColumn = this.createInfoTable();
       const rightColumn = this.createInfoTable();
       for (let rowIdx = 0; rowIdx < allRows.length; rowIdx++) {
@@ -28163,12 +28915,7 @@ ${funcEntry.body.length} bytes, ${totalLocals} locals`
         const callersSet = callGraphData.callers.get(globalFuncIndex);
         if (calleesSet && calleesSet.size > 0 || callersSet && callersSet.size > 0) {
           this.appendSubheading(detail, "Call Graph");
-        }
-        if (calleesSet && calleesSet.size > 0) {
-          this.appendCallList(detail, "Calls", calleesSet);
-        }
-        if (callersSet && callersSet.size > 0) {
-          this.appendCallList(detail, "Called by", callersSet);
+          this.renderCallGraphVisual(detail, globalFuncIndex, calleesSet || /* @__PURE__ */ new Set(), callersSet || /* @__PURE__ */ new Set());
         }
       }
       const tabContainer = document.createElement("div");
@@ -28196,7 +28943,7 @@ ${funcEntry.body.length} bytes, ${totalLocals} locals`
           if (this.nameResolver && this.moduleInfo) {
             const decompiledCode = decompileFunction(this.moduleInfo, funcIndex, this.nameResolver);
             const funcNameMap = /* @__PURE__ */ new Map();
-            const importedFuncCount2 = this.moduleInfo.imports.filter((imp) => imp.kind === 0).length;
+            const importedFuncCount2 = this.getImportedCount(0);
             for (let localFuncIdx = 0; localFuncIdx < this.moduleInfo.functions.length; localFuncIdx++) {
               const globalFuncIdx = importedFuncCount2 + localFuncIdx;
               const nameRes = this.nameResolver.functionName(globalFuncIdx);
@@ -28238,7 +28985,7 @@ ${funcEntry.body.length} bytes, ${totalLocals} locals`
             this.appendCodeBlock(tabContent, this.disassembler.disassembleFunction(funcIndex));
           }
         } else if (activeTab === "bytes") {
-          this.appendByteRange(tabContent, "function", funcIndex);
+          this.renderInteractiveBytes(tabContent, funcIndex);
         } else if (activeTab === "source") {
           this.renderSourceTabContent(tabContent, funcIndex);
         }
@@ -28265,7 +29012,7 @@ ${funcEntry.body.length} bytes, ${totalLocals} locals`
       }
       const detail = this.detailContainer;
       const tableEntry = this.moduleInfo.tables[tableIndex];
-      const importedTableCount = this.moduleInfo.imports.filter((importEntry) => importEntry.kind === 1).length;
+      const importedTableCount = this.getImportedCount(1);
       this.appendHeading(detail, `Table ${importedTableCount + tableIndex}`);
       const table = this.createInfoTable();
       this.addInfoRow(table, "Element type", getValueTypeName2(tableEntry.elementType));
@@ -28286,7 +29033,7 @@ ${funcEntry.body.length} bytes, ${totalLocals} locals`
       }
       const detail = this.detailContainer;
       const memoryEntry = this.moduleInfo.memories[memIndex];
-      const importedMemCount = this.moduleInfo.imports.filter((importEntry) => importEntry.kind === 2).length;
+      const importedMemCount = this.getImportedCount(2);
       this.appendHeading(detail, `Memory ${importedMemCount + memIndex}`);
       const table = this.createInfoTable();
       this.addInfoRow(table, "Initial pages", String(memoryEntry.initial));
@@ -28313,13 +29060,23 @@ ${funcEntry.body.length} bytes, ${totalLocals} locals`
       }
       const detail = this.detailContainer;
       const globalEntry = this.moduleInfo.globals[globalIndex];
-      const importedGlobalCount = this.moduleInfo.imports.filter((importEntry) => importEntry.kind === 3).length;
+      const importedGlobalCount = this.getImportedCount(3);
       const absoluteGlobalIndex = importedGlobalCount + globalIndex;
       const globalName = this.moduleInfo.nameSection?.globalNames?.get(absoluteGlobalIndex);
       this.appendHeading(detail, globalName || `global_${absoluteGlobalIndex}`);
       const table = this.createInfoTable();
       this.addInfoRow(table, "Type", getValueTypeName2(globalEntry.valueType));
       this.addInfoRow(table, "Mutable", String(globalEntry.mutable));
+      if (globalEntry.initInstructions && globalEntry.initInstructions.length > 0) {
+        const initStr = globalEntry.initInstructions.filter((instruction) => instruction.opCode.mnemonic !== "end").map((instruction) => {
+          const immediateValues = instruction.immediates.values;
+          if (immediateValues.length > 0) {
+            return `${instruction.opCode.mnemonic} ${immediateValues.join(" ")}`;
+          }
+          return instruction.opCode.mnemonic;
+        }).join(", ");
+        this.addInfoRow(table, "Initial value", initStr);
+      }
       detail.appendChild(table);
       this.appendSubheading(detail, "WAT");
       if (this.disassembler) {
@@ -28382,6 +29139,16 @@ ${funcEntry.body.length} bytes, ${totalLocals} locals`
       this.addInfoRow(table, "Passive", String(elementEntry.passive));
       if (!elementEntry.passive) {
         this.addInfoRow(table, "Table index", String(elementEntry.tableIndex));
+        if (elementEntry.offsetInstructions && elementEntry.offsetInstructions.length > 0) {
+          const offsetStr = elementEntry.offsetInstructions.filter((instruction) => instruction.opCode.mnemonic !== "end").map((instruction) => {
+            const immediateValues = instruction.immediates.values;
+            if (immediateValues.length > 0) {
+              return `${instruction.opCode.mnemonic} ${immediateValues.join(" ")}`;
+            }
+            return instruction.opCode.mnemonic;
+          }).join(", ");
+          this.addInfoRow(table, "Offset", offsetStr);
+        }
       }
       this.addInfoRow(table, "Entries", String(elementEntry.functionIndices.length));
       detail.appendChild(table);
@@ -28409,6 +29176,16 @@ ${funcEntry.body.length} bytes, ${totalLocals} locals`
       this.addInfoRow(table, "Passive", String(dataEntry.passive));
       if (!dataEntry.passive) {
         this.addInfoRow(table, "Memory index", String(dataEntry.memoryIndex));
+        if (dataEntry.offsetInstructions && dataEntry.offsetInstructions.length > 0) {
+          const offsetStr = dataEntry.offsetInstructions.filter((instruction) => instruction.opCode.mnemonic !== "end").map((instruction) => {
+            const immediateValues = instruction.immediates.values;
+            if (immediateValues.length > 0) {
+              return `${instruction.opCode.mnemonic} ${immediateValues.join(" ")}`;
+            }
+            return instruction.opCode.mnemonic;
+          }).join(", ");
+          this.addInfoRow(table, "Offset", offsetStr);
+        }
       }
       this.addInfoRow(table, "Size", `${dataEntry.data.length} bytes`);
       detail.appendChild(table);
@@ -28421,7 +29198,7 @@ ${funcEntry.body.length} bytes, ${totalLocals} locals`
         this.appendSubheading(detail, "String Preview");
         const preview = document.createElement("div");
         preview.className = "detail-code";
-        preview.textContent = new TextDecoder().decode(dataEntry.data);
+        preview.textContent = this.textDecoder.decode(dataEntry.data);
         detail.appendChild(preview);
       }
       if (dataEntry.data.length > 0) {
@@ -28533,7 +29310,7 @@ ${funcEntry.body.length} bytes, ${totalLocals} locals`
             }
           } else {
             if (runStart !== -1 && byteIndex - runStart >= minLength) {
-              const value = new TextDecoder().decode(segment.data.slice(runStart, byteIndex));
+              const value = this.textDecoder.decode(segment.data.slice(runStart, byteIndex));
               results.push({ dataSegmentIndex: segmentIndex, offset: runStart, value });
             }
             runStart = -1;
@@ -28542,6 +29319,73 @@ ${funcEntry.body.length} bytes, ${totalLocals} locals`
       }
       this.cachedStrings = results;
       return results;
+    }
+    renderDataSegmentsSummary() {
+      if (!this.moduleInfo) {
+        return;
+      }
+      const detail = this.detailContainer;
+      this.appendHeading(detail, `Data Segments (${this.moduleInfo.data.length})`);
+      const description = document.createElement("div");
+      description.className = "detail-description";
+      description.textContent = "Data segments used to initialize linear memory.";
+      detail.appendChild(description);
+      if (this.moduleInfo.data.length === 0) {
+        return;
+      }
+      const totalDataSize = this.moduleInfo.data.reduce((sum, entry) => sum + entry.data.length, 0);
+      const summaryTable = this.createInfoTable();
+      this.addInfoRow(summaryTable, "Segments", String(this.moduleInfo.data.length));
+      this.addInfoRow(summaryTable, "Total size", this.formatFileSize(totalDataSize));
+      detail.appendChild(summaryTable);
+      const activeSegments = [];
+      for (let segIndex = 0; segIndex < this.moduleInfo.data.length; segIndex++) {
+        const seg = this.moduleInfo.data[segIndex];
+        if (!seg.passive && seg.offsetInstructions && seg.offsetInstructions.length > 0) {
+          const constInstr = seg.offsetInstructions.find(
+            (instruction) => instruction.opCode.mnemonic === "i32.const" || instruction.opCode.mnemonic === "i64.const"
+          );
+          if (constInstr && constInstr.immediates.values.length > 0) {
+            activeSegments.push({
+              index: segIndex,
+              offset: constInstr.immediates.values[0],
+              length: seg.data.length
+            });
+          }
+        }
+      }
+      if (activeSegments.length > 0) {
+        this.appendSubheading(detail, "Memory Layout");
+        activeSegments.sort((segA, segB) => segA.offset - segB.offset);
+        const maxEnd = activeSegments.reduce((max, seg) => Math.max(max, seg.offset + seg.length), 0);
+        const mapContainer = document.createElement("div");
+        mapContainer.className = "memory-map";
+        for (const seg of activeSegments) {
+          const leftPercent = seg.offset / maxEnd * 100;
+          const widthPercent = Math.max(0.5, seg.length / maxEnd * 100);
+          const segBar = document.createElement("div");
+          segBar.className = "memory-map-segment";
+          segBar.style.left = `${leftPercent}%`;
+          segBar.style.width = `${widthPercent}%`;
+          segBar.title = `data ${seg.index}: offset 0x${seg.offset.toString(16)}, ${this.formatFileSize(seg.length)}`;
+          segBar.addEventListener("click", () => {
+            this.navigateToItem("data", seg.index);
+          });
+          mapContainer.appendChild(segBar);
+        }
+        detail.appendChild(mapContainer);
+        const legendTable = this.createInfoTable();
+        for (const seg of activeSegments) {
+          this.addLinkedInfoRow(
+            legendTable,
+            `data ${seg.index}`,
+            `0x${seg.offset.toString(16)} .. 0x${(seg.offset + seg.length).toString(16)} (${this.formatFileSize(seg.length)})`,
+            "data",
+            seg.index
+          );
+        }
+        detail.appendChild(legendTable);
+      }
     }
     renderSizeAnalysisSummary() {
       if (!this.moduleInfo || !this.rawBytes) {
@@ -28601,7 +29445,7 @@ ${funcEntry.body.length} bytes, ${totalLocals} locals`
         return;
       }
       const detail = this.detailContainer;
-      const importedFuncCount = this.moduleInfo.imports.filter((importEntry) => importEntry.kind === 0).length;
+      const importedFuncCount = this.getImportedCount(0);
       this.appendHeading(detail, "Function Sizes (largest first)");
       const funcSizes = this.moduleInfo.functions.map((func, funcIndex) => ({
         globalIndex: importedFuncCount + funcIndex,
@@ -28889,7 +29733,6 @@ ${funcEntry.body.length} bytes, ${totalLocals} locals`
         42: "C17",
         28: "C++03",
         33: "C++11",
-        26: "C++14",
         34: "C++14",
         29: "Rust",
         18: "Java",
@@ -28908,7 +29751,7 @@ ${funcEntry.body.length} bytes, ${totalLocals} locals`
       const detail = this.detailContainer;
       detail.innerHTML = "";
       const lowerQuery = query.toLowerCase();
-      const importedFuncCount = this.moduleInfo.imports.filter((importEntry) => importEntry.kind === 0).length;
+      const importedFuncCount = this.getImportedCount(0);
       this.appendHeading(detail, `Search: "${query}"`);
       const matches = [];
       for (let funcIndex = 0; funcIndex < this.moduleInfo.functions.length; funcIndex++) {
@@ -28973,7 +29816,7 @@ ${funcEntry.body.length} bytes, ${totalLocals} locals`
         return;
       }
       const detail = this.detailContainer;
-      const importedFuncCount = this.moduleInfo.imports.filter((imp) => imp.kind === 0).length;
+      const importedFuncCount = this.getImportedCount(0);
       this.appendHeading(detail, "Features & Target");
       const featureOpcodes = /* @__PURE__ */ new Map();
       const featureFunctions = /* @__PURE__ */ new Map();
@@ -29022,7 +29865,7 @@ ${funcEntry.body.length} bytes, ${totalLocals} locals`
           };
           const readStr = () => {
             const len = readULEB();
-            const str = new TextDecoder().decode(data.slice(offset, offset + len));
+            const str = this.textDecoder.decode(data.slice(offset, offset + len));
             offset += len;
             return str;
           };
@@ -29103,10 +29946,45 @@ ${funcEntry.body.length} bytes, ${totalLocals} locals`
         const funcSet = featureFunctions.get(featureName);
         const structCheck = structuralChecks.find((check) => check.name === featureName && check.detected);
         if (funcSet && funcSet.size > 0) {
-          const stat = document.createElement("div");
-          stat.className = "feature-card-stat";
+          const stat = document.createElement("a");
+          stat.className = "feature-card-stat feature-card-expand";
+          stat.href = "#";
           stat.textContent = `${funcSet.size} function${funcSet.size > 1 ? "s" : ""}`;
+          const funcListContainer = document.createElement("div");
+          funcListContainer.className = "feature-card-funclist";
+          funcListContainer.style.display = "none";
+          const sortedFuncIndices = Array.from(funcSet).sort((indexA, indexB) => indexA - indexB);
+          const maxShow = 15;
+          for (let displayIdx = 0; displayIdx < Math.min(sortedFuncIndices.length, maxShow); displayIdx++) {
+            const globalIdx = sortedFuncIndices[displayIdx];
+            const localIdx = globalIdx - importedFuncCount;
+            const displayName = this.getFunctionName(globalIdx) || `func_${globalIdx}`;
+            const funcLink = document.createElement("a");
+            funcLink.className = "callgraph-node";
+            funcLink.textContent = displayName;
+            funcLink.href = "#";
+            funcLink.addEventListener("click", (clickEvent) => {
+              clickEvent.preventDefault();
+              clickEvent.stopPropagation();
+              if (localIdx >= 0) {
+                this.navigateToItem("function", localIdx);
+              }
+            });
+            funcListContainer.appendChild(funcLink);
+          }
+          if (sortedFuncIndices.length > maxShow) {
+            const moreLabel = document.createElement("span");
+            moreLabel.className = "callgraph-more";
+            moreLabel.textContent = `+${sortedFuncIndices.length - maxShow} more`;
+            funcListContainer.appendChild(moreLabel);
+          }
+          stat.addEventListener("click", (clickEvent) => {
+            clickEvent.preventDefault();
+            const isVisible = funcListContainer.style.display !== "none";
+            funcListContainer.style.display = isVisible ? "none" : "flex";
+          });
           card.appendChild(stat);
+          card.appendChild(funcListContainer);
         }
         if (opcodes && opcodes.length > 0) {
           const opcodeList = document.createElement("div");
@@ -29206,7 +30084,7 @@ ${funcEntry.body.length} bytes, ${totalLocals} locals`
           const targetSection = this.getExportTargetSection(exportEntry.kind);
           const targetItemIndex = this.getExportTargetItemIndex(exportEntry.kind, exportEntry.index);
           if (exportEntry.kind === 0) {
-            const importedFuncCount = this.moduleInfo.imports.filter((imp) => imp.kind === 0).length;
+            const importedFuncCount = this.getImportedCount(0);
             const localFuncIndex = exportEntry.index - importedFuncCount;
             if (localFuncIndex >= 0 && localFuncIndex < this.moduleInfo.functions.length) {
               const funcEntry = this.moduleInfo.functions[localFuncIndex];
@@ -29234,7 +30112,7 @@ ${funcEntry.body.length} bytes, ${totalLocals} locals`
           });
           row.appendChild(nameLink);
           if (exportEntry.kind === 0 && signature) {
-            const importedFuncCount = this.moduleInfo.imports.filter((imp) => imp.kind === 0).length;
+            const importedFuncCount = this.getImportedCount(0);
             const localFuncIndex = exportEntry.index - importedFuncCount;
             if (localFuncIndex >= 0 && localFuncIndex < this.moduleInfo.functions.length) {
               const funcEntry = this.moduleInfo.functions[localFuncIndex];
@@ -29274,7 +30152,7 @@ ${funcEntry.body.length} bytes, ${totalLocals} locals`
         return;
       }
       const detail = this.detailContainer;
-      const importedFuncCount = this.moduleInfo.imports.filter((imp) => imp.kind === 0).length;
+      const importedFuncCount = this.getImportedCount(0);
       this.appendHeading(detail, "Function Complexity");
       const entries = [];
       for (let funcIndex = 0; funcIndex < this.moduleInfo.functions.length; funcIndex++) {
@@ -29317,15 +30195,36 @@ ${funcEntry.body.length} bytes, ${totalLocals} locals`
         return scoreB - scoreA;
       });
       const maxScore = entries.length > 0 ? entries[0].branchCount * 3 + entries[0].maxNestingDepth * 5 + entries[0].instructionCount : 1;
-      const summaryTable = this.createInfoTable();
-      this.addInfoRow(summaryTable, "Functions", String(entries.length));
-      if (entries.length > 0) {
-        const avgInstructions = Math.round(entries.reduce((sum, entry) => sum + entry.instructionCount, 0) / entries.length);
-        const avgBranches = Math.round(entries.reduce((sum, entry) => sum + entry.branchCount, 0) / entries.length);
-        this.addInfoRow(summaryTable, "Avg instructions", String(avgInstructions));
-        this.addInfoRow(summaryTable, "Avg branches", String(avgBranches));
+      const highThreshold = maxScore * 0.6;
+      const mediumThreshold = maxScore * 0.2;
+      const highCount = entries.filter((entry) => entry.branchCount * 3 + entry.maxNestingDepth * 5 + entry.instructionCount >= highThreshold).length;
+      const medCount = entries.filter((entry) => {
+        const score = entry.branchCount * 3 + entry.maxNestingDepth * 5 + entry.instructionCount;
+        return score >= mediumThreshold && score < highThreshold;
+      }).length;
+      const lowCount = entries.length - highCount - medCount;
+      const summaryGrid = document.createElement("div");
+      summaryGrid.className = "module-summary-grid";
+      for (const [tierLabel, tierCount, tierColor] of [
+        ["High", highCount, "#f38ba8"],
+        ["Medium", medCount, "#fab387"],
+        ["Low", lowCount, "#a6e3a1"]
+      ]) {
+        const card = document.createElement("div");
+        card.className = "module-summary-card";
+        card.style.borderColor = tierColor;
+        const countEl = document.createElement("span");
+        countEl.className = "module-summary-count";
+        countEl.style.color = tierColor;
+        countEl.textContent = String(tierCount);
+        card.appendChild(countEl);
+        const labelEl = document.createElement("span");
+        labelEl.className = "module-summary-label";
+        labelEl.textContent = tierLabel;
+        card.appendChild(labelEl);
+        summaryGrid.appendChild(card);
       }
-      detail.appendChild(summaryTable);
+      detail.appendChild(summaryGrid);
       this.appendSubheading(detail, "By Complexity Score");
       const headerRow = document.createElement("div");
       headerRow.className = "detail-info-row complexity-header";
@@ -29351,6 +30250,12 @@ ${funcEntry.body.length} bytes, ${totalLocals} locals`
         });
         row.appendChild(link);
         const score = entry.branchCount * 3 + entry.maxNestingDepth * 5 + entry.instructionCount;
+        let tierColor = "#a6e3a1";
+        if (score >= highThreshold) {
+          tierColor = "#f38ba8";
+        } else if (score >= mediumThreshold) {
+          tierColor = "#fab387";
+        }
         const scoreCell = document.createElement("span");
         scoreCell.className = "complexity-cell";
         const barContainer = document.createElement("span");
@@ -29362,6 +30267,7 @@ ${funcEntry.body.length} bytes, ${totalLocals} locals`
         const bar = document.createElement("span");
         bar.className = "size-bar";
         bar.style.width = `${Math.max(2, score / maxScore * 100)}%`;
+        bar.style.background = tierColor;
         bar.style.display = "block";
         barContainer.appendChild(bar);
         scoreCell.appendChild(barContainer);
@@ -29381,7 +30287,7 @@ ${funcEntry.body.length} bytes, ${totalLocals} locals`
         return;
       }
       const detail = this.detailContainer;
-      const importedFuncCount = this.moduleInfo.imports.filter((imp) => imp.kind === 0).length;
+      const importedFuncCount = this.getImportedCount(0);
       const callGraphData = this.getCallGraph();
       const exportedFuncIndices = /* @__PURE__ */ new Set();
       for (const exportEntry of this.moduleInfo.exports) {
@@ -29427,13 +30333,36 @@ ${funcEntry.body.length} bytes, ${totalLocals} locals`
         }
       }
       this.appendHeading(detail, "Dead Code Analysis");
-      const summaryTable = this.createInfoTable();
-      this.addInfoRow(summaryTable, "Total functions", String(this.moduleInfo.functions.length));
-      this.addInfoRow(summaryTable, "Reachable", String(reachable.size - importedFuncCount));
-      this.addInfoRow(summaryTable, "Unreachable", String(deadFunctions.length));
       const wastedBytes = deadFunctions.reduce((sum, func) => sum + func.bodySize, 0);
-      this.addInfoRow(summaryTable, "Wasted bytes", this.formatFileSize(wastedBytes));
-      detail.appendChild(summaryTable);
+      const totalCodeSize = this.moduleInfo.functions.reduce((sum, func) => sum + func.body.length, 0);
+      const wastedPercent = totalCodeSize > 0 ? (wastedBytes / totalCodeSize * 100).toFixed(1) : "0";
+      const summaryGrid = document.createElement("div");
+      summaryGrid.className = "module-summary-grid";
+      for (const [label, count, color] of [
+        ["Reachable", reachable.size - importedFuncCount, "#a6e3a1"],
+        ["Unreachable", deadFunctions.length, deadFunctions.length > 0 ? "#f38ba8" : "#a6e3a1"],
+        ["Wasted", this.formatFileSize(wastedBytes), "#fab387"]
+      ]) {
+        const card = document.createElement("div");
+        card.className = "module-summary-card";
+        const countEl = document.createElement("span");
+        countEl.className = "module-summary-count";
+        countEl.style.color = color;
+        countEl.textContent = String(count);
+        card.appendChild(countEl);
+        const labelEl = document.createElement("span");
+        labelEl.className = "module-summary-label";
+        labelEl.textContent = label;
+        card.appendChild(labelEl);
+        summaryGrid.appendChild(card);
+      }
+      detail.appendChild(summaryGrid);
+      if (wastedBytes > 0 && totalCodeSize > 0) {
+        const wastedInfo = document.createElement("div");
+        wastedInfo.className = "detail-description";
+        wastedInfo.textContent = `${wastedPercent}% of code bytes are unreachable.`;
+        detail.appendChild(wastedInfo);
+      }
       if (deadFunctions.length === 0) {
         const noDeadCode = document.createElement("div");
         noDeadCode.className = "detail-description";
@@ -29442,11 +30371,36 @@ ${funcEntry.body.length} bytes, ${totalLocals} locals`
         return;
       }
       deadFunctions.sort((funcA, funcB) => funcB.bodySize - funcA.bodySize);
+      const maxDeadSize = deadFunctions[0].bodySize;
       this.appendSubheading(detail, `Unreachable Functions (${deadFunctions.length})`);
       const funcTable = this.createInfoTable();
       for (const deadFunc of deadFunctions) {
         const displayName = deadFunc.name || `func_${deadFunc.globalIndex}`;
-        this.addLinkedInfoRow(funcTable, displayName, `${deadFunc.bodySize} bytes`, "function", deadFunc.localIndex);
+        const row = document.createElement("div");
+        row.className = "detail-info-row";
+        const link = document.createElement("a");
+        link.className = "detail-info-link";
+        link.style.flex = "0 0 180px";
+        link.textContent = displayName;
+        link.href = "#";
+        link.addEventListener("click", (event) => {
+          event.preventDefault();
+          this.navigateToItem("function", deadFunc.localIndex);
+        });
+        row.appendChild(link);
+        const barContainer = document.createElement("div");
+        barContainer.className = "size-bar-container";
+        const bar = document.createElement("div");
+        bar.className = "size-bar";
+        bar.style.width = `${Math.max(2, deadFunc.bodySize / maxDeadSize * 100)}%`;
+        bar.style.background = "#f38ba8";
+        barContainer.appendChild(bar);
+        row.appendChild(barContainer);
+        const valueElement = document.createElement("span");
+        valueElement.className = "size-value";
+        valueElement.textContent = this.formatFileSize(deadFunc.bodySize);
+        row.appendChild(valueElement);
+        funcTable.appendChild(row);
       }
       detail.appendChild(funcTable);
     }
@@ -29473,7 +30427,7 @@ ${funcEntry.body.length} bytes, ${totalLocals} locals`
           return result >>> 0;
         }, readString2 = function() {
           const length = readULEB1282();
-          const str = new TextDecoder().decode(data.slice(offset, offset + length));
+          const str = this.textDecoder.decode(data.slice(offset, offset + length));
           offset += length;
           return str;
         };
@@ -29550,6 +30504,15 @@ ${funcEntry.body.length} bytes, ${totalLocals} locals`
           categories["Other"].push(mnemonic);
         }
       }
+      const categoryColors = {
+        "Control Flow": "#cba6f7",
+        "Memory": "#a6e3a1",
+        "Numeric": "#fab387",
+        "Variable": "#89b4fa",
+        "Reference": "#f38ba8",
+        "Table": "#94e2d5",
+        "Other": "#6c7086"
+      };
       this.appendSubheading(detail, "By Category");
       const categoryTable = this.createInfoTable();
       for (const [categoryName, mnemonics] of Object.entries(categories)) {
@@ -29558,17 +30521,23 @@ ${funcEntry.body.length} bytes, ${totalLocals} locals`
         }
         const categoryCount = mnemonics.reduce((sum, mnemonic) => sum + (opcodeCounts.get(mnemonic) || 0), 0);
         const percentage = totalInstructions > 0 ? (categoryCount / totalInstructions * 100).toFixed(1) : "0";
+        const barColor = categoryColors[categoryName] || "#89b4fa";
         const row = document.createElement("div");
         row.className = "detail-info-row";
         const labelElement = document.createElement("span");
         labelElement.className = "detail-info-label";
-        labelElement.textContent = categoryName;
+        const dot = document.createElement("span");
+        dot.className = "category-dot";
+        dot.style.background = barColor;
+        labelElement.appendChild(dot);
+        labelElement.appendChild(document.createTextNode(categoryName));
         row.appendChild(labelElement);
         const barContainer = document.createElement("div");
         barContainer.className = "size-bar-container";
         const bar = document.createElement("div");
         bar.className = "size-bar";
         bar.style.width = `${Math.max(2, categoryCount / totalInstructions * 100)}%`;
+        bar.style.background = barColor;
         barContainer.appendChild(bar);
         row.appendChild(barContainer);
         const valueElement = document.createElement("span");
@@ -29656,11 +30625,71 @@ ${funcEntry.body.length} bytes, ${totalLocals} locals`
       row.appendChild(link);
       table.appendChild(row);
     }
+    renderCallGraphVisual(parent, centerGlobalIndex, callees, callers) {
+      if (!this.moduleInfo) {
+        return;
+      }
+      const importedFuncCount = this.getImportedCount(0);
+      const renderFlowSection = (indices, label) => {
+        const section = document.createElement("div");
+        section.className = "callgraph-flow";
+        const sectionLabel = document.createElement("span");
+        sectionLabel.className = "callgraph-col-label";
+        sectionLabel.textContent = `${label} (${indices.size}): `;
+        section.appendChild(sectionLabel);
+        const sorted = Array.from(indices).sort((indexA, indexB) => indexA - indexB);
+        const initialVisible = 10;
+        const overflowNodes = [];
+        for (let displayIdx = 0; displayIdx < sorted.length; displayIdx++) {
+          const globalIdx = sorted[displayIdx];
+          const localIdx = globalIdx - importedFuncCount;
+          const displayName = this.getFunctionName(globalIdx) || `func_${globalIdx}`;
+          const node = document.createElement("a");
+          node.className = "callgraph-node";
+          node.textContent = displayName;
+          node.href = "#";
+          node.addEventListener("click", (event) => {
+            event.preventDefault();
+            if (localIdx >= 0) {
+              this.navigateToItem("function", localIdx);
+            }
+          });
+          if (displayIdx >= initialVisible) {
+            node.style.display = "none";
+            overflowNodes.push(node);
+          }
+          section.appendChild(node);
+        }
+        if (overflowNodes.length > 0) {
+          const expandBtn = document.createElement("a");
+          expandBtn.className = "callgraph-node";
+          expandBtn.style.color = "#6c7086";
+          expandBtn.style.cursor = "pointer";
+          expandBtn.textContent = `+${overflowNodes.length} more`;
+          expandBtn.href = "#";
+          expandBtn.addEventListener("click", (event) => {
+            event.preventDefault();
+            for (const overflowNode of overflowNodes) {
+              overflowNode.style.display = "";
+            }
+            expandBtn.remove();
+          });
+          section.appendChild(expandBtn);
+        }
+        parent.appendChild(section);
+      };
+      if (callees.size > 0) {
+        renderFlowSection(callees, "Calls");
+      }
+      if (callers.size > 0) {
+        renderFlowSection(callers, "Called by");
+      }
+    }
     appendCallList(parent, label, funcIndices) {
       if (!this.moduleInfo) {
         return;
       }
-      const importedFuncCount = this.moduleInfo.imports.filter((importEntry) => importEntry.kind === 0).length;
+      const importedFuncCount = this.getImportedCount(0);
       const container = document.createElement("div");
       container.className = "detail-call-list";
       const labelElement = document.createElement("span");
@@ -29742,6 +30771,139 @@ ${funcEntry.body.length} bytes, ${totalLocals} locals`
       wrapper.appendChild(block);
       wrapper.appendChild(this.createCopyButton(hexText));
       parent.appendChild(wrapper);
+    }
+    renderInteractiveBytes(parent, funcIndex) {
+      if (!this.byteRanges || !this.rawBytes || !this.moduleInfo || funcIndex >= this.moduleInfo.functions.length) {
+        return;
+      }
+      const range = this.byteRanges.getItem("function", funcIndex);
+      if (!range) {
+        this.appendByteRange(parent, "function", funcIndex);
+        return;
+      }
+      const funcBody = this.moduleInfo.functions[funcIndex].body;
+      let instructions;
+      try {
+        instructions = InstructionDecoder.decodeFunctionBody(funcBody);
+      } catch (decodeError) {
+        this.appendByteRange(parent, "function", funcIndex);
+        return;
+      }
+      const rangeInfo = document.createElement("div");
+      rangeInfo.className = "detail-byte-range-info";
+      rangeInfo.textContent = `Offset: 0x${range.offset.toString(16)}, ${range.length} bytes, ${instructions.length} instructions`;
+      parent.appendChild(rangeInfo);
+      const splitContainer = document.createElement("div");
+      splitContainer.className = "hex-split-view";
+      const instrList = document.createElement("div");
+      instrList.className = "hex-instr-list";
+      const hexView = document.createElement("pre");
+      hexView.className = "detail-hex hex-interactive";
+      const byteSpans = /* @__PURE__ */ new Map();
+      const byteClasses = buildInstructionByteClasses(funcBody);
+      const byteToInstrLabel = /* @__PURE__ */ new Map();
+      for (const instruction of instructions) {
+        const label = instruction.immediates.values.length > 0 ? `${instruction.opCode.mnemonic} ${instruction.immediates.values.join(", ")}` : instruction.opCode.mnemonic;
+        for (let bytePos = instruction.offset; bytePos < instruction.offset + instruction.length; bytePos++) {
+          byteToInstrLabel.set(bytePos, label);
+        }
+      }
+      for (let position = 0; position < funcBody.length; position += 16) {
+        const address = (range.offset + position).toString(16).padStart(8, "0");
+        const addressSpan = document.createElement("span");
+        addressSpan.className = "hex-address";
+        addressSpan.textContent = address + "  ";
+        hexView.appendChild(addressSpan);
+        for (let byteIndex = 0; byteIndex < 16; byteIndex++) {
+          if (byteIndex === 8) {
+            hexView.appendChild(document.createTextNode(" "));
+          }
+          if (position + byteIndex < funcBody.length) {
+            const byteOffset = position + byteIndex;
+            const byteValue = funcBody[byteOffset];
+            const hexStr = byteValue.toString(16).padStart(2, "0");
+            const span = document.createElement("span");
+            span.className = byteClasses.get(byteOffset) || "";
+            span.dataset.offset = String(byteOffset);
+            span.textContent = hexStr;
+            const instrLabel = byteToInstrLabel.get(byteOffset);
+            if (instrLabel) {
+              span.title = instrLabel;
+            }
+            hexView.appendChild(span);
+            hexView.appendChild(document.createTextNode(" "));
+            if (!byteSpans.has(byteOffset)) {
+              byteSpans.set(byteOffset, []);
+            }
+            byteSpans.get(byteOffset).push(span);
+          } else {
+            hexView.appendChild(document.createTextNode("   "));
+          }
+        }
+        hexView.appendChild(document.createTextNode("\n"));
+      }
+      let selectedInstrIdx = -1;
+      const instrRows = [];
+      const highlightInstruction = (targetIdx) => {
+        if (selectedInstrIdx >= 0 && selectedInstrIdx < instrRows.length) {
+          instrRows[selectedInstrIdx].classList.remove("hex-instr-active");
+        }
+        for (const spans of byteSpans.values()) {
+          for (const span of spans) {
+            span.classList.remove("hex-byte-active");
+          }
+        }
+        selectedInstrIdx = targetIdx;
+        instrRows[targetIdx].classList.add("hex-instr-active");
+        const targetInstr = instructions[targetIdx];
+        for (let bytePos = targetInstr.offset; bytePos < targetInstr.offset + targetInstr.length; bytePos++) {
+          const spans = byteSpans.get(bytePos);
+          if (spans) {
+            for (const span of spans) {
+              span.classList.add("hex-byte-active");
+            }
+          }
+        }
+      };
+      for (let instrIdx = 0; instrIdx < instructions.length; instrIdx++) {
+        const instruction = instructions[instrIdx];
+        const row = document.createElement("div");
+        row.className = "hex-instr-row";
+        const offsetLabel = document.createElement("span");
+        offsetLabel.className = "hex-instr-offset";
+        offsetLabel.textContent = `+${instruction.offset.toString(16).padStart(4, "0")}`;
+        row.appendChild(offsetLabel);
+        const mnemonic = document.createElement("span");
+        mnemonic.className = "hex-instr-mnemonic";
+        mnemonic.textContent = instruction.opCode.mnemonic;
+        row.appendChild(mnemonic);
+        if (instruction.immediates.values.length > 0) {
+          const immediates = document.createElement("span");
+          immediates.className = "hex-instr-imm";
+          immediates.textContent = instruction.immediates.values.join(", ");
+          row.appendChild(immediates);
+        }
+        row.addEventListener("click", () => highlightInstruction(instrIdx));
+        instrList.appendChild(row);
+        instrRows.push(row);
+      }
+      hexView.addEventListener("click", (event) => {
+        const target = event.target;
+        if (target.dataset.offset !== void 0) {
+          const clickedOffset = parseInt(target.dataset.offset, 10);
+          for (let instrIdx = 0; instrIdx < instructions.length; instrIdx++) {
+            const instruction = instructions[instrIdx];
+            if (clickedOffset >= instruction.offset && clickedOffset < instruction.offset + instruction.length) {
+              highlightInstruction(instrIdx);
+              instrRows[instrIdx].scrollIntoView({ block: "nearest" });
+              break;
+            }
+          }
+        }
+      });
+      splitContainer.appendChild(instrList);
+      splitContainer.appendChild(hexView);
+      parent.appendChild(splitContainer);
     }
     appendByteRange(parent, section, index) {
       if (!this.byteRanges || !this.rawBytes) {
@@ -29870,6 +31032,17 @@ ${funcEntry.body.length} bytes, ${totalLocals} locals`
           downloadFile(mod.name + ".wasm", mod.bytes, "application/wasm");
         });
         actions.appendChild(wasmBtn);
+        const exploreBtn = document.createElement("button");
+        exploreBtn.className = "download-btn";
+        exploreBtn.textContent = "\u{1F50D} Explore";
+        exploreBtn.addEventListener("click", () => {
+          switchMode("explorer");
+          if (!explorerInstance) {
+            explorerInstance = new Explorer(document.getElementById("explorerContainer"));
+          }
+          explorerInstance.loadBytes(mod.name + ".wasm", mod.bytes);
+        });
+        actions.appendChild(exploreBtn);
       }
       header.appendChild(actions);
       card.appendChild(header);

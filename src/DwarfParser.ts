@@ -20,12 +20,14 @@ export interface DwarfParameter {
   name: string;
   wasmLocal: number | null;
   typeName: string | null;
+  typeOffset: number | null;
 }
 
 export interface DwarfLocalVariable {
   name: string;
   wasmLocal: number | null;
   typeName: string | null;
+  typeOffset: number | null;
 }
 
 export interface DwarfFunction {
@@ -48,11 +50,18 @@ export interface DwarfCompilationUnit {
   functions: DwarfFunction[];
 }
 
+export interface DwarfStructField {
+  name: string;
+  byteOffset: number;
+  typeOffset: number | null;
+}
+
 export interface DwarfTypeInfo {
   tag: 'base' | 'pointer' | 'struct' | 'typedef' | 'const' | 'other';
   name: string | null;
   byteSize: number;
   referencedType: number | null;
+  fields?: DwarfStructField[];
 }
 
 export interface DwarfDebugInfo {
@@ -105,6 +114,7 @@ export function parseDwarfDebugInfo(customSections: { name: string; data: Uint8A
       for (const compilationUnit of compilationUnits) {
         allFunctions = allFunctions.concat(compilationUnit.functions);
       }
+      resolveParameterTypes(allFunctions, allTypes);
     } catch (parseError) {
       // DWARF parsing can fail on edge cases; degrade gracefully
     }
@@ -428,6 +438,7 @@ function executeLineProgram(
 
 // DWARF tags
 const DW_TAG_formal_parameter = 0x05;
+const DW_TAG_member = 0x0d;
 const DW_TAG_pointer_type = 0x0f;
 const DW_TAG_compile_unit = 0x11;
 const DW_TAG_structure_type = 0x13;
@@ -441,6 +452,7 @@ const DW_TAG_variable = 0x34;
 const DW_AT_location = 0x02;
 const DW_AT_name = 0x03;
 const DW_AT_byte_size = 0x0b;
+const DW_AT_data_member_location = 0x38;
 const DW_AT_low_pc = 0x11;
 const DW_AT_high_pc = 0x12;
 const DW_AT_language = 0x13;
@@ -662,6 +674,69 @@ function readAttrValue(
   }
 }
 
+function resolveTypeName(typeOffset: number, types: Map<number, DwarfTypeInfo>, depth: number = 0): string | null {
+  if (depth > 10) {
+    return null;
+  }
+  const typeInfo = types.get(typeOffset);
+  if (!typeInfo) {
+    return null;
+  }
+
+  if (typeInfo.tag === 'base' && typeInfo.name) {
+    return typeInfo.name;
+  }
+
+  if (typeInfo.tag === 'pointer') {
+    if (typeInfo.referencedType !== null) {
+      const innerType = resolveTypeName(typeInfo.referencedType, types, depth + 1);
+      if (innerType) {
+        return `${innerType} *`;
+      }
+    }
+    return 'void *';
+  }
+
+  if (typeInfo.tag === 'const') {
+    if (typeInfo.referencedType !== null) {
+      const innerType = resolveTypeName(typeInfo.referencedType, types, depth + 1);
+      if (innerType) {
+        return `const ${innerType}`;
+      }
+    }
+    return null;
+  }
+
+  if (typeInfo.tag === 'typedef' && typeInfo.name) {
+    return typeInfo.name;
+  }
+
+  if (typeInfo.tag === 'struct' && typeInfo.name) {
+    return `struct ${typeInfo.name}`;
+  }
+
+  if (typeInfo.referencedType !== null) {
+    return resolveTypeName(typeInfo.referencedType, types, depth + 1);
+  }
+
+  return typeInfo.name;
+}
+
+function resolveParameterTypes(functions: DwarfFunction[], types: Map<number, DwarfTypeInfo>): void {
+  for (const func of functions) {
+    for (const param of func.parameters) {
+      if (param.typeOffset !== null) {
+        param.typeName = resolveTypeName(param.typeOffset, types) || null;
+      }
+    }
+    for (const variable of func.variables) {
+      if (variable.typeOffset !== null) {
+        variable.typeName = resolveTypeName(variable.typeOffset, types) || null;
+      }
+    }
+  }
+}
+
 function parseDebugInfo(
   debugInfoData: Uint8Array,
   debugAbbrevData: Uint8Array,
@@ -703,6 +778,8 @@ function parseDebugInfo(
     let depth = 0;
     let currentFunction: DwarfFunction | null = null;
     let functionDepth = -1;
+    let currentStructType: DwarfTypeInfo | null = null;
+    let structDepth = -1;
 
     while (reader.offset < unitEnd) {
       const dieOffset = reader.offset;
@@ -712,6 +789,10 @@ function parseDebugInfo(
         if (currentFunction && depth <= functionDepth) {
           currentFunction = null;
           functionDepth = -1;
+        }
+        if (currentStructType && depth <= structDepth) {
+          currentStructType = null;
+          structDepth = -1;
         }
         continue;
       }
@@ -776,11 +857,13 @@ function parseDebugInfo(
         if (abbrev.tag === DW_TAG_formal_parameter) {
           const paramName = attrs.get(DW_AT_name);
           const location = attrs.get(DW_AT_location);
+          const paramTypeRef = attrs.get(DW_AT_type);
           if (typeof paramName === 'string') {
             currentFunction.parameters.push({
               name: paramName,
               wasmLocal: extractWasmLocal(location ?? null),
               typeName: null,
+              typeOffset: typeof paramTypeRef === 'number' ? paramTypeRef : null,
             });
           }
         }
@@ -788,11 +871,13 @@ function parseDebugInfo(
         if (abbrev.tag === DW_TAG_variable) {
           const varName = attrs.get(DW_AT_name);
           const location = attrs.get(DW_AT_location);
+          const varTypeRef = attrs.get(DW_AT_type);
           if (typeof varName === 'string') {
             currentFunction.variables.push({
               name: varName,
               wasmLocal: extractWasmLocal(location ?? null),
               typeName: null,
+              typeOffset: typeof varTypeRef === 'number' ? varTypeRef : null,
             });
           }
         }
@@ -811,12 +896,32 @@ function parseDebugInfo(
         const typeName = attrs.get(DW_AT_name);
         const byteSize = attrs.get(DW_AT_byte_size);
         const typeRef = attrs.get(DW_AT_type);
-        typeMap.set(dieOffset, {
+        const typeEntry: DwarfTypeInfo = {
           tag: typeTag,
           name: typeof typeName === 'string' ? typeName : null,
           byteSize: typeof byteSize === 'number' ? byteSize : 0,
           referencedType: typeof typeRef === 'number' ? typeRef : null,
-        });
+        };
+        if (typeTag === 'struct' && abbrev.hasChildren) {
+          typeEntry.fields = [];
+          currentStructType = typeEntry;
+          structDepth = depth;
+        }
+        typeMap.set(dieOffset, typeEntry);
+      }
+
+      // Collect struct members
+      if (abbrev.tag === DW_TAG_member && currentStructType && depth > structDepth) {
+        const memberName = attrs.get(DW_AT_name);
+        const memberLocation = attrs.get(DW_AT_data_member_location);
+        const memberTypeRef = attrs.get(DW_AT_type);
+        if (typeof memberName === 'string' && currentStructType.fields) {
+          currentStructType.fields.push({
+            name: memberName,
+            byteOffset: typeof memberLocation === 'number' ? memberLocation : 0,
+            typeOffset: typeof memberTypeRef === 'number' ? memberTypeRef : null,
+          });
+        }
       }
 
       // Track function scope — when we leave the function's children, clear currentFunction

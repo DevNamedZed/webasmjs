@@ -111,6 +111,8 @@ interface TreeNode {
   children?: TreeNode[];
   expanded?: boolean;
   tooltip?: string;
+  icon?: TreeIcon;
+  heatColor?: string;
 }
 
 const WAT_KEYWORDS = new Set([
@@ -488,6 +490,36 @@ function renderColoredHexDump(container: HTMLElement, bytes: Uint8Array, baseOff
   }
 }
 
+interface TreeIcon {
+  faClass: string;
+  color: string;
+}
+
+const TREE_ICONS: Record<string, TreeIcon> = {
+  'module': { faClass: 'fa-solid fa-cube', color: '#cba6f7' },
+  'types': { faClass: 'fa-solid fa-shapes', color: '#89b4fa' },
+  'imports': { faClass: 'fa-solid fa-arrow-right-to-bracket', color: '#94e2d5' },
+  'functions': { faClass: 'fa-solid fa-code', color: '#a6e3a1' },
+  'tables': { faClass: 'fa-solid fa-table-cells', color: '#f9e2af' },
+  'memories': { faClass: 'fa-solid fa-memory', color: '#fab387' },
+  'globals': { faClass: 'fa-solid fa-globe', color: '#74c7ec' },
+  'exports': { faClass: 'fa-solid fa-arrow-right-from-bracket', color: '#89dceb' },
+  'elements': { faClass: 'fa-solid fa-list-ol', color: '#f2cdcd' },
+  'data-segments': { faClass: 'fa-solid fa-database', color: '#eba0ac' },
+  'tags': { faClass: 'fa-solid fa-tag', color: '#f38ba8' },
+  'custom-sections': { faClass: 'fa-solid fa-puzzle-piece', color: '#6c7086' },
+  'name-section': { faClass: 'fa-solid fa-font', color: '#b4befe' },
+  'size-analysis': { faClass: 'fa-solid fa-chart-pie', color: '#89b4fa' },
+  'instruction-stats': { faClass: 'fa-solid fa-hashtag', color: '#cba6f7' },
+  'debug-info': { faClass: 'fa-solid fa-bug', color: '#f38ba8' },
+  'strings': { faClass: 'fa-solid fa-quote-left', color: '#a6e3a1' },
+  'feature-detection': { faClass: 'fa-solid fa-microchip', color: '#94e2d5' },
+  'module-interface': { faClass: 'fa-solid fa-plug', color: '#89dceb' },
+  'function-complexity': { faClass: 'fa-solid fa-chart-line', color: '#fab387' },
+  'dead-code': { faClass: 'fa-solid fa-skull', color: '#585b70' },
+  'producers': { faClass: 'fa-solid fa-industry', color: '#6c7086' },
+};
+
 const SECTION_NAMES: Record<number, string> = {
   0: 'Custom',
   1: 'Type',
@@ -630,6 +662,8 @@ export default class Explorer {
   private dwarfFunctionMap: Map<number, string> | null = null;
   private nameResolver: NameResolver | null = null;
   private searchQuery: string = '';
+  private importedCounts: Record<number, number> = {};
+  private readonly textDecoder = new TextDecoder();
   private visibleNodes: TreeNode[] = [];
   private searchInput: HTMLInputElement | null = null;
   private parsedSourceMap: ParsedSourceMap | null = null;
@@ -641,6 +675,22 @@ export default class Explorer {
 
   loadSourceMap(json: string): void {
     this.parsedSourceMap = parseSourceMap(json);
+  }
+
+  private computeImportCounts(): void {
+    if (!this.moduleInfo) {
+      return;
+    }
+    this.importedCounts = { 0: 0, 1: 0, 2: 0, 3: 0, 4: 0 };
+    for (const importEntry of this.moduleInfo.imports) {
+      if (importEntry.kind in this.importedCounts) {
+        this.importedCounts[importEntry.kind]++;
+      }
+    }
+  }
+
+  private getImportedCount(kind: number): number {
+    return this.importedCounts[kind] || 0;
   }
 
   private getFunctionName(globalIndex: number): string | null {
@@ -670,7 +720,7 @@ export default class Explorer {
     }
 
     this.dwarfFunctionMap = new Map<number, string>();
-    const importedFuncCount = this.moduleInfo.imports.filter(imp => imp.kind === 0).length;
+    const importedFuncCount = this.getImportedCount(0);
 
     const codeSectionRange = this.byteRanges.sections.find(section => section.sectionId === 10);
     if (!codeSectionRange) {
@@ -681,7 +731,13 @@ export default class Explorer {
 
     const offsets = [codeSectionBodyOffset, codeSectionRange.offset, 0];
 
+    // Build a sorted index of DWARF functions by lowPc for efficient lookup
+    const sortedDwarfFuncs = [...dwarfData.functions]
+      .filter(dwarfFunc => dwarfFunc.name.length > 0 && dwarfFunc.lowPc > 0)
+      .sort((funcA, funcB) => funcA.lowPc - funcB.lowPc);
+
     for (const baseOffset of offsets) {
+      // Pass 1: exact matches (DWARF lowPc == function body start)
       for (let funcIndex = 0; funcIndex < this.moduleInfo.functions.length; funcIndex++) {
         const globalIndex = importedFuncCount + funcIndex;
         const byteRange = this.byteRanges.getItem('function', funcIndex);
@@ -691,30 +747,78 @@ export default class Explorer {
 
         const relativeOffset = byteRange.offset - baseOffset;
 
-        const match = dwarfData.functions.find(
-          dwarfFunc => dwarfFunc.lowPc >= relativeOffset && dwarfFunc.lowPc < relativeOffset + byteRange.length
+        const exactMatch = sortedDwarfFuncs.find(
+          dwarfFunc => dwarfFunc.lowPc === relativeOffset
         );
-        if (match) {
-          this.dwarfFunctionMap.set(globalIndex, match.name);
+        if (exactMatch) {
+          this.dwarfFunctionMap.set(globalIndex, exactMatch.name);
         }
       }
+
       if (this.dwarfFunctionMap.size > 0) {
+        // Pass 2: fill in gaps with range matches for functions not yet matched
+        for (let funcIndex = 0; funcIndex < this.moduleInfo.functions.length; funcIndex++) {
+          const globalIndex = importedFuncCount + funcIndex;
+          if (this.dwarfFunctionMap.has(globalIndex)) {
+            continue;
+          }
+          const byteRange = this.byteRanges.getItem('function', funcIndex);
+          if (!byteRange) {
+            continue;
+          }
+
+          const relativeOffset = byteRange.offset - baseOffset;
+          const rangeMatch = sortedDwarfFuncs.find(
+            dwarfFunc => dwarfFunc.lowPc >= relativeOffset && dwarfFunc.lowPc < relativeOffset + byteRange.length
+          );
+          if (rangeMatch) {
+            this.dwarfFunctionMap.set(globalIndex, rangeMatch.name);
+          }
+        }
         break;
       }
     }
 
-    if (this.dwarfFunctionMap.size === 0 && dwarfData.functions.length > 0) {
-      const sortedDwarfFuncs = [...dwarfData.functions]
-        .filter(dwarfFunc => dwarfFunc.name.length > 0)
-        .sort((funcA, funcB) => funcA.lowPc - funcB.lowPc);
+    return this.dwarfFunctionMap;
+  }
 
-      for (let funcIndex = 0; funcIndex < Math.min(this.moduleInfo.functions.length, sortedDwarfFuncs.length); funcIndex++) {
-        const globalIndex = importedFuncCount + funcIndex;
-        this.dwarfFunctionMap.set(globalIndex, sortedDwarfFuncs[funcIndex].name);
+  private buildDwarfParameterTypeMap(): Map<number, Map<number, string>> | null {
+    const dwarfData = this.getDwarfInfo();
+    if (!dwarfData || dwarfData.functions.length === 0 || !this.moduleInfo) {
+      return null;
+    }
+
+    const dwarfFuncMap = this.getDwarfFunctionMap();
+    if (!dwarfFuncMap || dwarfFuncMap.size === 0) {
+      return null;
+    }
+
+    const dwarfFuncByName = new Map<string, import('../src/DwarfParser').DwarfFunction>();
+    for (const func of dwarfData.functions) {
+      if (func.name) {
+        dwarfFuncByName.set(func.name, func);
       }
     }
 
-    return this.dwarfFunctionMap;
+    const result = new Map<number, Map<number, string>>();
+    for (const [globalIndex, funcName] of dwarfFuncMap) {
+      const dwarfFunc = dwarfFuncByName.get(funcName);
+      if (!dwarfFunc) {
+        continue;
+      }
+      const typeMap = new Map<number, string>();
+      for (let paramIdx = 0; paramIdx < dwarfFunc.parameters.length; paramIdx++) {
+        const param = dwarfFunc.parameters[paramIdx];
+        if (param.typeName) {
+          typeMap.set(paramIdx, param.typeName);
+        }
+      }
+      if (typeMap.size > 0) {
+        result.set(globalIndex, typeMap);
+      }
+    }
+
+    return result.size > 0 ? result : null;
   }
 
   private buildDwarfLocalNameMap(): Map<number, Map<number, string>> | null {
@@ -846,7 +950,7 @@ export default class Explorer {
       return;
     }
 
-    const decoder = new TextDecoder('utf-8');
+    const decoder = this.textDecoder;
     const sourceMapUrl = decoder.decode(sourceMappingSection.data);
 
     if (sourceMapUrl.startsWith('data:application/json;base64,')) {
@@ -1020,16 +1124,26 @@ export default class Explorer {
     this.container.appendChild(fileInput);
   }
 
+  loadBytes(name: string, bytes: Uint8Array): void {
+    this.fileName = name;
+    this.rawBytes = bytes;
+    this.loadModuleFromBytes();
+  }
+
   private async loadFile(file: File): Promise<void> {
     this.fileName = file.name;
     const arrayBuffer = await file.arrayBuffer();
     this.rawBytes = new Uint8Array(arrayBuffer);
+    this.loadModuleFromBytes();
+  }
 
+  private loadModuleFromBytes(): void {
     try {
-      const reader = new BinaryReader(this.rawBytes);
+      const reader = new BinaryReader(this.rawBytes!);
       this.moduleInfo = reader.read();
       this.byteRanges = buildByteRanges(this.rawBytes);
       this.disassembler = new Disassembler(this.moduleInfo);
+      this.computeImportCounts();
       this.cachedFullWat = null;
       this.callGraph = null;
       this.cachedStrings = null;
@@ -1044,12 +1158,17 @@ export default class Explorer {
       }
       const dwarfMap = this.getDwarfFunctionMap();
       const dwarfLocalNames = this.buildDwarfLocalNameMap();
+      const dwarfParamTypes = this.buildDwarfParameterTypeMap();
       this.nameResolver = createNameResolver(
         this.moduleInfo,
         dwarfMap ? (globalIndex: number) => dwarfMap.get(globalIndex) || null : undefined,
         dwarfLocalNames ? (funcGlobalIndex: number, localIndex: number) => {
           const funcLocals = dwarfLocalNames.get(funcGlobalIndex);
           return funcLocals?.get(localIndex) || null;
+        } : undefined,
+        dwarfParamTypes ? (funcGlobalIndex: number, paramIndex: number) => {
+          const funcParams = dwarfParamTypes.get(funcGlobalIndex);
+          return funcParams?.get(paramIndex) || null;
         } : undefined,
       );
       this.parsedSourceMap = null;
@@ -1167,10 +1286,9 @@ export default class Explorer {
     this.buildTree();
     this.renderTree();
 
-    const restored = this.restoreFromHash();
-    if (!restored) {
-      this.selectNode(this.treeNodes[0]);
-    }
+    // Always start at root when loading a new file — clear stale hash
+    history.replaceState(null, '', '#explorer');
+    this.selectNode(this.treeNodes[0], 'none');
 
     this.container.addEventListener('dragover', (event) => {
       event.preventDefault();
@@ -1204,6 +1322,7 @@ export default class Explorer {
       label: this.fileName,
       section: 'module',
       index: -1,
+      icon: TREE_ICONS['module'],
       expanded: true,
       children: [],
     };
@@ -1213,6 +1332,7 @@ export default class Explorer {
         label: `Types (${moduleNode.types.length})`,
         section: 'types',
         index: -1,
+        icon: TREE_ICONS['types'],
         expanded: false,
         children: [],
       };
@@ -1252,6 +1372,7 @@ export default class Explorer {
         label: `Imports (${moduleNode.imports.length})`,
         section: 'imports',
         index: -1,
+        icon: TREE_ICONS['imports'],
         expanded: false,
         children: moduleNode.imports.map((importEntry, importIndex) => {
           let importTip = `${importEntry.moduleName}.${importEntry.fieldName}`;
@@ -1273,12 +1394,14 @@ export default class Explorer {
     }
 
     if (moduleNode.functions.length > 0) {
-      const importedFuncCount = moduleNode.imports.filter(importEntry => importEntry.kind === 0).length;
+      const importedFuncCount = this.getImportedCount(0);
       const allFlatTypes = flattenTypes(moduleNode);
+      const maxBodySize = moduleNode.functions.reduce((max, func) => Math.max(max, func.body.length), 1);
       const functionsNode: TreeNode = {
         label: `Functions (${moduleNode.functions.length})`,
         section: 'functions',
         index: -1,
+        icon: TREE_ICONS['functions'],
         expanded: false,
         children: moduleNode.functions.map((funcEntry, funcIndex) => {
           const globalIndex = importedFuncCount + funcIndex;
@@ -1289,11 +1412,21 @@ export default class Explorer {
           }
           const totalLocals = funcEntry.locals.reduce((sum, local) => sum + local.count, 0);
           const label = funcName ? funcName : `func_${globalIndex}`;
+          const sizeRatio = funcEntry.body.length / maxBodySize;
+          let heatColor: string | undefined;
+          if (sizeRatio > 0.7) {
+            heatColor = '#f38ba8';
+          } else if (sizeRatio > 0.4) {
+            heatColor = '#fab387';
+          } else if (sizeRatio > 0.15) {
+            heatColor = '#f9e2af';
+          }
           return {
             label,
             section: 'function',
             index: funcIndex,
             tooltip: `func ${globalIndex}\n${tipSignature}\n${funcEntry.body.length} bytes, ${totalLocals} locals`,
+            heatColor,
           };
         }),
       };
@@ -1301,11 +1434,12 @@ export default class Explorer {
     }
 
     if (moduleNode.tables.length > 0) {
-      const importedTableCount = moduleNode.imports.filter(importEntry => importEntry.kind === 1).length;
+      const importedTableCount = this.getImportedCount(1);
       const tablesNode: TreeNode = {
         label: `Tables (${moduleNode.tables.length})`,
         section: 'tables',
         index: -1,
+        icon: TREE_ICONS['tables'],
         expanded: false,
         children: moduleNode.tables.map((tableEntry, tableIndex) => ({
           label: `table ${importedTableCount + tableIndex}: ${getValueTypeName(tableEntry.elementType)} (${tableEntry.initial}..${tableEntry.maximum ?? ''})`,
@@ -1317,11 +1451,12 @@ export default class Explorer {
     }
 
     if (moduleNode.memories.length > 0) {
-      const importedMemCount = moduleNode.imports.filter(importEntry => importEntry.kind === 2).length;
+      const importedMemCount = this.getImportedCount(2);
       const memoriesNode: TreeNode = {
         label: `Memories (${moduleNode.memories.length})`,
         section: 'memories',
         index: -1,
+        icon: TREE_ICONS['memories'],
         expanded: false,
         children: moduleNode.memories.map((memoryEntry, memIndex) => {
           const flags: string[] = [];
@@ -1339,11 +1474,12 @@ export default class Explorer {
     }
 
     if (moduleNode.globals.length > 0) {
-      const importedGlobalCount = moduleNode.imports.filter(importEntry => importEntry.kind === 3).length;
+      const importedGlobalCount = this.getImportedCount(3);
       const globalsNode: TreeNode = {
         label: `Globals (${moduleNode.globals.length})`,
         section: 'globals',
         index: -1,
+        icon: TREE_ICONS['globals'],
         expanded: false,
         children: moduleNode.globals.map((globalEntry, globalIndex) => {
           const globalIdx = importedGlobalCount + globalIndex;
@@ -1365,6 +1501,7 @@ export default class Explorer {
         label: `Exports (${moduleNode.exports.length})`,
         section: 'exports',
         index: -1,
+        icon: TREE_ICONS['exports'],
         expanded: false,
         children: moduleNode.exports.map((exportEntry, exportIndex) => ({
           label: `"${exportEntry.name}" -> ${EXPORT_KIND_NAMES[exportEntry.kind] || 'unknown'} ${exportEntry.index}`,
@@ -1389,6 +1526,7 @@ export default class Explorer {
         label: `Elements (${moduleNode.elements.length})`,
         section: 'elements',
         index: -1,
+        icon: TREE_ICONS['elements'],
         expanded: false,
         children: moduleNode.elements.map((elementEntry, elemIndex) => {
           const passiveLabel = elementEntry.passive ? 'passive' : `table ${elementEntry.tableIndex}`;
@@ -1407,6 +1545,7 @@ export default class Explorer {
         label: `Data (${moduleNode.data.length})`,
         section: 'data-segments',
         index: -1,
+        icon: TREE_ICONS['data-segments'],
         expanded: false,
         children: moduleNode.data.map((dataEntry, dataIndex) => {
           const passiveLabel = dataEntry.passive ? 'passive' : `memory ${dataEntry.memoryIndex}`;
@@ -1425,6 +1564,7 @@ export default class Explorer {
         label: `Tags (${moduleNode.tags.length})`,
         section: 'tags',
         index: -1,
+        icon: TREE_ICONS['tags'],
         expanded: false,
         children: moduleNode.tags.map((tagEntry, tagIndex) => ({
           label: `tag ${tagIndex}: type ${tagEntry.typeIndex}`,
@@ -1440,6 +1580,7 @@ export default class Explorer {
         label: `Custom Sections (${moduleNode.customSections.length})`,
         section: 'custom-sections',
         index: -1,
+        icon: TREE_ICONS['custom-sections'],
         expanded: false,
         children: moduleNode.customSections.map((customEntry, customIndex) => ({
           label: `"${customEntry.name}" (${customEntry.data.length} bytes)`,
@@ -1455,6 +1596,7 @@ export default class Explorer {
         label: 'Name Section',
         section: 'name-section',
         index: -1,
+        icon: TREE_ICONS['name-section'],
       });
     }
 
@@ -1472,6 +1614,7 @@ export default class Explorer {
         label: 'Size Analysis',
         section: 'size-analysis',
         index: -1,
+        icon: TREE_ICONS['size-analysis'],
         children: sizeChildren,
       });
     }
@@ -1480,6 +1623,7 @@ export default class Explorer {
       label: 'Instruction Statistics',
       section: 'instruction-stats',
       index: -1,
+      icon: TREE_ICONS['instruction-stats'],
     });
 
     const hasDebugSections = moduleNode.customSections.some(
@@ -1490,6 +1634,7 @@ export default class Explorer {
         label: 'Debug Info',
         section: 'debug-info',
         index: -1,
+        icon: TREE_ICONS['debug-info'],
       });
     }
 
@@ -1498,6 +1643,7 @@ export default class Explorer {
         label: 'Strings',
         section: 'strings',
         index: -1,
+        icon: TREE_ICONS['strings'],
       });
     }
 
@@ -1505,24 +1651,28 @@ export default class Explorer {
       label: 'Features',
       section: 'feature-detection',
       index: -1,
+      icon: TREE_ICONS['feature-detection'],
     });
 
     root.children!.push({
       label: 'Module Interface',
       section: 'module-interface',
       index: -1,
+      icon: TREE_ICONS['module-interface'],
     });
 
     root.children!.push({
       label: 'Function Complexity',
       section: 'function-complexity',
       index: -1,
+      icon: TREE_ICONS['function-complexity'],
     });
 
     root.children!.push({
       label: 'Dead Code',
       section: 'dead-code',
       index: -1,
+      icon: TREE_ICONS['dead-code'],
     });
 
     const hasProducers = moduleNode.customSections.some(section => section.name === 'producers');
@@ -1531,6 +1681,7 @@ export default class Explorer {
         label: 'Producers',
         section: 'producers',
         index: -1,
+        icon: TREE_ICONS['producers'],
       });
     }
 
@@ -1611,9 +1762,19 @@ export default class Explorer {
       row.appendChild(spacer);
     }
 
+    if (node.icon) {
+      const iconEl = document.createElement('i');
+      iconEl.className = `tree-icon ${node.icon.faClass}`;
+      iconEl.style.color = node.icon.color;
+      row.appendChild(iconEl);
+    }
+
     const label = document.createElement('span');
     label.className = 'tree-label';
     label.textContent = node.label;
+    if (node.heatColor) {
+      label.style.color = node.heatColor;
+    }
     row.appendChild(label);
 
     row.addEventListener('click', () => {
@@ -1844,18 +2005,7 @@ export default class Explorer {
   }
 
   private getExportTargetItemIndex(kind: number, globalIndex: number): number {
-    if (!this.moduleInfo) {
-      return -1;
-    }
-    const importedCounts: Record<number, number> = {
-      0: this.moduleInfo.imports.filter(importEntry => importEntry.kind === 0).length,
-      1: this.moduleInfo.imports.filter(importEntry => importEntry.kind === 1).length,
-      2: this.moduleInfo.imports.filter(importEntry => importEntry.kind === 2).length,
-      3: this.moduleInfo.imports.filter(importEntry => importEntry.kind === 3).length,
-      4: this.moduleInfo.imports.filter(importEntry => importEntry.kind === 4).length,
-    };
-    const importedCount = importedCounts[kind] || 0;
-    return globalIndex - importedCount;
+    return globalIndex - this.getImportedCount(kind);
   }
 
   private findTopLevelTypeIndex(flatTypeIndex: number): number {
@@ -1914,6 +2064,9 @@ export default class Explorer {
       case 'exports':
       case 'elements':
       case 'data-segments':
+        this.renderDataSegmentsSummary();
+        break;
+      case 'data-segments-unused':
       case 'tags':
       case 'custom-sections':
         this.renderSectionSummary(node);
@@ -2005,21 +2158,64 @@ export default class Explorer {
 
     this.appendHeading(detail, this.fileName);
 
+    // Summary cards grid
+    const sectionCards: { icon: TreeIcon | undefined; label: string; count: number; section: string }[] = [
+      { icon: TREE_ICONS['types'], label: 'Types', count: this.moduleInfo.types.length, section: 'types' },
+      { icon: TREE_ICONS['imports'], label: 'Imports', count: this.moduleInfo.imports.length, section: 'imports' },
+      { icon: TREE_ICONS['functions'], label: 'Functions', count: this.moduleInfo.functions.length, section: 'functions' },
+      { icon: TREE_ICONS['exports'], label: 'Exports', count: this.moduleInfo.exports.length, section: 'exports' },
+      { icon: TREE_ICONS['memories'], label: 'Memories', count: this.moduleInfo.memories.length, section: 'memories' },
+      { icon: TREE_ICONS['globals'], label: 'Globals', count: this.moduleInfo.globals.length, section: 'globals' },
+      { icon: TREE_ICONS['tables'], label: 'Tables', count: this.moduleInfo.tables.length, section: 'tables' },
+      { icon: TREE_ICONS['data-segments'], label: 'Data', count: this.moduleInfo.data.length, section: 'data-segments' },
+      { icon: TREE_ICONS['elements'], label: 'Elements', count: this.moduleInfo.elements.length, section: 'elements' },
+      { icon: TREE_ICONS['custom-sections'], label: 'Custom', count: this.moduleInfo.customSections.length, section: 'custom-sections' },
+    ];
+
+    if (this.moduleInfo.tags.length > 0) {
+      sectionCards.push({ icon: TREE_ICONS['tags'], label: 'Tags', count: this.moduleInfo.tags.length, section: 'tags' });
+    }
+
+    const grid = document.createElement('div');
+    grid.className = 'module-summary-grid';
+    for (const cardData of sectionCards) {
+      if (cardData.count === 0 && cardData.label !== 'Memories') {
+        continue;
+      }
+      const card = document.createElement('div');
+      card.className = 'module-summary-card';
+      card.addEventListener('click', () => {
+        this.navigateToItem(cardData.section, -1);
+      });
+
+      if (cardData.icon) {
+        const iconEl = document.createElement('i');
+        iconEl.className = `module-summary-icon ${cardData.icon.faClass}`;
+        iconEl.style.color = cardData.icon.color;
+        card.appendChild(iconEl);
+      }
+
+      const countEl = document.createElement('span');
+      countEl.className = 'module-summary-count';
+      countEl.textContent = String(cardData.count);
+      card.appendChild(countEl);
+
+      const labelEl = document.createElement('span');
+      labelEl.className = 'module-summary-label';
+      labelEl.textContent = cardData.label;
+      card.appendChild(labelEl);
+
+      grid.appendChild(card);
+    }
+    detail.appendChild(grid);
+
+    // Compact info
     const table = this.createInfoTable();
     this.addInfoRow(table, 'Version', String(this.moduleInfo.version));
     this.addInfoRow(table, 'File size', this.formatFileSize(this.rawBytes.length));
-    this.addInfoRow(table, 'Types', String(this.moduleInfo.types.length));
-    this.addInfoRow(table, 'Imports', String(this.moduleInfo.imports.length));
-    this.addInfoRow(table, 'Functions', String(this.moduleInfo.functions.length));
-    this.addInfoRow(table, 'Tables', String(this.moduleInfo.tables.length));
-    this.addInfoRow(table, 'Memories', String(this.moduleInfo.memories.length));
-    this.addInfoRow(table, 'Globals', String(this.moduleInfo.globals.length));
-    this.addInfoRow(table, 'Exports', String(this.moduleInfo.exports.length));
-    this.addInfoRow(table, 'Start', this.moduleInfo.start !== null ? `func ${this.moduleInfo.start}` : 'none');
-    this.addInfoRow(table, 'Elements', String(this.moduleInfo.elements.length));
-    this.addInfoRow(table, 'Data segments', String(this.moduleInfo.data.length));
-    this.addInfoRow(table, 'Tags', String(this.moduleInfo.tags.length));
-    this.addInfoRow(table, 'Custom sections', String(this.moduleInfo.customSections.length));
+    if (this.moduleInfo.start !== null) {
+      this.addInfoRow(table, 'Start function', `func ${this.moduleInfo.start}`);
+    }
     detail.appendChild(table);
 
     if (this.byteRanges && this.byteRanges.sections.length > 0) {
@@ -2041,11 +2237,16 @@ export default class Explorer {
     showWatButton.textContent = 'Generate full disassembly';
     showWatButton.addEventListener('click', () => {
       if (this.disassembler) {
-        if (!this.cachedFullWat) {
-          this.cachedFullWat = this.disassembler.disassemble();
-        }
-        showWatButton.remove();
-        this.appendCodeBlock(detail, this.cachedFullWat);
+        showWatButton.textContent = 'Generating...';
+        showWatButton.style.opacity = '0.6';
+        showWatButton.style.pointerEvents = 'none';
+        setTimeout(() => {
+          if (!this.cachedFullWat) {
+            this.cachedFullWat = this.disassembler!.disassemble();
+          }
+          showWatButton.remove();
+          this.appendCodeBlock(detail, this.cachedFullWat);
+        }, 10);
       }
     });
     detail.appendChild(showWatButton);
@@ -2104,7 +2305,10 @@ export default class Explorer {
       this.addInfoRow(table, 'Kind', 'struct');
       this.addInfoRow(table, 'Fields', String(typeEntry.fields.length));
       if (typeEntry.superTypes && typeEntry.superTypes.length > 0) {
-        this.addInfoRow(table, 'Super types', typeEntry.superTypes.join(', '));
+        for (const superIdx of typeEntry.superTypes) {
+          const topLevelIdx = this.findTopLevelTypeIndex(superIdx);
+          this.addLinkedInfoRow(table, 'Extends', `type ${superIdx}`, 'type', topLevelIdx);
+        }
       }
       if (typeEntry.final !== undefined) {
         this.addInfoRow(table, 'Final', String(typeEntry.final));
@@ -2126,6 +2330,15 @@ export default class Explorer {
       this.addInfoRow(table, 'Kind', 'array');
       this.addInfoRow(table, 'Element type', getValueTypeName(typeEntry.elementType));
       this.addInfoRow(table, 'Mutable', String(typeEntry.mutable));
+      if ((typeEntry as any).superTypes && (typeEntry as any).superTypes.length > 0) {
+        for (const superIdx of (typeEntry as any).superTypes) {
+          const topLevelIdx = this.findTopLevelTypeIndex(superIdx);
+          this.addLinkedInfoRow(table, 'Extends', `type ${superIdx}`, 'type', topLevelIdx);
+        }
+      }
+      if ((typeEntry as any).final !== undefined) {
+        this.addInfoRow(table, 'Final', String((typeEntry as any).final));
+      }
       detail.appendChild(table);
     } else if (typeEntry.kind === 'rec') {
       const table = this.createInfoTable();
@@ -2206,7 +2419,7 @@ export default class Explorer {
     }
     const detail = this.detailContainer!;
     const funcEntry = this.moduleInfo.functions[funcIndex];
-    const importedFuncCount = this.moduleInfo.imports.filter(importEntry => importEntry.kind === 0).length;
+    const importedFuncCount = this.getImportedCount(0);
     const globalFuncIndex = importedFuncCount + funcIndex;
     const funcName = this.getFunctionName(globalFuncIndex);
 
@@ -2264,8 +2477,13 @@ export default class Explorer {
       allRows.push({ label: 'Name source', value: nameSource });
     }
 
-    // Split evenly
-    const midpoint = Math.ceil(allRows.length / 2);
+    // Always use a fixed number of rows per column so height is stable
+    const targetRowCount = 4;
+    while (allRows.length < targetRowCount * 2) {
+      allRows.push({ label: '\u00A0', value: '\u00A0' });
+    }
+
+    const midpoint = Math.max(targetRowCount, Math.ceil(allRows.length / 2));
     const leftColumn = this.createInfoTable();
     const rightColumn = this.createInfoTable();
 
@@ -2310,13 +2528,7 @@ export default class Explorer {
 
       if ((calleesSet && calleesSet.size > 0) || (callersSet && callersSet.size > 0)) {
         this.appendSubheading(detail, 'Call Graph');
-      }
-
-      if (calleesSet && calleesSet.size > 0) {
-        this.appendCallList(detail, 'Calls', calleesSet);
-      }
-      if (callersSet && callersSet.size > 0) {
-        this.appendCallList(detail, 'Called by', callersSet);
+        this.renderCallGraphVisual(detail, globalFuncIndex, calleesSet || new Set(), callersSet || new Set());
       }
     }
 
@@ -2353,7 +2565,7 @@ export default class Explorer {
 
           // Build function name → local index map for clickable calls
           const funcNameMap = new Map<string, number>();
-          const importedFuncCount = this.moduleInfo.imports.filter((imp: { kind: number }) => imp.kind === 0).length;
+          const importedFuncCount = this.getImportedCount(0);
           for (let localFuncIdx = 0; localFuncIdx < this.moduleInfo.functions.length; localFuncIdx++) {
             const globalFuncIdx = importedFuncCount + localFuncIdx;
             const nameRes = this.nameResolver.functionName(globalFuncIdx);
@@ -2397,7 +2609,7 @@ export default class Explorer {
           this.appendCodeBlock(tabContent, this.disassembler.disassembleFunction(funcIndex));
         }
       } else if (activeTab === 'bytes') {
-        this.appendByteRange(tabContent, 'function', funcIndex);
+        this.renderInteractiveBytes(tabContent, funcIndex);
       } else if (activeTab === 'source') {
         this.renderSourceTabContent(tabContent, funcIndex);
       }
@@ -2428,7 +2640,7 @@ export default class Explorer {
     }
     const detail = this.detailContainer!;
     const tableEntry = this.moduleInfo.tables[tableIndex];
-    const importedTableCount = this.moduleInfo.imports.filter(importEntry => importEntry.kind === 1).length;
+    const importedTableCount = this.getImportedCount(1);
 
     this.appendHeading(detail, `Table ${importedTableCount + tableIndex}`);
 
@@ -2454,7 +2666,7 @@ export default class Explorer {
     }
     const detail = this.detailContainer!;
     const memoryEntry = this.moduleInfo.memories[memIndex];
-    const importedMemCount = this.moduleInfo.imports.filter(importEntry => importEntry.kind === 2).length;
+    const importedMemCount = this.getImportedCount(2);
 
     this.appendHeading(detail, `Memory ${importedMemCount + memIndex}`);
 
@@ -2482,7 +2694,7 @@ export default class Explorer {
     }
     const detail = this.detailContainer!;
     const globalEntry = this.moduleInfo.globals[globalIndex];
-    const importedGlobalCount = this.moduleInfo.imports.filter(importEntry => importEntry.kind === 3).length;
+    const importedGlobalCount = this.getImportedCount(3);
     const absoluteGlobalIndex = importedGlobalCount + globalIndex;
     const globalName = this.moduleInfo.nameSection?.globalNames?.get(absoluteGlobalIndex);
 
@@ -2491,6 +2703,20 @@ export default class Explorer {
     const table = this.createInfoTable();
     this.addInfoRow(table, 'Type', getValueTypeName(globalEntry.valueType));
     this.addInfoRow(table, 'Mutable', String(globalEntry.mutable));
+
+    if (globalEntry.initInstructions && globalEntry.initInstructions.length > 0) {
+      const initStr = globalEntry.initInstructions
+        .filter(instruction => instruction.opCode.mnemonic !== 'end')
+        .map(instruction => {
+          const immediateValues = instruction.immediates.values;
+          if (immediateValues.length > 0) {
+            return `${instruction.opCode.mnemonic} ${immediateValues.join(' ')}`;
+          }
+          return instruction.opCode.mnemonic;
+        })
+        .join(', ');
+      this.addInfoRow(table, 'Initial value', initStr);
+    }
 
     detail.appendChild(table);
 
@@ -2569,6 +2795,19 @@ export default class Explorer {
     this.addInfoRow(table, 'Passive', String(elementEntry.passive));
     if (!elementEntry.passive) {
       this.addInfoRow(table, 'Table index', String(elementEntry.tableIndex));
+      if (elementEntry.offsetInstructions && elementEntry.offsetInstructions.length > 0) {
+        const offsetStr = elementEntry.offsetInstructions
+          .filter(instruction => instruction.opCode.mnemonic !== 'end')
+          .map(instruction => {
+            const immediateValues = instruction.immediates.values;
+            if (immediateValues.length > 0) {
+              return `${instruction.opCode.mnemonic} ${immediateValues.join(' ')}`;
+            }
+            return instruction.opCode.mnemonic;
+          })
+          .join(', ');
+        this.addInfoRow(table, 'Offset', offsetStr);
+      }
     }
     this.addInfoRow(table, 'Entries', String(elementEntry.functionIndices.length));
     detail.appendChild(table);
@@ -2602,6 +2841,19 @@ export default class Explorer {
     this.addInfoRow(table, 'Passive', String(dataEntry.passive));
     if (!dataEntry.passive) {
       this.addInfoRow(table, 'Memory index', String(dataEntry.memoryIndex));
+      if (dataEntry.offsetInstructions && dataEntry.offsetInstructions.length > 0) {
+        const offsetStr = dataEntry.offsetInstructions
+          .filter(instruction => instruction.opCode.mnemonic !== 'end')
+          .map(instruction => {
+            const immediateValues = instruction.immediates.values;
+            if (immediateValues.length > 0) {
+              return `${instruction.opCode.mnemonic} ${immediateValues.join(' ')}`;
+            }
+            return instruction.opCode.mnemonic;
+          })
+          .join(', ');
+        this.addInfoRow(table, 'Offset', offsetStr);
+      }
     }
     this.addInfoRow(table, 'Size', `${dataEntry.data.length} bytes`);
     detail.appendChild(table);
@@ -2616,7 +2868,7 @@ export default class Explorer {
       this.appendSubheading(detail, 'String Preview');
       const preview = document.createElement('div');
       preview.className = 'detail-code';
-      preview.textContent = new TextDecoder().decode(dataEntry.data);
+      preview.textContent = this.textDecoder.decode(dataEntry.data);
       detail.appendChild(preview);
     }
 
@@ -2748,7 +3000,7 @@ export default class Explorer {
           }
         } else {
           if (runStart !== -1 && (byteIndex - runStart) >= minLength) {
-            const value = new TextDecoder().decode(segment.data.slice(runStart, byteIndex));
+            const value = this.textDecoder.decode(segment.data.slice(runStart, byteIndex));
             results.push({ dataSegmentIndex: segmentIndex, offset: runStart, value });
           }
           runStart = -1;
@@ -2758,6 +3010,86 @@ export default class Explorer {
 
     this.cachedStrings = results;
     return results;
+  }
+
+  private renderDataSegmentsSummary(): void {
+    if (!this.moduleInfo) {
+      return;
+    }
+    const detail = this.detailContainer!;
+    this.appendHeading(detail, `Data Segments (${this.moduleInfo.data.length})`);
+
+    const description = document.createElement('div');
+    description.className = 'detail-description';
+    description.textContent = 'Data segments used to initialize linear memory.';
+    detail.appendChild(description);
+
+    if (this.moduleInfo.data.length === 0) {
+      return;
+    }
+
+    const totalDataSize = this.moduleInfo.data.reduce((sum, entry) => sum + entry.data.length, 0);
+    const summaryTable = this.createInfoTable();
+    this.addInfoRow(summaryTable, 'Segments', String(this.moduleInfo.data.length));
+    this.addInfoRow(summaryTable, 'Total size', this.formatFileSize(totalDataSize));
+    detail.appendChild(summaryTable);
+
+    // Memory map visualization
+    const activeSegments: { index: number; offset: number; length: number }[] = [];
+    for (let segIndex = 0; segIndex < this.moduleInfo.data.length; segIndex++) {
+      const seg = this.moduleInfo.data[segIndex];
+      if (!seg.passive && seg.offsetInstructions && seg.offsetInstructions.length > 0) {
+        const constInstr = seg.offsetInstructions.find(
+          instruction => instruction.opCode.mnemonic === 'i32.const' || instruction.opCode.mnemonic === 'i64.const'
+        );
+        if (constInstr && constInstr.immediates.values.length > 0) {
+          activeSegments.push({
+            index: segIndex,
+            offset: constInstr.immediates.values[0] as number,
+            length: seg.data.length,
+          });
+        }
+      }
+    }
+
+    if (activeSegments.length > 0) {
+      this.appendSubheading(detail, 'Memory Layout');
+      activeSegments.sort((segA, segB) => segA.offset - segB.offset);
+
+      const maxEnd = activeSegments.reduce((max, seg) => Math.max(max, seg.offset + seg.length), 0);
+      const mapContainer = document.createElement('div');
+      mapContainer.className = 'memory-map';
+
+      for (const seg of activeSegments) {
+        const leftPercent = (seg.offset / maxEnd) * 100;
+        const widthPercent = Math.max(0.5, (seg.length / maxEnd) * 100);
+
+        const segBar = document.createElement('div');
+        segBar.className = 'memory-map-segment';
+        segBar.style.left = `${leftPercent}%`;
+        segBar.style.width = `${widthPercent}%`;
+        segBar.title = `data ${seg.index}: offset 0x${seg.offset.toString(16)}, ${this.formatFileSize(seg.length)}`;
+        segBar.addEventListener('click', () => {
+          this.navigateToItem('data', seg.index);
+        });
+        mapContainer.appendChild(segBar);
+      }
+
+      detail.appendChild(mapContainer);
+
+      // Legend table
+      const legendTable = this.createInfoTable();
+      for (const seg of activeSegments) {
+        this.addLinkedInfoRow(
+          legendTable,
+          `data ${seg.index}`,
+          `0x${seg.offset.toString(16)} .. 0x${(seg.offset + seg.length).toString(16)} (${this.formatFileSize(seg.length)})`,
+          'data',
+          seg.index,
+        );
+      }
+      detail.appendChild(legendTable);
+    }
   }
 
   private renderSizeAnalysisSummary(): void {
@@ -2830,7 +3162,7 @@ export default class Explorer {
       return;
     }
     const detail = this.detailContainer!;
-    const importedFuncCount = this.moduleInfo.imports.filter(importEntry => importEntry.kind === 0).length;
+    const importedFuncCount = this.getImportedCount(0);
 
     this.appendHeading(detail, 'Function Sizes (largest first)');
 
@@ -3164,7 +3496,7 @@ export default class Explorer {
     const languageNames: Record<number, string> = {
       0x01: 'C89', 0x02: 'C', 0x04: 'C++', 0x0c: 'C99',
       0x1a: 'C11', 0x2a: 'C17', 0x1c: 'C++03', 0x21: 'C++11',
-      0x1a: 'C++14', 0x22: 'C++14', 0x1d: 'Rust',
+      0x22: 'C++14', 0x1d: 'Rust',
       0x12: 'Java', 0x0e: 'Python', 0x1f: 'Swift',
       0x24: 'Kotlin', 0x20: 'Go', 0x25: 'Zig',
     };
@@ -3178,7 +3510,7 @@ export default class Explorer {
     const detail = this.detailContainer;
     detail.innerHTML = '';
     const lowerQuery = query.toLowerCase();
-    const importedFuncCount = this.moduleInfo.imports.filter(importEntry => importEntry.kind === 0).length;
+    const importedFuncCount = this.getImportedCount(0);
 
     this.appendHeading(detail, `Search: "${query}"`);
 
@@ -3264,7 +3596,7 @@ export default class Explorer {
       return;
     }
     const detail = this.detailContainer!;
-    const importedFuncCount = this.moduleInfo.imports.filter(imp => imp.kind === 0).length;
+    const importedFuncCount = this.getImportedCount(0);
 
     this.appendHeading(detail, 'Features & Target');
 
@@ -3311,7 +3643,7 @@ export default class Explorer {
         const data = targetFeaturesSection.data;
         let offset = 0;
         const readULEB = (): number => { let r = 0, s = 0, b: number; do { b = data[offset++]; r |= (b & 0x7f) << s; s += 7; } while (b & 0x80); return r >>> 0; };
-        const readStr = (): string => { const len = readULEB(); const str = new TextDecoder().decode(data.slice(offset, offset + len)); offset += len; return str; };
+        const readStr = (): string => { const len = readULEB(); const str = this.textDecoder.decode(data.slice(offset, offset + len)); offset += len; return str; };
         const prefixLabels: Record<number, string> = { 0x2b: 'used', 0x2d: 'disallowed', 0x3d: 'required' };
         const count = readULEB();
         for (let idx = 0; idx < count; idx++) {
@@ -3396,10 +3728,49 @@ export default class Explorer {
       const structCheck = structuralChecks.find(check => check.name === featureName && check.detected);
 
       if (funcSet && funcSet.size > 0) {
-        const stat = document.createElement('div');
-        stat.className = 'feature-card-stat';
+        const stat = document.createElement('a');
+        stat.className = 'feature-card-stat feature-card-expand';
+        stat.href = '#';
         stat.textContent = `${funcSet.size} function${funcSet.size > 1 ? 's' : ''}`;
+
+        const funcListContainer = document.createElement('div');
+        funcListContainer.className = 'feature-card-funclist';
+        funcListContainer.style.display = 'none';
+
+        const sortedFuncIndices = Array.from(funcSet).sort((indexA, indexB) => indexA - indexB);
+        const maxShow = 15;
+        for (let displayIdx = 0; displayIdx < Math.min(sortedFuncIndices.length, maxShow); displayIdx++) {
+          const globalIdx = sortedFuncIndices[displayIdx];
+          const localIdx = globalIdx - importedFuncCount;
+          const displayName = this.getFunctionName(globalIdx) || `func_${globalIdx}`;
+          const funcLink = document.createElement('a');
+          funcLink.className = 'callgraph-node';
+          funcLink.textContent = displayName;
+          funcLink.href = '#';
+          funcLink.addEventListener('click', (clickEvent) => {
+            clickEvent.preventDefault();
+            clickEvent.stopPropagation();
+            if (localIdx >= 0) {
+              this.navigateToItem('function', localIdx);
+            }
+          });
+          funcListContainer.appendChild(funcLink);
+        }
+        if (sortedFuncIndices.length > maxShow) {
+          const moreLabel = document.createElement('span');
+          moreLabel.className = 'callgraph-more';
+          moreLabel.textContent = `+${sortedFuncIndices.length - maxShow} more`;
+          funcListContainer.appendChild(moreLabel);
+        }
+
+        stat.addEventListener('click', (clickEvent) => {
+          clickEvent.preventDefault();
+          const isVisible = funcListContainer.style.display !== 'none';
+          funcListContainer.style.display = isVisible ? 'none' : 'flex';
+        });
+
         card.appendChild(stat);
+        card.appendChild(funcListContainer);
       }
 
       if (opcodes && opcodes.length > 0) {
@@ -3521,7 +3892,7 @@ export default class Explorer {
         const targetItemIndex = this.getExportTargetItemIndex(exportEntry.kind, exportEntry.index);
 
         if (exportEntry.kind === 0) {
-          const importedFuncCount = this.moduleInfo.imports.filter(imp => imp.kind === 0).length;
+          const importedFuncCount = this.getImportedCount(0);
           const localFuncIndex = exportEntry.index - importedFuncCount;
           if (localFuncIndex >= 0 && localFuncIndex < this.moduleInfo.functions.length) {
             const funcEntry = this.moduleInfo.functions[localFuncIndex];
@@ -3554,7 +3925,7 @@ export default class Explorer {
 
         // Signature links to the type
         if (exportEntry.kind === 0 && signature) {
-          const importedFuncCount = this.moduleInfo.imports.filter(imp => imp.kind === 0).length;
+          const importedFuncCount = this.getImportedCount(0);
           const localFuncIndex = exportEntry.index - importedFuncCount;
           if (localFuncIndex >= 0 && localFuncIndex < this.moduleInfo.functions.length) {
             const funcEntry = this.moduleInfo.functions[localFuncIndex];
@@ -3597,7 +3968,7 @@ export default class Explorer {
       return;
     }
     const detail = this.detailContainer!;
-    const importedFuncCount = this.moduleInfo.imports.filter(imp => imp.kind === 0).length;
+    const importedFuncCount = this.getImportedCount(0);
 
     this.appendHeading(detail, 'Function Complexity');
 
@@ -3661,16 +4032,39 @@ export default class Explorer {
       ? entries[0].branchCount * 3 + entries[0].maxNestingDepth * 5 + entries[0].instructionCount
       : 1;
 
-    // Summary stats
-    const summaryTable = this.createInfoTable();
-    this.addInfoRow(summaryTable, 'Functions', String(entries.length));
-    if (entries.length > 0) {
-      const avgInstructions = Math.round(entries.reduce((sum, entry) => sum + entry.instructionCount, 0) / entries.length);
-      const avgBranches = Math.round(entries.reduce((sum, entry) => sum + entry.branchCount, 0) / entries.length);
-      this.addInfoRow(summaryTable, 'Avg instructions', String(avgInstructions));
-      this.addInfoRow(summaryTable, 'Avg branches', String(avgBranches));
+    // Tier thresholds
+    const highThreshold = maxScore * 0.6;
+    const mediumThreshold = maxScore * 0.2;
+    const highCount = entries.filter(entry => (entry.branchCount * 3 + entry.maxNestingDepth * 5 + entry.instructionCount) >= highThreshold).length;
+    const medCount = entries.filter(entry => {
+      const score = entry.branchCount * 3 + entry.maxNestingDepth * 5 + entry.instructionCount;
+      return score >= mediumThreshold && score < highThreshold;
+    }).length;
+    const lowCount = entries.length - highCount - medCount;
+
+    // Summary stats as cards
+    const summaryGrid = document.createElement('div');
+    summaryGrid.className = 'module-summary-grid';
+    for (const [tierLabel, tierCount, tierColor] of [
+      ['High', highCount, '#f38ba8'] as const,
+      ['Medium', medCount, '#fab387'] as const,
+      ['Low', lowCount, '#a6e3a1'] as const,
+    ]) {
+      const card = document.createElement('div');
+      card.className = 'module-summary-card';
+      card.style.borderColor = tierColor;
+      const countEl = document.createElement('span');
+      countEl.className = 'module-summary-count';
+      countEl.style.color = tierColor;
+      countEl.textContent = String(tierCount);
+      card.appendChild(countEl);
+      const labelEl = document.createElement('span');
+      labelEl.className = 'module-summary-label';
+      labelEl.textContent = tierLabel;
+      card.appendChild(labelEl);
+      summaryGrid.appendChild(card);
     }
-    detail.appendChild(summaryTable);
+    detail.appendChild(summaryGrid);
 
     this.appendSubheading(detail, 'By Complexity Score');
 
@@ -3701,6 +4095,13 @@ export default class Explorer {
       row.appendChild(link);
 
       const score = entry.branchCount * 3 + entry.maxNestingDepth * 5 + entry.instructionCount;
+      let tierColor = '#a6e3a1';
+      if (score >= highThreshold) {
+        tierColor = '#f38ba8';
+      } else if (score >= mediumThreshold) {
+        tierColor = '#fab387';
+      }
+
       const scoreCell = document.createElement('span');
       scoreCell.className = 'complexity-cell';
 
@@ -3713,6 +4114,7 @@ export default class Explorer {
       const bar = document.createElement('span');
       bar.className = 'size-bar';
       bar.style.width = `${Math.max(2, (score / maxScore) * 100)}%`;
+      bar.style.background = tierColor;
       bar.style.display = 'block';
       barContainer.appendChild(bar);
       scoreCell.appendChild(barContainer);
@@ -3735,7 +4137,7 @@ export default class Explorer {
       return;
     }
     const detail = this.detailContainer!;
-    const importedFuncCount = this.moduleInfo.imports.filter(imp => imp.kind === 0).length;
+    const importedFuncCount = this.getImportedCount(0);
     const callGraphData = this.getCallGraph();
 
     const exportedFuncIndices = new Set<number>();
@@ -3788,13 +4190,40 @@ export default class Explorer {
 
     this.appendHeading(detail, 'Dead Code Analysis');
 
-    const summaryTable = this.createInfoTable();
-    this.addInfoRow(summaryTable, 'Total functions', String(this.moduleInfo.functions.length));
-    this.addInfoRow(summaryTable, 'Reachable', String(reachable.size - importedFuncCount));
-    this.addInfoRow(summaryTable, 'Unreachable', String(deadFunctions.length));
     const wastedBytes = deadFunctions.reduce((sum, func) => sum + func.bodySize, 0);
-    this.addInfoRow(summaryTable, 'Wasted bytes', this.formatFileSize(wastedBytes));
-    detail.appendChild(summaryTable);
+    const totalCodeSize = this.moduleInfo.functions.reduce((sum, func) => sum + func.body.length, 0);
+    const wastedPercent = totalCodeSize > 0 ? ((wastedBytes / totalCodeSize) * 100).toFixed(1) : '0';
+
+    // Summary cards
+    const summaryGrid = document.createElement('div');
+    summaryGrid.className = 'module-summary-grid';
+
+    for (const [label, count, color] of [
+      ['Reachable', reachable.size - importedFuncCount, '#a6e3a1'] as const,
+      ['Unreachable', deadFunctions.length, deadFunctions.length > 0 ? '#f38ba8' : '#a6e3a1'] as const,
+      ['Wasted', this.formatFileSize(wastedBytes), '#fab387'] as const,
+    ]) {
+      const card = document.createElement('div');
+      card.className = 'module-summary-card';
+      const countEl = document.createElement('span');
+      countEl.className = 'module-summary-count';
+      countEl.style.color = color as string;
+      countEl.textContent = String(count);
+      card.appendChild(countEl);
+      const labelEl = document.createElement('span');
+      labelEl.className = 'module-summary-label';
+      labelEl.textContent = label;
+      card.appendChild(labelEl);
+      summaryGrid.appendChild(card);
+    }
+    detail.appendChild(summaryGrid);
+
+    if (wastedBytes > 0 && totalCodeSize > 0) {
+      const wastedInfo = document.createElement('div');
+      wastedInfo.className = 'detail-description';
+      wastedInfo.textContent = `${wastedPercent}% of code bytes are unreachable.`;
+      detail.appendChild(wastedInfo);
+    }
 
     if (deadFunctions.length === 0) {
       const noDeadCode = document.createElement('div');
@@ -3805,12 +4234,41 @@ export default class Explorer {
     }
 
     deadFunctions.sort((funcA, funcB) => funcB.bodySize - funcA.bodySize);
+    const maxDeadSize = deadFunctions[0].bodySize;
 
     this.appendSubheading(detail, `Unreachable Functions (${deadFunctions.length})`);
     const funcTable = this.createInfoTable();
     for (const deadFunc of deadFunctions) {
       const displayName = deadFunc.name || `func_${deadFunc.globalIndex}`;
-      this.addLinkedInfoRow(funcTable, displayName, `${deadFunc.bodySize} bytes`, 'function', deadFunc.localIndex);
+      const row = document.createElement('div');
+      row.className = 'detail-info-row';
+
+      const link = document.createElement('a');
+      link.className = 'detail-info-link';
+      link.style.flex = '0 0 180px';
+      link.textContent = displayName;
+      link.href = '#';
+      link.addEventListener('click', (event) => {
+        event.preventDefault();
+        this.navigateToItem('function', deadFunc.localIndex);
+      });
+      row.appendChild(link);
+
+      const barContainer = document.createElement('div');
+      barContainer.className = 'size-bar-container';
+      const bar = document.createElement('div');
+      bar.className = 'size-bar';
+      bar.style.width = `${Math.max(2, (deadFunc.bodySize / maxDeadSize) * 100)}%`;
+      bar.style.background = '#f38ba8';
+      barContainer.appendChild(bar);
+      row.appendChild(barContainer);
+
+      const valueElement = document.createElement('span');
+      valueElement.className = 'size-value';
+      valueElement.textContent = this.formatFileSize(deadFunc.bodySize);
+      row.appendChild(valueElement);
+
+      funcTable.appendChild(row);
     }
     detail.appendChild(funcTable);
   }
@@ -3845,7 +4303,7 @@ export default class Explorer {
 
       function readString(): string {
         const length = readULEB128();
-        const str = new TextDecoder().decode(data.slice(offset, offset + length));
+        const str = this.textDecoder.decode(data.slice(offset, offset + length));
         offset += length;
         return str;
       }
@@ -3927,6 +4385,16 @@ export default class Explorer {
       }
     }
 
+    const categoryColors: Record<string, string> = {
+      'Control Flow': '#cba6f7',
+      'Memory': '#a6e3a1',
+      'Numeric': '#fab387',
+      'Variable': '#89b4fa',
+      'Reference': '#f38ba8',
+      'Table': '#94e2d5',
+      'Other': '#6c7086',
+    };
+
     this.appendSubheading(detail, 'By Category');
     const categoryTable = this.createInfoTable();
     for (const [categoryName, mnemonics] of Object.entries(categories)) {
@@ -3935,13 +4403,18 @@ export default class Explorer {
       }
       const categoryCount = mnemonics.reduce((sum, mnemonic) => sum + (opcodeCounts.get(mnemonic) || 0), 0);
       const percentage = totalInstructions > 0 ? ((categoryCount / totalInstructions) * 100).toFixed(1) : '0';
+      const barColor = categoryColors[categoryName] || '#89b4fa';
 
       const row = document.createElement('div');
       row.className = 'detail-info-row';
 
       const labelElement = document.createElement('span');
       labelElement.className = 'detail-info-label';
-      labelElement.textContent = categoryName;
+      const dot = document.createElement('span');
+      dot.className = 'category-dot';
+      dot.style.background = barColor;
+      labelElement.appendChild(dot);
+      labelElement.appendChild(document.createTextNode(categoryName));
       row.appendChild(labelElement);
 
       const barContainer = document.createElement('div');
@@ -3949,6 +4422,7 @@ export default class Explorer {
       const bar = document.createElement('div');
       bar.className = 'size-bar';
       bar.style.width = `${Math.max(2, (categoryCount / totalInstructions) * 100)}%`;
+      bar.style.background = barColor;
       barContainer.appendChild(bar);
       row.appendChild(barContainer);
 
@@ -4056,11 +4530,78 @@ export default class Explorer {
     table.appendChild(row);
   }
 
+  private renderCallGraphVisual(parent: HTMLElement, centerGlobalIndex: number, callees: Set<number>, callers: Set<number>): void {
+    if (!this.moduleInfo) {
+      return;
+    }
+    const importedFuncCount = this.getImportedCount(0);
+
+    const renderFlowSection = (indices: Set<number>, label: string): void => {
+      const section = document.createElement('div');
+      section.className = 'callgraph-flow';
+
+      const sectionLabel = document.createElement('span');
+      sectionLabel.className = 'callgraph-col-label';
+      sectionLabel.textContent = `${label} (${indices.size}): `;
+      section.appendChild(sectionLabel);
+
+      const sorted = Array.from(indices).sort((indexA, indexB) => indexA - indexB);
+      const initialVisible = 10;
+      const overflowNodes: HTMLElement[] = [];
+
+      for (let displayIdx = 0; displayIdx < sorted.length; displayIdx++) {
+        const globalIdx = sorted[displayIdx];
+        const localIdx = globalIdx - importedFuncCount;
+        const displayName = this.getFunctionName(globalIdx) || `func_${globalIdx}`;
+        const node = document.createElement('a');
+        node.className = 'callgraph-node';
+        node.textContent = displayName;
+        node.href = '#';
+        node.addEventListener('click', (event) => {
+          event.preventDefault();
+          if (localIdx >= 0) {
+            this.navigateToItem('function', localIdx);
+          }
+        });
+        if (displayIdx >= initialVisible) {
+          node.style.display = 'none';
+          overflowNodes.push(node);
+        }
+        section.appendChild(node);
+      }
+
+      if (overflowNodes.length > 0) {
+        const expandBtn = document.createElement('a');
+        expandBtn.className = 'callgraph-node';
+        expandBtn.style.color = '#6c7086';
+        expandBtn.style.cursor = 'pointer';
+        expandBtn.textContent = `+${overflowNodes.length} more`;
+        expandBtn.href = '#';
+        expandBtn.addEventListener('click', (event) => {
+          event.preventDefault();
+          for (const overflowNode of overflowNodes) {
+            overflowNode.style.display = '';
+          }
+          expandBtn.remove();
+        });
+        section.appendChild(expandBtn);
+      }
+      parent.appendChild(section);
+    };
+
+    if (callees.size > 0) {
+      renderFlowSection(callees, 'Calls');
+    }
+    if (callers.size > 0) {
+      renderFlowSection(callers, 'Called by');
+    }
+  }
+
   private appendCallList(parent: HTMLElement, label: string, funcIndices: Set<number>): void {
     if (!this.moduleInfo) {
       return;
     }
-    const importedFuncCount = this.moduleInfo.imports.filter(importEntry => importEntry.kind === 0).length;
+    const importedFuncCount = this.getImportedCount(0);
     const container = document.createElement('div');
     container.className = 'detail-call-list';
 
@@ -4158,6 +4699,170 @@ export default class Explorer {
     wrapper.appendChild(block);
     wrapper.appendChild(this.createCopyButton(hexText));
     parent.appendChild(wrapper);
+  }
+
+  private renderInteractiveBytes(parent: HTMLElement, funcIndex: number): void {
+    if (!this.byteRanges || !this.rawBytes || !this.moduleInfo || funcIndex >= this.moduleInfo.functions.length) {
+      return;
+    }
+    const range = this.byteRanges.getItem('function' as ByteRangeSection, funcIndex);
+    if (!range) {
+      this.appendByteRange(parent, 'function', funcIndex);
+      return;
+    }
+
+    const funcBody = this.moduleInfo.functions[funcIndex].body;
+    let instructions: import('../src/InstructionDecoder').DecodedInstruction[];
+    try {
+      instructions = InstructionDecoder.decodeFunctionBody(funcBody);
+    } catch (decodeError) {
+      this.appendByteRange(parent, 'function', funcIndex);
+      return;
+    }
+
+    const rangeInfo = document.createElement('div');
+    rangeInfo.className = 'detail-byte-range-info';
+    rangeInfo.textContent = `Offset: 0x${range.offset.toString(16)}, ${range.length} bytes, ${instructions.length} instructions`;
+    parent.appendChild(rangeInfo);
+
+    // Split view: instruction list left, hex right
+    const splitContainer = document.createElement('div');
+    splitContainer.className = 'hex-split-view';
+
+    // Instruction list
+    const instrList = document.createElement('div');
+    instrList.className = 'hex-instr-list';
+
+    // Hex view
+    const hexView = document.createElement('pre');
+    hexView.className = 'detail-hex hex-interactive';
+
+    // Build hex byte spans indexed by offset
+    const byteSpans = new Map<number, HTMLElement[]>();
+    const byteClasses = buildInstructionByteClasses(funcBody);
+
+    // Map byte offset → instruction mnemonic for tooltips
+    const byteToInstrLabel = new Map<number, string>();
+    for (const instruction of instructions) {
+      const label = instruction.immediates.values.length > 0
+        ? `${instruction.opCode.mnemonic} ${instruction.immediates.values.join(', ')}`
+        : instruction.opCode.mnemonic;
+      for (let bytePos = instruction.offset; bytePos < instruction.offset + instruction.length; bytePos++) {
+        byteToInstrLabel.set(bytePos, label);
+      }
+    }
+
+    // Render hex dump with data-offset spans
+    for (let position = 0; position < funcBody.length; position += 16) {
+      const address = (range.offset + position).toString(16).padStart(8, '0');
+      const addressSpan = document.createElement('span');
+      addressSpan.className = 'hex-address';
+      addressSpan.textContent = address + '  ';
+      hexView.appendChild(addressSpan);
+
+      for (let byteIndex = 0; byteIndex < 16; byteIndex++) {
+        if (byteIndex === 8) {
+          hexView.appendChild(document.createTextNode(' '));
+        }
+        if (position + byteIndex < funcBody.length) {
+          const byteOffset = position + byteIndex;
+          const byteValue = funcBody[byteOffset];
+          const hexStr = byteValue.toString(16).padStart(2, '0');
+          const span = document.createElement('span');
+          span.className = byteClasses.get(byteOffset) || '';
+          span.dataset.offset = String(byteOffset);
+          span.textContent = hexStr;
+          const instrLabel = byteToInstrLabel.get(byteOffset);
+          if (instrLabel) {
+            span.title = instrLabel;
+          }
+          hexView.appendChild(span);
+          hexView.appendChild(document.createTextNode(' '));
+
+          if (!byteSpans.has(byteOffset)) {
+            byteSpans.set(byteOffset, []);
+          }
+          byteSpans.get(byteOffset)!.push(span);
+        } else {
+          hexView.appendChild(document.createTextNode('   '));
+        }
+      }
+      hexView.appendChild(document.createTextNode('\n'));
+    }
+
+    // Render instruction list
+    let selectedInstrIdx = -1;
+    const instrRows: HTMLElement[] = [];
+
+    const highlightInstruction = (targetIdx: number): void => {
+      if (selectedInstrIdx >= 0 && selectedInstrIdx < instrRows.length) {
+        instrRows[selectedInstrIdx].classList.remove('hex-instr-active');
+      }
+      for (const spans of byteSpans.values()) {
+        for (const span of spans) {
+          span.classList.remove('hex-byte-active');
+        }
+      }
+      selectedInstrIdx = targetIdx;
+      instrRows[targetIdx].classList.add('hex-instr-active');
+
+      const targetInstr = instructions[targetIdx];
+      for (let bytePos = targetInstr.offset; bytePos < targetInstr.offset + targetInstr.length; bytePos++) {
+        const spans = byteSpans.get(bytePos);
+        if (spans) {
+          for (const span of spans) {
+            span.classList.add('hex-byte-active');
+          }
+        }
+      }
+    };
+
+    for (let instrIdx = 0; instrIdx < instructions.length; instrIdx++) {
+      const instruction = instructions[instrIdx];
+      const row = document.createElement('div');
+      row.className = 'hex-instr-row';
+
+      const offsetLabel = document.createElement('span');
+      offsetLabel.className = 'hex-instr-offset';
+      offsetLabel.textContent = `+${instruction.offset.toString(16).padStart(4, '0')}`;
+      row.appendChild(offsetLabel);
+
+      const mnemonic = document.createElement('span');
+      mnemonic.className = 'hex-instr-mnemonic';
+      mnemonic.textContent = instruction.opCode.mnemonic;
+      row.appendChild(mnemonic);
+
+      if (instruction.immediates.values.length > 0) {
+        const immediates = document.createElement('span');
+        immediates.className = 'hex-instr-imm';
+        immediates.textContent = instruction.immediates.values.join(', ');
+        row.appendChild(immediates);
+      }
+
+      row.addEventListener('click', () => highlightInstruction(instrIdx));
+      instrList.appendChild(row);
+      instrRows.push(row);
+    }
+
+    // Click hex bytes to highlight instruction
+    hexView.addEventListener('click', (event) => {
+      const target = event.target as HTMLElement;
+      if (target.dataset.offset !== undefined) {
+        const clickedOffset = parseInt(target.dataset.offset, 10);
+        for (let instrIdx = 0; instrIdx < instructions.length; instrIdx++) {
+          const instruction = instructions[instrIdx];
+          if (clickedOffset >= instruction.offset && clickedOffset < instruction.offset + instruction.length) {
+            highlightInstruction(instrIdx);
+            instrRows[instrIdx].scrollIntoView({ block: 'nearest' });
+            break;
+          }
+        }
+      }
+    });
+
+    splitContainer.appendChild(instrList);
+    splitContainer.appendChild(hexView);
+    parent.appendChild(splitContainer);
   }
 
   private appendByteRange(parent: HTMLElement, section: string, index: number): void {

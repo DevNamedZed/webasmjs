@@ -10,10 +10,16 @@ import { lowerSsaToStatements } from './SsaLowering';
 import type { LoweringNameProvider } from './SsaLowering';
 import { emitLowered, WASM_TO_C_TYPE } from './LoweredEmitter';
 import { annotateMemoryPatterns } from './MemoryPatterns';
+import { removeStackFrame, StackFrameResult } from './StackFramePass';
+
+function sanitizeIdentifier(name: string): string {
+  return name.replace(/[^a-zA-Z0-9_$]/g, '_');
+}
 
 export interface NameResolver {
   functionName(globalIndex: number): NameResolution;
   localName(funcGlobalIndex: number, localIndex: number): NameResolution;
+  parameterType?(funcGlobalIndex: number, paramIndex: number): string | null;
   globalName(globalIndex: number): NameResolution;
   typeName(typeIndex: number): string | null;
 }
@@ -27,6 +33,7 @@ export function createNameResolver(
   moduleInfo: ModuleInfo,
   functionNameProvider?: (globalIndex: number) => string | null,
   localNameProvider?: (funcGlobalIndex: number, localIndex: number) => string | null,
+  parameterTypeProvider?: (funcGlobalIndex: number, paramIndex: number) => string | null,
 ): NameResolver {
   const nameSection = moduleInfo.nameSection;
 
@@ -34,12 +41,12 @@ export function createNameResolver(
     functionName(globalIndex: number): NameResolution {
       if (nameSection?.functionNames?.has(globalIndex)) {
         const rawName = nameSection.functionNames.get(globalIndex)!;
-        return { name: demangleName(rawName), source: 'name-section' };
+        return { name: sanitizeIdentifier(demangleName(rawName)), source: 'name-section' };
       }
       if (functionNameProvider) {
         const externalName = functionNameProvider(globalIndex);
         if (externalName) {
-          return { name: demangleName(externalName), source: 'dwarf' };
+          return { name: sanitizeIdentifier(demangleName(externalName)), source: 'dwarf' };
         }
       }
       return { name: `func_${globalIndex}`, source: 'generated' };
@@ -49,13 +56,13 @@ export function createNameResolver(
       if (nameSection?.localNames?.has(funcGlobalIndex)) {
         const locals = nameSection.localNames.get(funcGlobalIndex)!;
         if (locals.has(localIndex)) {
-          return { name: locals.get(localIndex)!, source: 'name-section' };
+          return { name: sanitizeIdentifier(locals.get(localIndex)!), source: 'name-section' };
         }
       }
       if (localNameProvider) {
         const dwarfName = localNameProvider(funcGlobalIndex, localIndex);
         if (dwarfName) {
-          return { name: dwarfName, source: 'dwarf' };
+          return { name: sanitizeIdentifier(dwarfName), source: 'dwarf' };
         }
       }
       return { name: `var${localIndex}`, source: 'generated' };
@@ -63,12 +70,19 @@ export function createNameResolver(
 
     globalName(globalIndex: number): NameResolution {
       if (nameSection?.globalNames?.has(globalIndex)) {
-        return { name: nameSection.globalNames.get(globalIndex)!, source: 'name-section' };
+        return { name: sanitizeIdentifier(nameSection.globalNames.get(globalIndex)!), source: 'name-section' };
       }
       return { name: `global_${globalIndex}`, source: 'generated' };
     },
 
     typeName(_typeIndex: number): string | null {
+      return null;
+    },
+
+    parameterType(funcGlobalIndex: number, paramIndex: number): string | null {
+      if (parameterTypeProvider) {
+        return parameterTypeProvider(funcGlobalIndex, paramIndex);
+      }
       return null;
     },
   };
@@ -120,7 +134,9 @@ export function decompileFunction(
   const params: string[] = [];
   for (let paramIndex = 0; paramIndex < funcTypeEntry.parameterTypes.length; paramIndex++) {
     const paramNameRes = nameResolver.localName(globalFuncIndex, paramIndex);
-    params.push(`${typeStr(funcTypeEntry.parameterTypes[paramIndex])} ${paramNameRes.name}`);
+    const dwarfType = nameResolver.parameterType?.(globalFuncIndex, paramIndex);
+    const paramType = dwarfType || typeStr(funcTypeEntry.parameterTypes[paramIndex]);
+    params.push(`${paramType} ${paramNameRes.name}`);
   }
 
   const signature = `${returnType} ${funcNameRes.name}(${params.join(', ')})`;
@@ -162,7 +178,8 @@ export function decompileFunction(
     };
 
     const rawLowered = lowerSsaToStatements(structured, ssaFunc, nameProvider);
-    const lowered = annotateMemoryPatterns(rawLowered);
+    const stackFrameResult = removeStackFrame(rawLowered);
+    const lowered = annotateMemoryPatterns(stackFrameResult.node, stackFrameResult.frameVarName);
 
     const paramNames = new Set<string>();
     for (let paramIndex = 0; paramIndex < funcTypeEntry.parameterTypes.length; paramIndex++) {

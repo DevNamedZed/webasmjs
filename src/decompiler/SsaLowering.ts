@@ -57,7 +57,13 @@ export function lowerSsaToStatements(
         continue;
       }
       const usedCount = nameUsageCount.get(candidateName) || 0;
-      const finalName = usedCount === 0 ? candidateName : `${candidateName}${usedCount + 1}`;
+      let finalName: string;
+      if (candidateName === 'i' && usedCount > 0) {
+        const loopCounterNames = ['i', 'j', 'k', 'n', 'm'];
+        finalName = usedCount < loopCounterNames.length ? loopCounterNames[usedCount] : `i${usedCount + 1}`;
+      } else {
+        finalName = usedCount === 0 ? candidateName : `${candidateName}${usedCount + 1}`;
+      }
       nameUsageCount.set(candidateName, usedCount + 1);
       resolvedNames.set(result.id, finalName);
     }
@@ -84,8 +90,8 @@ export function lowerSsaToStatements(
       if (!result) {
         continue;
       }
-      // Don't inline calls into select expressions (evaluation order is unspecified)
-      if ((instr.kind === 'call' || instr.kind === 'call_indirect') && usedInSelect.has(result.id)) {
+      // Never cache calls for inlining — they have side effects and must remain as statements
+      if (instr.kind === 'call' || instr.kind === 'call_indirect') {
         continue;
       }
       const uses = useCount.get(result.id) || 0;
@@ -167,29 +173,83 @@ export function lowerSsaToStatements(
         if (known && known.returnName) {
           return known.returnName;
         }
-        return 'val';
+        if (rawName.startsWith('is_') || rawName.startsWith('has_') || rawName.startsWith('can_')) {
+          return rawName.replace(/^(is_|has_|can_)/, '');
+        }
+        if (rawName.startsWith('get_')) {
+          return rawName.replace(/^get_/, '');
+        }
+        if (rawName.startsWith('find_') || rawName.startsWith('search_') || rawName.startsWith('lookup_')) {
+          return 'found';
+        }
+        if (rawName.includes('alloc') || rawName.includes('malloc')) {
+          return 'buf';
+        }
+        if (rawName.includes('len') || rawName.includes('length') || rawName.includes('size') || rawName.includes('count')) {
+          return 'len';
+        }
+        return 'result';
       }
       if (def.kind === 'call_indirect') {
+        return 'result';
+      }
+      if (def.kind === 'select') {
         return 'val';
       }
       if (def.kind === 'load') {
+        const loadMnemonic = def.loadType;
+        if (loadMnemonic.includes('load8')) {
+          return 'byte';
+        }
+        if (loadMnemonic.includes('load16')) {
+          return 'word';
+        }
         return 'val';
       }
       if (def.kind === 'global_get') {
-        return names.globalName(def.globalIndex);
+        const globalName = names.globalName(def.globalIndex);
+        if (globalName === '__stack_pointer' || globalName === 'stack_pointer') {
+          return 'sp';
+        }
+        return globalName;
+      }
+      if (def.kind === 'compare') {
+        return 'cond';
+      }
+      if (def.kind === 'binary' && (def.op === '+' || def.op === '-')) {
+        if (isVariable(def.left)) {
+          const leftDef = defMap.get(def.left.id);
+          if (leftDef && leftDef.kind === 'global_get') {
+            const leftGlobalName = names.globalName(leftDef.globalIndex);
+            if (leftGlobalName === '__stack_pointer' || leftGlobalName === 'stack_pointer') {
+              return 'fp';
+            }
+          }
+        }
       }
       // Boolean flag: only assigned 0 or 1 via const
       if (def.kind === 'const') {
         const constValue = Number(def.value);
         if (constValue === 0 || constValue === 1) {
-          return 'ok';
+          return 'flag';
         }
       }
     }
-    // Use-site: variable used as address operand in load/store → pointer
+    // Use-site context-based naming
     const contexts = useSiteContext.get(variable.id);
-    if (contexts && contexts.has('address')) {
-      return 'ptr';
+    if (contexts) {
+      // Loop counter: compared + incremented (phi variable used in condition and incremented by 1)
+      if (contexts.has('compared') && contexts.has('incremented')) {
+        return 'i';
+      }
+      // Pointer: used as address operand in load/store
+      if (contexts.has('address')) {
+        return 'ptr';
+      }
+      // Shifted value (likely array index computation)
+      if (contexts.has('shifted')) {
+        return 'idx';
+      }
     }
     return 'val';
   }
@@ -455,6 +515,24 @@ function buildUseSiteContext(ssaFunc: SsaFunction): Map<number, Set<string>> {
         addContext(instr.address, 'address');
       } else if (instr.kind === 'store') {
         addContext(instr.address, 'address');
+      } else if (instr.kind === 'compare') {
+        addContext(instr.left, 'compared');
+        addContext(instr.right, 'compared');
+      } else if (instr.kind === 'binary') {
+        if (instr.op === 'shl' || instr.op === 'shr_u' || instr.op === 'shr_s') {
+          addContext(instr.left, 'shifted');
+        }
+      }
+    }
+    // Detect increment patterns: phi variable that gets incremented → loop counter
+    for (const instr of block.instructions) {
+      if (instr.kind === 'binary' && (instr.op === '+' || instr.op === '-')) {
+        if (isVariable(instr.left) && !isVariable(instr.right)) {
+          const constVal = Number((instr.right as SsaConst).value);
+          if (constVal === 1 || constVal === -1 || constVal === 2 || constVal === 4 || constVal === 8) {
+            addContext(instr.left, 'incremented');
+          }
+        }
       }
     }
   }

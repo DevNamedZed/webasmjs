@@ -14,15 +14,42 @@ import { Expression, Statement, LoweredNode } from './ExpressionIR';
  * - load(binary(+, var, const)) → load with named offset (struct-like)
  * - load(binary(+, var, binary(<<, index, const))) → array-like
  */
-export function annotateMemoryPatterns(node: LoweredNode): LoweredNode {
+function extractArrayIndex(expression: Expression): Expression | null {
+  // index << N (power-of-2 element size)
+  if (expression.kind === 'binary' && expression.op === '<<' && expression.right.kind === 'const') {
+    const shift = Number(expression.right.value);
+    if (shift >= 1 && shift <= 4) {
+      return expression.left;
+    }
+  }
+  // index * elementSize (any element size >= 2)
+  if (expression.kind === 'binary' && expression.op === '*') {
+    if (expression.right.kind === 'const') {
+      const elementSize = Number(expression.right.value);
+      if (elementSize >= 2 && elementSize <= 256) {
+        return expression.left;
+      }
+    }
+    if (expression.left.kind === 'const') {
+      const elementSize = Number(expression.left.value);
+      if (elementSize >= 2 && elementSize <= 256) {
+        return expression.right;
+      }
+    }
+  }
+  return null;
+}
+
+export function annotateMemoryPatterns(node: LoweredNode, frameVarName?: string | null): LoweredNode {
   // Pass 1: collect struct pointer candidates (variables used as base with 2+ distinct offsets)
   const baseOffsets = new Map<string, Set<number>>();
   collectMemoryBases(node, baseOffsets);
   // A variable qualifies as a struct pointer if it is used as a memory base
   // with at least 2 distinct constant offsets, indicating field-like access patterns.
+  // Exclude the stack frame pointer — it's a buffer, not a struct.
   const structBases = new Set<string>();
   for (const [baseName, offsets] of baseOffsets) {
-    if (offsets.size >= 2) {
+    if (offsets.size >= 2 && baseName !== frameVarName) {
       structBases.add(baseName);
     }
   }
@@ -135,6 +162,14 @@ function transformStatement(statement: Statement, structBases: Set<string>): Sta
       if (structStore) {
         return { kind: 'store', address: structStore, offset: 0, storeType: statement.storeType, value };
       }
+      // Array store: base + (index << N) or base + (index * elementSize)
+      if (address.kind === 'binary' && address.op === '+') {
+        const arrayIndex = extractArrayIndex(address.right) || extractArrayIndex(address.left);
+        const arrayBase = arrayIndex === address.right ? address.left : address.right;
+        if (arrayIndex && arrayBase !== arrayIndex) {
+          return { kind: 'store', address: { kind: 'binary', op: '[]', left: arrayBase, right: arrayIndex }, offset: statement.offset, storeType: statement.storeType, value };
+        }
+      }
       return { kind: 'store', address, offset: statement.offset, storeType: statement.storeType, value };
     }
     case 'call':
@@ -175,21 +210,12 @@ function transformExpr(expression: Expression, structBases: Set<string>): Expres
       if (structAccess) {
         return { kind: 'load', address: structAccess, offset: 0, loadType: expression.loadType };
       }
-      // Array access: base + (index << N)
+      // Array access: base + (index << N) or base + (index * elementSize)
       if (address.kind === 'binary' && address.op === '+') {
-        const right = address.right;
-        if (right.kind === 'binary' && right.op === '<<' && right.right.kind === 'const') {
-          const shift = Number(right.right.value);
-          if (shift >= 1 && shift <= 3) {
-            return { kind: 'load', address: { kind: 'binary', op: '[]', left: address.left, right: right.left }, offset: expression.offset, loadType: expression.loadType };
-          }
-        }
-        // Array access with multiply: base + (index * elementSize)
-        if (right.kind === 'binary' && right.op === '*' && right.right.kind === 'const') {
-          const elementSize = Number(right.right.value);
-          if (elementSize === 4 || elementSize === 8 || elementSize === 2) {
-            return { kind: 'load', address: { kind: 'binary', op: '[]', left: address.left, right: right.left }, offset: expression.offset, loadType: expression.loadType };
-          }
+        const arrayIndex = extractArrayIndex(address.right) || extractArrayIndex(address.left);
+        const arrayBase = arrayIndex === address.right ? address.left : address.right;
+        if (arrayIndex && arrayBase !== arrayIndex) {
+          return { kind: 'load', address: { kind: 'binary', op: '[]', left: arrayBase, right: arrayIndex }, offset: expression.offset, loadType: expression.loadType };
         }
       }
       return { kind: 'load', address, offset: expression.offset, loadType: expression.loadType };

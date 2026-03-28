@@ -143,6 +143,18 @@ function renderWatPane(modules: CapturedModule[]): void {
         downloadFile(mod.name + '.wasm', mod.bytes, 'application/wasm');
       });
       actions.appendChild(wasmBtn);
+
+      const exploreBtn = document.createElement('button');
+      exploreBtn.className = 'download-btn';
+      exploreBtn.textContent = '\u{1F50D} Explore';
+      exploreBtn.addEventListener('click', () => {
+        switchMode('explorer');
+        if (!explorerInstance) {
+          explorerInstance = new Explorer(document.getElementById('explorerContainer')!);
+        }
+        explorerInstance.loadBytes(mod.name + '.wasm', mod.bytes);
+      });
+      actions.appendChild(exploreBtn);
     }
 
     header.appendChild(actions);

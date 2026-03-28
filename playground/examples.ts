@@ -5988,6 +5988,240 @@ log('Same module, different instances: ' + (inst1 !== inst2));
 log('Same compiled module: ' + (wasmModule === wasmModule));`,
   },
 
+  'rich-name-section': {
+    label: 'Rich Name Section',
+    group: 'Debug',
+    description: 'Build a module with function names, local names, and global names — then inspect them.',
+    target: 'mvp',
+    features: [],
+    imports: ['ModuleBuilder', 'ValueType', 'BinaryReader'],
+    code: `// Rich Name Section — inspect debug names embedded in a WASM binary
+const mod = new ModuleBuilder('mathLib');
+
+mod.defineFunction('add', [ValueType.Int32],
+  [ValueType.Int32, ValueType.Int32], (f, a) => {
+  a.get_local(f.getParameter(0));
+  a.get_local(f.getParameter(1));
+  a.add_i32();
+}).withExport();
+
+mod.defineFunction('multiply', [ValueType.Int32],
+  [ValueType.Int32, ValueType.Int32], (f, a) => {
+  a.get_local(f.getParameter(0));
+  a.get_local(f.getParameter(1));
+  a.mul_i32();
+}).withExport();
+
+mod.defineFunction('square', [ValueType.Int32],
+  [ValueType.Int32], (f, a) => {
+  a.get_local(f.getParameter(0));
+  a.get_local(f.getParameter(0));
+  a.mul_i32();
+}).withExport();
+
+// Build and read back the name section
+const bytes = mod.toBytes();
+const reader = new BinaryReader(bytes);
+const info = reader.read();
+
+log('=== Name Section Contents ===');
+log('');
+log('Module name: ' + (info.nameSection?.moduleName || '(none)'));
+log('');
+
+if (info.nameSection?.functionNames) {
+  log('Function names (' + info.nameSection.functionNames.size + '):');
+  for (const [idx, name] of info.nameSection.functionNames) {
+    log('  func ' + idx + ' = "' + name + '"');
+  }
+} else {
+  log('No function names found.');
+}
+log('');
+
+log('Exports:');
+for (const exp of info.exports) {
+  const kindNames = ['func', 'table', 'memory', 'global', 'tag'];
+  log('  "' + exp.name + '" -> ' + (kindNames[exp.kind] || 'unknown') + ' ' + exp.index);
+}
+log('');
+log('Types:');
+for (let i = 0; i < info.types.length; i++) {
+  const t = info.types[i];
+  if (t.kind === 'func') {
+    const params = t.parameterTypes.map(() => 'i32').join(', ');
+    const returns = t.returnTypes.map(() => 'i32').join(', ');
+    log('  type ' + i + ': (' + params + ') -> (' + returns + ')');
+  }
+}
+log('');
+log('Click "Explore" on the WAT card to inspect in the explorer!');`,
+  },
+
+  'disassembler-usage': {
+    label: 'Disassembler',
+    group: 'Debug',
+    description: 'Build a module and use TextModuleWriter to get the WAT.',
+    target: 'mvp',
+    features: [],
+    imports: ['ModuleBuilder', 'ValueType', 'TextModuleWriter'],
+    code: `// Disassembler — build a module and convert to WAT
+const mod = new ModuleBuilder('demo');
+
+mod.defineFunction('add', [ValueType.Int32],
+  [ValueType.Int32, ValueType.Int32], (f, a) => {
+  a.get_local(f.getParameter(0));
+  a.get_local(f.getParameter(1));
+  a.add_i32();
+}).withExport();
+
+mod.defineFunction('max', [ValueType.Int32],
+  [ValueType.Int32, ValueType.Int32], (f, a) => {
+  const x = f.getParameter(0);
+  const y = f.getParameter(1);
+  a.get_local(x);
+  a.get_local(y);
+  a.gt_i32();
+  a.if(ValueType.Int32);
+    a.get_local(x);
+  a.else();
+    a.get_local(y);
+  a.end();
+}).withExport();
+
+// Get full WAT via TextModuleWriter
+const wat = mod.toString();
+log('Full WAT:');
+log(wat);
+
+// Get binary and inspect
+const bytes = mod.toBytes();
+log('');
+log('Binary size: ' + bytes.length + ' bytes');
+log('Magic: 0x' + Array.from(bytes.slice(0, 4)).map(b => b.toString(16).padStart(2, '0')).join(''));
+log('Version: ' + (bytes[4] | (bytes[5] << 8) | (bytes[6] << 16) | (bytes[7] << 24)));
+log('');
+log('Click "Explore" on the WAT card to inspect the binary structure!');`,
+  },
+
+  'binary-structure': {
+    label: 'Binary Structure',
+    group: 'Debug',
+    description: 'Build a module and inspect its raw binary structure section by section.',
+    target: 'mvp',
+    features: [],
+    imports: ['ModuleBuilder', 'ValueType', 'BinaryReader'],
+    code: `// Binary Structure — inspect the section layout of a WASM binary
+const mod = new ModuleBuilder('sections');
+
+mod.defineMemory(1, 4);
+mod.defineGlobal(ValueType.Int32, true, 0);
+
+mod.defineFunction('store', [],
+  [ValueType.Int32, ValueType.Int32], (f, a) => {
+  a.get_local(f.getParameter(0));
+  a.get_local(f.getParameter(1));
+  a.store_i32();
+}).withExport();
+
+mod.defineFunction('load', [ValueType.Int32],
+  [ValueType.Int32], (f, a) => {
+  a.get_local(f.getParameter(0));
+  a.load_i32();
+}).withExport();
+
+const bytes = mod.toBytes();
+const reader = new BinaryReader(bytes);
+const info = reader.read();
+
+const sectionNames = {
+  1: 'Type', 2: 'Import', 3: 'Function', 4: 'Table', 5: 'Memory',
+  6: 'Global', 7: 'Export', 8: 'Start', 9: 'Element', 10: 'Code',
+  11: 'Data', 12: 'DataCount', 0: 'Custom',
+};
+
+log('Module version: ' + info.version);
+log('Total size: ' + bytes.length + ' bytes');
+log('');
+log('Types: ' + info.types.length);
+log('Functions: ' + info.functions.length);
+log('Memories: ' + info.memories.length);
+log('Globals: ' + info.globals.length);
+log('Exports: ' + info.exports.length);
+log('');
+
+// Parse sections manually
+let offset = 8;
+while (offset < bytes.length) {
+  const sectionId = bytes[offset];
+  let sizeOffset = offset + 1;
+  let sectionSize = 0;
+  let shift = 0;
+  while (sizeOffset < bytes.length) {
+    const byte = bytes[sizeOffset++];
+    sectionSize |= (byte & 0x7f) << shift;
+    shift += 7;
+    if (!(byte & 0x80)) break;
+  }
+  const name = sectionNames[sectionId] || 'Unknown(' + sectionId + ')';
+  log(name + ' section: offset 0x' + offset.toString(16) + ', ' + sectionSize + ' bytes');
+  offset = sizeOffset + sectionSize;
+}`,
+  },
+
+  'custom-metadata': {
+    label: 'Structured Custom Section',
+    group: 'Debug',
+    description: 'Embed structured metadata in a custom section and read it back.',
+    target: 'mvp',
+    features: [],
+    imports: ['ModuleBuilder', 'ValueType', 'BinaryReader'],
+    code: `// Structured Custom Section — embed and read back build metadata
+const mod = new ModuleBuilder('app');
+
+mod.defineFunction('main', [], [], (f, a) => {
+  a.nop();
+}).withExport();
+
+// Embed build metadata as a custom section
+const metadata = {
+  buildTime: new Date().toISOString(),
+  compiler: 'webasmjs playground',
+  version: '1.0.0',
+  features: ['debug-names', 'custom-sections'],
+};
+
+const jsonStr = JSON.stringify(metadata);
+const encoder = new TextEncoder();
+const metadataBytes = encoder.encode(jsonStr);
+mod.defineCustomSection('build-metadata', metadataBytes);
+
+// Also add a producers-style section
+const producerStr = 'webasmjs;1.0.0';
+mod.defineCustomSection('source-info', encoder.encode(producerStr));
+
+const bytes = mod.toBytes();
+const reader = new BinaryReader(bytes);
+const info = reader.read();
+
+log('Custom sections found: ' + info.customSections.length);
+log('');
+for (const section of info.customSections) {
+  if (section.name === 'name') { continue; }
+  log('Section: "' + section.name + '" (' + section.data.length + ' bytes)');
+  const decoder = new TextDecoder();
+  const content = decoder.decode(section.data);
+  try {
+    const parsed = JSON.parse(content);
+    log('  ' + JSON.stringify(parsed, null, 2));
+  } catch {
+    log('  ' + content);
+  }
+  log('');
+}
+log('Click "Explore" to see the custom sections in the explorer!');`,
+  },
+
   // ─── Imports ───
 
   'import-memory': {
