@@ -254,6 +254,20 @@ export function lowerSsaToStatements(
     return 'val';
   }
 
+  function resolveCallTarget(instr: SsaInstr & { kind: 'call' }): string {
+    if (instr.target >= 0) {
+      return names.functionName(instr.target);
+    }
+    if (instr.target === -1) { return 'memory_size'; }
+    if (instr.target === -2) { return 'memory_grow'; }
+    if (instr.target === -3) { return 'atomic_cmpxchg'; }
+    if (instr.target === -4 && instr.result) {
+      return ssaFunc.intrinsicNames.get(instr.result.id) || 'intrinsic';
+    }
+    // Void intrinsic — target encodes the intrinsic name ID
+    return ssaFunc.intrinsicNames.get(instr.target) || 'intrinsic';
+  }
+
   function instrToExpression(instr: SsaInstr): Expression | null {
     switch (instr.kind) {
       case 'const':
@@ -276,7 +290,7 @@ export function lowerSsaToStatements(
         return resolveValue(instr.value);
       case 'call':
         if (instr.result) {
-          const funcName = instr.target >= 0 ? names.functionName(instr.target) : (instr.target === -1 ? 'memory.size' : instr.target === -2 ? 'memory.grow' : 'atomic_cmpxchg');
+          const funcName = resolveCallTarget(instr);
           return { kind: 'call', name: funcName, args: instr.args.map(a => resolveValue(a)) };
         }
         return null;
@@ -326,7 +340,7 @@ export function lowerSsaToStatements(
       case 'store':
         return { kind: 'store', address: resolveValue(instr.address), offset: instr.offset, storeType: instr.storeType, value: resolveValue(instr.value) };
       case 'call': {
-        const funcName = instr.target >= 0 ? names.functionName(instr.target) : (instr.target === -1 ? 'memory.size' : instr.target === -2 ? 'memory.grow' : 'atomic_cmpxchg');
+        const funcName = resolveCallTarget(instr);
         const resultName = instr.result ? resolveVarName(instr.result) : null;
         return { kind: 'call', name: funcName, args: instr.args.map(a => resolveValue(a)), result: resultName };
       }
@@ -348,8 +362,18 @@ export function lowerSsaToStatements(
       }
       case 'global_set':
         return { kind: 'global_set', name: names.globalName(instr.globalIndex), value: resolveValue(instr.value) };
-      case 'return':
-        return { kind: 'return', value: instr.value ? resolveValue(instr.value) : null };
+      case 'return': {
+        if (instr.values.length === 0) {
+          return { kind: 'return', value: null };
+        }
+        if (instr.values.length === 1) {
+          return { kind: 'return', value: resolveValue(instr.values[0]) };
+        }
+        // Multi-value return: emit as comma-separated for now
+        const returnExprs = instr.values.map(v => resolveValue(v));
+        // Use the first value as the primary return, emit others as preceding statements
+        return { kind: 'return', value: returnExprs.length === 1 ? returnExprs[0] : { kind: 'binary', op: ',', left: returnExprs[0], right: returnExprs[1] } };
+      }
       case 'unreachable':
         return { kind: 'unreachable' };
       case 'phi':
@@ -545,7 +569,7 @@ function visitOperands(instr: SsaInstr, visitor: (v: SsaValue) => void): void {
     case 'global_set': visitor(instr.value); break;
     case 'branch_if': visitor(instr.condition); break;
     case 'branch_table': visitor(instr.selector); break;
-    case 'return': if (instr.value) { visitor(instr.value); } break;
+    case 'return': for (const retVal of instr.values) { visitor(retVal); } break;
   }
 }
 
@@ -958,17 +982,17 @@ function statementReadsVariable(statement: Statement, variableName: string): boo
  * Top-level: `if (cond) { rest }` → `if (!cond) return; rest`
  * Nested ifs: `if (a) { if (b) { body } }` → `if (a && b) { body }` (no-else only)
  */
-function reduceNesting(node: LoweredNode): LoweredNode {
+function reduceNesting(node: LoweredNode, insideLoop: boolean = false): LoweredNode {
   switch (node.kind) {
     case 'sequence': {
-      const children = node.children.map(child => reduceNesting(child));
-      const flattened = flattenGuardClauses(children);
+      const children = node.children.map(child => reduceNesting(child, insideLoop));
+      const flattened = flattenGuardClauses(children, insideLoop);
       if (flattened.length === 1) { return flattened[0]; }
       return { kind: 'sequence', children: flattened };
     }
     case 'if': {
-      const thenBody = reduceNesting(node.thenBody);
-      const elseBody = node.elseBody ? reduceNesting(node.elseBody) : null;
+      const thenBody = reduceNesting(node.thenBody, insideLoop);
+      const elseBody = node.elseBody ? reduceNesting(node.elseBody, insideLoop) : null;
       // Merge nested if: if (a) { if (b) { body } } → if (a && b) { body }
       if (!elseBody && thenBody.kind === 'if' && !thenBody.elseBody) {
         const merged: Expression = { kind: 'binary', op: '&&', left: node.condition, right: thenBody.condition };
@@ -977,18 +1001,18 @@ function reduceNesting(node: LoweredNode): LoweredNode {
       return { kind: 'if', condition: node.condition, thenBody, elseBody };
     }
     case 'while': {
-      const body = reduceNesting(node.body);
+      const body = reduceNesting(node.body, true);
       const reduced = reduceLoopBody(body);
       return { kind: 'while', condition: node.condition, body: reduced };
     }
     case 'do_while': {
-      const body = reduceNesting(node.body);
+      const body = reduceNesting(node.body, true);
       return { kind: 'do_while', body: reduceLoopBody(body), condition: node.condition };
     }
     case 'for':
-      return { kind: 'for', init: node.init, condition: node.condition, increment: node.increment, body: reduceNesting(node.body) };
+      return { kind: 'for', init: node.init, condition: node.condition, increment: node.increment, body: reduceNesting(node.body, true) };
     case 'labeled_block':
-      return { kind: 'labeled_block', label: node.label, body: reduceNesting(node.body) };
+      return { kind: 'labeled_block', label: node.label, body: reduceNesting(node.body, insideLoop) };
     case 'switch':
       return {
         kind: 'switch', selector: node.selector,
@@ -1019,7 +1043,7 @@ function reduceLoopBody(body: LoweredNode): LoweredNode {
  * In a sequence, when an if-without-else ends with return/break/continue,
  * pull the subsequent siblings out of the nesting.
  */
-function flattenGuardClauses(children: LoweredNode[]): LoweredNode[] {
+function flattenGuardClauses(children: LoweredNode[], insideLoop: boolean): LoweredNode[] {
   const result: LoweredNode[] = [];
   for (let index = 0; index < children.length; index++) {
     const child = children[index];
@@ -1031,7 +1055,7 @@ function flattenGuardClauses(children: LoweredNode[]): LoweredNode[] {
       const innerChildren = getChildren(child.thenBody);
       if (innerChildren.length >= 2) {
         const guardCondition = negateExpression(child.condition);
-        const exitNode: LoweredNode = { kind: 'return', value: null };
+        const exitNode: LoweredNode = insideLoop ? { kind: 'continue' } : { kind: 'return', value: null };
         result.push({ kind: 'if', condition: guardCondition, thenBody: exitNode, elseBody: null });
         result.push(...innerChildren);
         continue;

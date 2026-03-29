@@ -273,7 +273,12 @@ export function emitLowered(
         } else {
           const addr = formatExpression(stmt.address, 0);
           const offsetStr = stmt.offset > 0 ? (addr === '0' ? String(stmt.offset) : `${addr} + ${stmt.offset}`) : addr;
-          emit(`memory[${offsetStr}] = ${formatExpression(stmt.value, 0)};`);
+          if (stmt.storeType.includes('v128') || stmt.storeType.includes('atomic')) {
+            const intrinsicName = stmt.storeType.replace(/\./g, '_');
+            emit(`${intrinsicName}(${offsetStr}, ${formatExpression(stmt.value, 0)});`);
+          } else {
+            emit(`memory[${offsetStr}] = ${formatExpression(stmt.value, 0)};`);
+          }
         }
         break;
       }
@@ -313,6 +318,15 @@ export function emitLowered(
     }
   }
 
+  function isIntrinsicOp(op: string): boolean {
+    return op.includes('x4_') || op.includes('x8_') || op.includes('x16_') || op.includes('x2_') ||
+           op.startsWith('v128_') || op.includes('atomic_') ||
+           op.startsWith('struct_') || op.startsWith('array_') ||
+           op.startsWith('table_') || op.startsWith('memory_') ||
+           op.startsWith('ref_') || op.startsWith('i31_') ||
+           op.startsWith('extern_') || op.startsWith('any_');
+  }
+
   function formatExpression(expr: Expression, parentPrec: number): string {
     switch (expr.kind) {
       case 'var':
@@ -333,6 +347,9 @@ export function emitLowered(
           const prec = PRECEDENCE['*'] || 10;
           const left = formatExpression(expr.left, prec);
           return maybeWrap(`${left} * ${multiplier}`, prec, parentPrec);
+        }
+        if (isIntrinsicOp(expr.op)) {
+          return `${expr.op}(${formatExpression(expr.left, 0)}, ${formatExpression(expr.right, 0)})`;
         }
         const unsigned = UNSIGNED_OPS[expr.op];
         if (unsigned) {
@@ -378,6 +395,11 @@ export function emitLowered(
         }
         const addr = formatExpression(expr.address, 0);
         const offsetStr = expr.offset > 0 ? (addr === '0' ? String(expr.offset) : `${addr} + ${expr.offset}`) : addr;
+        // SIMD/atomic loads emit as intrinsic calls
+        if (expr.loadType.includes('v128') || expr.loadType.includes('atomic')) {
+          const intrinsicName = expr.loadType.replace(/\./g, '_');
+          return `${intrinsicName}(${offsetStr})`;
+        }
         const loadCast = LOAD_TYPE_CAST[expr.loadType];
         if (loadCast) {
           return `(${loadCast})memory[${offsetStr}]`;

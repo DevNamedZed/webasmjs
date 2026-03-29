@@ -91,7 +91,7 @@ test('SSA - constant produces return', () => {
   const ssaFunc = buildSsa(cfg, moduleInfo, 0);
 
   const hasReturn = ssaFunc.blocks.some(block =>
-    block.instructions.some(instr => instr.kind === 'return' && instr.value !== null)
+    block.instructions.some(instr => instr.kind === 'return' && instr.values.length > 0)
   );
   expect(hasReturn).toBe(true);
 });
@@ -1638,4 +1638,51 @@ test('Decompile - for loop detected from init + while + increment', () => {
   });
   expect(output).toContain('for');
   expect(output).toContain('v1 = 0');
+});
+
+test('multi-value return decompiles correctly', () => {
+  const { moduleInfo, funcIndex } = buildModule((mod) => {
+    mod.defineFunction('swap', [ValueType.Int32, ValueType.Int32], [ValueType.Int32, ValueType.Int32], (f, asm) => {
+      asm.emit(OpCodes.get_local, asm.getParameter(1));
+      asm.emit(OpCodes.get_local, asm.getParameter(0));
+    });
+  });
+
+  const output = decompile(moduleInfo, funcIndex);
+  expect(output).toContain('return');
+  expect(output).toContain('v0');
+  expect(output).toContain('v1');
+  // Both return values should be present, not just one
+  expect(output).toContain(',');
+});
+
+test('stack frame prologue/epilogue is removed', () => {
+  const { decompileFunction, createNameResolver } = require('../src/decompiler/Decompiler');
+
+  const mod = new ModuleBuilder('test');
+  const stackPtr = mod.defineGlobal(ValueType.Int32, true, 65536);
+  mod.defineMemory(1);
+  mod.defineFunction('uses_stack', null, [], (f: any, asm: any) => {
+    const fp = asm.declareLocal(ValueType.Int32, 'fp');
+    asm.emit(OpCodes.get_global, stackPtr);
+    asm.emit(OpCodes.i32_const, 16);
+    asm.emit(OpCodes.i32_sub);
+    asm.emit(OpCodes.tee_local, fp);
+    asm.emit(OpCodes.set_global, stackPtr);
+    asm.emit(OpCodes.get_local, fp);
+    asm.emit(OpCodes.i32_const, 42);
+    asm.emit(OpCodes.i32_store, 2, 0);
+    asm.emit(OpCodes.get_local, fp);
+    asm.emit(OpCodes.i32_const, 16);
+    asm.emit(OpCodes.i32_add);
+    asm.emit(OpCodes.set_global, stackPtr);
+  });
+
+  const bytes = mod.toBytes();
+  const info = new BinaryReader(new Uint8Array(bytes)).read();
+  const resolver = createNameResolver(info);
+  const output = decompileFunction(info, 0, resolver);
+
+  expect(output).not.toContain('__stack_pointer');
+  expect(output).toContain('42');
 });

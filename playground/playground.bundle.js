@@ -11363,7 +11363,23 @@ ${inner}
     106: "arrayref",
     113: "nullref",
     115: "nullfuncref",
-    114: "nullexternref"
+    114: "nullexternref",
+    // Signed keys (readVarInt7 returns signed values for these)
+    [-1]: "i32",
+    [-2]: "i64",
+    [-3]: "f32",
+    [-4]: "f64",
+    [-5]: "v128",
+    [-16]: "funcref",
+    [-17]: "externref",
+    [-18]: "anyref",
+    [-19]: "eqref",
+    [-20]: "i31ref",
+    [-21]: "structref",
+    [-22]: "arrayref",
+    [-15]: "nullref",
+    [-13]: "nullfuncref",
+    [-14]: "nullexternref"
   };
   var blockTypeNames = {
     ...valueTypeNames,
@@ -11613,7 +11629,14 @@ ${inner}
         124: "f64",
         123: "v128",
         112: "funcref",
-        111: "externref"
+        111: "externref",
+        [-1]: "i32",
+        [-2]: "i64",
+        [-3]: "f32",
+        [-4]: "f64",
+        [-5]: "v128",
+        [-16]: "funcref",
+        [-17]: "externref"
       };
       return names[valueType] || `type_${valueType}`;
     }
@@ -11689,7 +11712,7 @@ ${inner}
           }
           case 1: {
             const tt = imp.tableType;
-            const elemType = valueTypeNames[tt.elementType & 255] || "anyfunc";
+            const elemType = valueTypeNames[tt.elementType] || "anyfunc";
             const max = tt.maximum !== null ? ` ${tt.maximum}` : "";
             this.line(`(import ${mod} ${field} (table ${tt.initial}${max} ${elemType}))`);
             break;
@@ -11847,7 +11870,7 @@ ${inner}
     writeTables() {
       for (let i = 0; i < this.module.tables.length; i++) {
         const t = this.module.tables[i];
-        const elemType = valueTypeNames[t.elementType & 255] || "anyfunc";
+        const elemType = valueTypeNames[t.elementType] || "anyfunc";
         const max = t.maximum !== null ? ` ${t.maximum}` : "";
         this.line(`(table (;${this.importedTableCount + i};) ${t.initial}${max} ${elemType})`);
       }
@@ -20731,7 +20754,7 @@ log(mod.toString());`
           reader.offset += 8;
           reader.readUint32();
         }
-        if (unitType !== 1 && unitType !== 17) {
+        if (unitType !== 1) {
           reader.offset = unitEnd;
           continue;
         }
@@ -20773,12 +20796,25 @@ log(mod.toString());`
         if (!abbrev) {
           break;
         }
+        const attrStartOffset = reader.offset;
         const attrs = /* @__PURE__ */ new Map();
         for (const attrDef of abbrev.attributes) {
           const value = readAttrValue(reader, attrDef.form, addressSize, debugStr, debugLineStr, attrDef.implicitConst, unitStart, debugStrOffsets, strOffsetsBase);
           attrs.set(attrDef.attribute, value);
         }
         if (abbrev.tag === DW_TAG_compile_unit) {
+          const strOffsetsBaseVal = attrs.get(DW_AT_str_offsets_base);
+          if (typeof strOffsetsBaseVal === "number" && strOffsetsBaseVal !== strOffsetsBase) {
+            strOffsetsBase = strOffsetsBaseVal;
+            const savedOffset = reader.offset;
+            reader.offset = attrStartOffset;
+            attrs.clear();
+            for (const attrDef of abbrev.attributes) {
+              const value = readAttrValue(reader, attrDef.form, addressSize, debugStr, debugLineStr, attrDef.implicitConst, unitStart, debugStrOffsets, strOffsetsBase);
+              attrs.set(attrDef.attribute, value);
+            }
+            reader.offset = savedOffset;
+          }
           const nameVal = attrs.get(DW_AT_name);
           if (typeof nameVal === "string") {
             unitName = nameVal;
@@ -20794,10 +20830,6 @@ log(mod.toString());`
           const compDirVal = attrs.get(DW_AT_comp_dir);
           if (typeof compDirVal === "string") {
             unitCompDir = compDirVal;
-          }
-          const strOffsetsBaseVal = attrs.get(DW_AT_str_offsets_base);
-          if (typeof strOffsetsBaseVal === "number") {
-            strOffsetsBase = strOffsetsBaseVal;
           }
         }
         if (abbrev.tag === DW_TAG_subprogram) {
@@ -21753,7 +21785,7 @@ log(mod.toString());`
     const flatTypes = flattenTypes(moduleInfo);
     const funcTypeRaw = flatTypes[func.typeIndex];
     if (!funcTypeRaw || funcTypeRaw.kind !== "func") {
-      return { blocks: [], variables: [], paramCount: 0, localCount: 0, entryBlockId: 0, exitBlockId: 0 };
+      return { blocks: [], variables: [], paramCount: 0, localCount: 0, entryBlockId: 0, exitBlockId: 0, intrinsicNames: /* @__PURE__ */ new Map() };
     }
     const funcType = funcTypeRaw;
     const paramCount = funcType.parameterTypes.length;
@@ -21762,7 +21794,9 @@ log(mod.toString());`
       totalLocalCount += localGroup.count;
     }
     let variableCounter = 0;
+    let voidIntrinsicCounter = -100;
     const allVariables = [];
+    const intrinsicNames = /* @__PURE__ */ new Map();
     function newVariable(name, type, blockId) {
       const variable = { id: variableCounter++, name, type, definedInBlock: blockId };
       allVariables.push(variable);
@@ -22204,8 +22238,14 @@ log(mod.toString());`
           continue;
         }
         if (opCode === OpCodes_default.return) {
-          const returnValue = funcType.returnTypes.length > 0 ? stack.pop() || null : null;
-          ssaBlock.instructions.push({ kind: "return", value: returnValue });
+          const returnValues = [];
+          for (let retIdx = 0; retIdx < funcType.returnTypes.length; retIdx++) {
+            const val = stack.pop();
+            if (val) {
+              returnValues.unshift(val);
+            }
+          }
+          ssaBlock.instructions.push({ kind: "return", values: returnValues });
           continue;
         }
         if (opCode === OpCodes_default.unreachable || opCode === OpCodes_default.throw || opCode === OpCodes_default.rethrow) {
@@ -22225,15 +22265,120 @@ log(mod.toString());`
           stack.push(result);
           continue;
         }
+        if (opCode.mnemonic.startsWith("struct.") || opCode.mnemonic.startsWith("array.") || opCode.mnemonic === "ref.i31" || opCode.mnemonic.startsWith("i31.") || opCode.mnemonic.startsWith("ref.test") || opCode.mnemonic.startsWith("ref.cast") || opCode.mnemonic.startsWith("any.") || opCode.mnemonic.startsWith("extern.") || opCode.mnemonic === "ref.null" || opCode.mnemonic === "ref.is_null" || opCode.mnemonic === "ref.func") {
+          const mnemonic = opCode.mnemonic;
+          const intrinsicName = mnemonic.replace(/\./g, "_").replace(/ /g, "_");
+          let popCount = opCode.popOperands ? opCode.popOperands.length : 0;
+          const pushCount = opCode.pushOperands ? opCode.pushOperands.length : 0;
+          if (mnemonic === "struct.new" && instruction.immediates.values.length > 0) {
+            const typeIndex = instruction.immediates.values[0];
+            const flatTypes2 = flattenTypes(moduleInfo);
+            if (typeIndex < flatTypes2.length && flatTypes2[typeIndex].kind === "struct") {
+              popCount = flatTypes2[typeIndex].fields.length;
+            }
+          }
+          const args = [];
+          for (let argIdx = 0; argIdx < popCount; argIdx++) {
+            const arg = stack.pop();
+            if (arg) {
+              args.unshift(arg);
+            }
+          }
+          const isGcOp = mnemonic.startsWith("struct.") || mnemonic.startsWith("array.") || mnemonic.startsWith("ref.") || mnemonic.startsWith("i31.") || mnemonic.startsWith("any.") || mnemonic.startsWith("extern.");
+          const immediateValues = instruction.immediates.values;
+          for (let immIdx = 0; immIdx < immediateValues.length; immIdx++) {
+            const immVal = immediateValues[immIdx];
+            if (typeof immVal !== "number") {
+              continue;
+            }
+            if (isGcOp && immIdx === 0) {
+              continue;
+            }
+            args.push({ kind: "const", value: immVal, type: "i32" });
+          }
+          if (pushCount > 0) {
+            const resultType = mnemonic.includes("v128") || mnemonic.includes("x4") || mnemonic.includes("x8") || mnemonic.includes("x16") || mnemonic.includes("x2") ? "v128" : "i32";
+            const result = newVariable(`t${variableCounter}`, resultType, cfgBlock.id);
+            ssaBlock.instructions.push({ kind: "call", result, target: -4, args });
+            intrinsicNames.set(result.id, intrinsicName);
+            stack.push(result);
+          } else {
+            const voidId = voidIntrinsicCounter--;
+            intrinsicNames.set(voidId, intrinsicName);
+            ssaBlock.instructions.push({ kind: "call", result: null, target: voidId, args });
+          }
+          continue;
+        }
+        if (opCode.mnemonic.startsWith("table.") || opCode.mnemonic === "memory.fill" || opCode.mnemonic === "memory.copy" || opCode.mnemonic === "memory.init" || opCode.mnemonic === "data.drop" || opCode.mnemonic === "elem.drop" || opCode.mnemonic === "table.init" || opCode.mnemonic === "table.copy") {
+          const mnemonic = opCode.mnemonic;
+          const intrinsicName = mnemonic.replace(/\./g, "_");
+          const popCount = opCode.popOperands ? opCode.popOperands.length : 0;
+          const pushCount = opCode.pushOperands ? opCode.pushOperands.length : 0;
+          const args = [];
+          for (let argIdx = 0; argIdx < popCount; argIdx++) {
+            const arg = stack.pop();
+            if (arg) {
+              args.unshift(arg);
+            }
+          }
+          for (const immVal of instruction.immediates.values) {
+            if (typeof immVal === "number") {
+              args.push({ kind: "const", value: immVal, type: "i32" });
+            }
+          }
+          if (pushCount > 0) {
+            const result = newVariable(`t${variableCounter}`, "i32", cfgBlock.id);
+            ssaBlock.instructions.push({ kind: "call", result, target: -4, args });
+            intrinsicNames.set(result.id, intrinsicName);
+            stack.push(result);
+          } else {
+            const voidId = voidIntrinsicCounter--;
+            intrinsicNames.set(voidId, intrinsicName);
+            ssaBlock.instructions.push({ kind: "call", result: null, target: voidId, args });
+          }
+          continue;
+        }
+        if (opCode.stackBehavior === "PopPush" && opCode.popOperands && opCode.popOperands.length === 3) {
+          const mnemonic = opCode.mnemonic;
+          const intrinsicName = mnemonic.replace(/\./g, "_");
+          const arg3 = stack.pop();
+          const arg2 = stack.pop();
+          const arg1 = stack.pop();
+          if (arg1 && arg2 && arg3) {
+            const result = newVariable(`t${variableCounter}`, "v128", cfgBlock.id);
+            ssaBlock.instructions.push({ kind: "call", result, target: -4, args: [arg1, arg2, arg3] });
+            intrinsicNames.set(result.id, intrinsicName);
+            stack.push(result);
+          }
+          continue;
+        }
+        if (opCode.mnemonic === "i8x16.shuffle") {
+          const right = stack.pop();
+          const left = stack.pop();
+          if (left && right) {
+            const args = [left, right];
+            const maskImmediate = instruction.immediates.values[0];
+            if (maskImmediate instanceof Uint8Array) {
+              for (const byte of maskImmediate) {
+                args.push({ kind: "const", value: byte, type: "i32" });
+              }
+            }
+            const result = newVariable(`t${variableCounter}`, "v128", cfgBlock.id);
+            ssaBlock.instructions.push({ kind: "call", result, target: -4, args });
+            intrinsicNames.set(result.id, "i8x16_shuffle");
+            stack.push(result);
+          }
+          continue;
+        }
         if (opCode.stackBehavior === "PopPush") {
           const mnemonic = opCode.mnemonic;
-          if (mnemonic.includes(".add") || mnemonic.includes(".sub") || mnemonic.includes(".mul") || mnemonic.includes(".and") || mnemonic.includes(".or") || mnemonic.includes(".xor") || mnemonic.includes(".shl") || mnemonic.includes(".shr") || mnemonic.includes(".min") || mnemonic.includes(".max") || mnemonic.includes(".eq") || mnemonic.includes(".ne") || mnemonic.includes(".lt") || mnemonic.includes(".gt") || mnemonic.includes(".le") || mnemonic.includes(".ge") || mnemonic.includes(".avgr") || mnemonic.includes(".swizzle") || mnemonic.includes(".narrow") || mnemonic.includes(".dot") || mnemonic.includes(".q15mulr")) {
+          if (mnemonic.includes(".add") || mnemonic.includes(".sub") || mnemonic.includes(".mul") || mnemonic.includes(".and") || mnemonic.includes(".or") || mnemonic.includes(".xor") || mnemonic.includes(".shl") || mnemonic.includes(".shr") || mnemonic.includes(".min") || mnemonic.includes(".max") || mnemonic.includes(".eq") || mnemonic.includes(".ne") && !mnemonic.includes(".neg") && !mnemonic.includes(".nearest") || mnemonic.includes(".lt") || mnemonic.includes(".gt") || mnemonic.includes(".le") || mnemonic.includes(".ge") || mnemonic.includes(".avgr") || mnemonic.includes(".swizzle") || mnemonic.includes(".narrow") || mnemonic.includes(".dot") || mnemonic.includes(".q15mulr") || mnemonic.includes(".extmul") || mnemonic.includes(".bitselect") || mnemonic.includes(".andnot")) {
             const right = stack.pop();
             const left = stack.pop();
             if (left && right) {
               const resultType = mnemonic.startsWith("v128") || mnemonic.includes("x") ? "v128" : resultTypeFromOpCode(opCode);
               const result = newVariable(`t${variableCounter}`, resultType, cfgBlock.id);
-              const operatorName = mnemonic.split(".").pop() || mnemonic;
+              const operatorName = mnemonic.replace(/\./g, "_");
               ssaBlock.instructions.push({ kind: "binary", result, op: operatorName, left, right });
               stack.push(result);
             }
@@ -22243,7 +22388,7 @@ log(mod.toString());`
           if (operand) {
             const resultType = mnemonic.startsWith("v128") || mnemonic.includes("x") ? "v128" : resultTypeFromOpCode(opCode);
             const result = newVariable(`t${variableCounter}`, resultType, cfgBlock.id);
-            ssaBlock.instructions.push({ kind: "convert", result, op: mnemonic, operand });
+            ssaBlock.instructions.push({ kind: "convert", result, op: mnemonic.replace(/\./g, "_"), operand });
             stack.push(result);
           }
           continue;
@@ -22262,11 +22407,18 @@ log(mod.toString());`
       }
       const hasExitEdge = cfgBlock.successors.some((successor) => successor.id === cfg.exit.id);
       if (hasExitEdge && stack.length > 0 && funcType.returnTypes.length > 0) {
-        ssaBlock.instructions.push({ kind: "return", value: stack.pop() });
+        const returnValues = [];
+        for (let retIdx = 0; retIdx < funcType.returnTypes.length && stack.length > 0; retIdx++) {
+          const val = stack.pop();
+          if (val) {
+            returnValues.unshift(val);
+          }
+        }
+        ssaBlock.instructions.push({ kind: "return", values: returnValues });
       } else if (hasExitEdge && funcType.returnTypes.length === 0) {
         const lastInstr = ssaBlock.instructions[ssaBlock.instructions.length - 1];
         if (!lastInstr || lastInstr.kind !== "return") {
-          ssaBlock.instructions.push({ kind: "return", value: null });
+          ssaBlock.instructions.push({ kind: "return", values: [] });
         }
       }
       localVersions.set(cfgBlock.id, currentLocals);
@@ -22312,7 +22464,8 @@ log(mod.toString());`
       paramCount,
       localCount: totalLocalCount,
       entryBlockId: cfg.entry.id,
-      exitBlockId: cfg.exit.id
+      exitBlockId: cfg.exit.id,
+      intrinsicNames
     };
   }
   function computeReversePostOrder(cfg) {
@@ -23475,8 +23628,8 @@ log(mod.toString());`
         visitor(instruction.selector);
         break;
       case "return":
-        if (instruction.value) {
-          visitor(instruction.value);
+        for (const retVal of instruction.values) {
+          visitor(retVal);
         }
         break;
     }
@@ -23546,8 +23699,8 @@ log(mod.toString());`
         instruction.selector = replace(instruction.selector);
         break;
       case "return":
-        if (instruction.value) {
-          instruction.value = replace(instruction.value);
+        for (let retIdx = 0; retIdx < instruction.values.length; retIdx++) {
+          instruction.values[retIdx] = replace(instruction.values[retIdx]);
         }
         break;
     }
@@ -24453,6 +24606,24 @@ log(mod.toString());`
       }
       return "val";
     }
+    function resolveCallTarget(instr) {
+      if (instr.target >= 0) {
+        return names.functionName(instr.target);
+      }
+      if (instr.target === -1) {
+        return "memory_size";
+      }
+      if (instr.target === -2) {
+        return "memory_grow";
+      }
+      if (instr.target === -3) {
+        return "atomic_cmpxchg";
+      }
+      if (instr.target === -4 && instr.result) {
+        return ssaFunc.intrinsicNames.get(instr.result.id) || "intrinsic";
+      }
+      return ssaFunc.intrinsicNames.get(instr.target) || "intrinsic";
+    }
     function instrToExpression(instr) {
       switch (instr.kind) {
         case "const":
@@ -24475,7 +24646,7 @@ log(mod.toString());`
           return resolveValue(instr.value);
         case "call":
           if (instr.result) {
-            const funcName = instr.target >= 0 ? names.functionName(instr.target) : instr.target === -1 ? "memory.size" : instr.target === -2 ? "memory.grow" : "atomic_cmpxchg";
+            const funcName = resolveCallTarget(instr);
             return { kind: "call", name: funcName, args: instr.args.map((a) => resolveValue(a)) };
           }
           return null;
@@ -24521,7 +24692,7 @@ log(mod.toString());`
         case "store":
           return { kind: "store", address: resolveValue(instr.address), offset: instr.offset, storeType: instr.storeType, value: resolveValue(instr.value) };
         case "call": {
-          const funcName = instr.target >= 0 ? names.functionName(instr.target) : instr.target === -1 ? "memory.size" : instr.target === -2 ? "memory.grow" : "atomic_cmpxchg";
+          const funcName = resolveCallTarget(instr);
           const resultName = instr.result ? resolveVarName(instr.result) : null;
           return { kind: "call", name: funcName, args: instr.args.map((a) => resolveValue(a)), result: resultName };
         }
@@ -24543,8 +24714,16 @@ log(mod.toString());`
         }
         case "global_set":
           return { kind: "global_set", name: names.globalName(instr.globalIndex), value: resolveValue(instr.value) };
-        case "return":
-          return { kind: "return", value: instr.value ? resolveValue(instr.value) : null };
+        case "return": {
+          if (instr.values.length === 0) {
+            return { kind: "return", value: null };
+          }
+          if (instr.values.length === 1) {
+            return { kind: "return", value: resolveValue(instr.values[0]) };
+          }
+          const returnExprs = instr.values.map((v) => resolveValue(v));
+          return { kind: "return", value: returnExprs.length === 1 ? returnExprs[0] : { kind: "binary", op: ",", left: returnExprs[0], right: returnExprs[1] } };
+        }
         case "unreachable":
           return { kind: "unreachable" };
         case "phi":
@@ -24772,8 +24951,8 @@ log(mod.toString());`
         visitor(instr.selector);
         break;
       case "return":
-        if (instr.value) {
-          visitor(instr.value);
+        for (const retVal of instr.values) {
+          visitor(retVal);
         }
         break;
     }
@@ -25167,19 +25346,19 @@ log(mod.toString());`
         return false;
     }
   }
-  function reduceNesting2(node) {
+  function reduceNesting2(node, insideLoop = false) {
     switch (node.kind) {
       case "sequence": {
-        const children = node.children.map((child) => reduceNesting2(child));
-        const flattened = flattenGuardClauses(children);
+        const children = node.children.map((child) => reduceNesting2(child, insideLoop));
+        const flattened = flattenGuardClauses(children, insideLoop);
         if (flattened.length === 1) {
           return flattened[0];
         }
         return { kind: "sequence", children: flattened };
       }
       case "if": {
-        const thenBody = reduceNesting2(node.thenBody);
-        const elseBody = node.elseBody ? reduceNesting2(node.elseBody) : null;
+        const thenBody = reduceNesting2(node.thenBody, insideLoop);
+        const elseBody = node.elseBody ? reduceNesting2(node.elseBody, insideLoop) : null;
         if (!elseBody && thenBody.kind === "if" && !thenBody.elseBody) {
           const merged = { kind: "binary", op: "&&", left: node.condition, right: thenBody.condition };
           return { kind: "if", condition: merged, thenBody: thenBody.thenBody, elseBody: null };
@@ -25187,18 +25366,18 @@ log(mod.toString());`
         return { kind: "if", condition: node.condition, thenBody, elseBody };
       }
       case "while": {
-        const body = reduceNesting2(node.body);
+        const body = reduceNesting2(node.body, true);
         const reduced = reduceLoopBody(body);
         return { kind: "while", condition: node.condition, body: reduced };
       }
       case "do_while": {
-        const body = reduceNesting2(node.body);
+        const body = reduceNesting2(node.body, true);
         return { kind: "do_while", body: reduceLoopBody(body), condition: node.condition };
       }
       case "for":
-        return { kind: "for", init: node.init, condition: node.condition, increment: node.increment, body: reduceNesting2(node.body) };
+        return { kind: "for", init: node.init, condition: node.condition, increment: node.increment, body: reduceNesting2(node.body, true) };
       case "labeled_block":
-        return { kind: "labeled_block", label: node.label, body: reduceNesting2(node.body) };
+        return { kind: "labeled_block", label: node.label, body: reduceNesting2(node.body, insideLoop) };
       case "switch":
         return {
           kind: "switch",
@@ -25220,7 +25399,7 @@ log(mod.toString());`
     }
     return body;
   }
-  function flattenGuardClauses(children) {
+  function flattenGuardClauses(children, insideLoop) {
     const result = [];
     for (let index = 0; index < children.length; index++) {
       const child = children[index];
@@ -25228,7 +25407,7 @@ log(mod.toString());`
         const innerChildren = getChildren(child.thenBody);
         if (innerChildren.length >= 2) {
           const guardCondition = negateExpression(child.condition);
-          const exitNode = { kind: "return", value: null };
+          const exitNode = insideLoop ? { kind: "continue" } : { kind: "return", value: null };
           result.push({ kind: "if", condition: guardCondition, thenBody: exitNode, elseBody: null });
           result.push(...innerChildren);
           continue;
@@ -25741,7 +25920,12 @@ log(mod.toString());`
           } else {
             const addr = formatExpression(stmt.address, 0);
             const offsetStr = stmt.offset > 0 ? addr === "0" ? String(stmt.offset) : `${addr} + ${stmt.offset}` : addr;
-            emit(`memory[${offsetStr}] = ${formatExpression(stmt.value, 0)};`);
+            if (stmt.storeType.includes("v128") || stmt.storeType.includes("atomic")) {
+              const intrinsicName = stmt.storeType.replace(/\./g, "_");
+              emit(`${intrinsicName}(${offsetStr}, ${formatExpression(stmt.value, 0)});`);
+            } else {
+              emit(`memory[${offsetStr}] = ${formatExpression(stmt.value, 0)};`);
+            }
           }
           break;
         }
@@ -25780,6 +25964,9 @@ log(mod.toString());`
           break;
       }
     }
+    function isIntrinsicOp(op) {
+      return op.includes("x4_") || op.includes("x8_") || op.includes("x16_") || op.includes("x2_") || op.startsWith("v128_") || op.includes("atomic_") || op.startsWith("struct_") || op.startsWith("array_") || op.startsWith("table_") || op.startsWith("memory_") || op.startsWith("ref_") || op.startsWith("i31_") || op.startsWith("extern_") || op.startsWith("any_");
+    }
     function formatExpression(expr, parentPrec) {
       switch (expr.kind) {
         case "var":
@@ -25799,6 +25986,9 @@ log(mod.toString());`
             const prec2 = PRECEDENCE["*"] || 10;
             const left2 = formatExpression(expr.left, prec2);
             return maybeWrap(`${left2} * ${multiplier}`, prec2, parentPrec);
+          }
+          if (isIntrinsicOp(expr.op)) {
+            return `${expr.op}(${formatExpression(expr.left, 0)}, ${formatExpression(expr.right, 0)})`;
           }
           const unsigned = UNSIGNED_OPS[expr.op];
           if (unsigned) {
@@ -25844,6 +26034,10 @@ log(mod.toString());`
           }
           const addr = formatExpression(expr.address, 0);
           const offsetStr = expr.offset > 0 ? addr === "0" ? String(expr.offset) : `${addr} + ${expr.offset}` : addr;
+          if (expr.loadType.includes("v128") || expr.loadType.includes("atomic")) {
+            const intrinsicName = expr.loadType.replace(/\./g, "_");
+            return `${intrinsicName}(${offsetStr})`;
+          }
           const loadCast = LOAD_TYPE_CAST[expr.loadType];
           if (loadCast) {
             return `(${loadCast})memory[${offsetStr}]`;
@@ -26311,6 +26505,9 @@ log(mod.toString());`
       case "store": {
         const address = xExpr(statement.address);
         const value = xExpr(statement.value);
+        if (statement.storeType.includes("v128") || statement.storeType.includes("atomic")) {
+          return { kind: "store", address, offset: statement.offset, storeType: statement.storeType, value };
+        }
         const structStore = tryStructAccess(address, statement.offset, structBases);
         if (structStore) {
           return { kind: "store", address: structStore, offset: 0, storeType: statement.storeType, value };
@@ -26353,6 +26550,9 @@ log(mod.toString());`
     switch (expression.kind) {
       case "load": {
         const address = xExpr(expression.address);
+        if (expression.loadType.includes("v128") || expression.loadType.includes("atomic")) {
+          return { kind: "load", address, offset: expression.offset, loadType: expression.loadType };
+        }
         const structAccess = tryStructAccess(address, expression.offset, structBases);
         if (structAccess) {
           return { kind: "load", address: structAccess, offset: 0, loadType: expression.loadType };
@@ -30437,8 +30637,9 @@ ${funcEntry.body.length} bytes, ${totalLocals} locals`,
       leftCol.appendChild(importsHeading);
       if (this.moduleInfo.imports.length > 0) {
         const importTable = this.createInfoTable();
-        for (let importIndex = 0; importIndex < this.moduleInfo.imports.length; importIndex++) {
-          const importEntry = this.moduleInfo.imports[importIndex];
+        const sortedImports = this.moduleInfo.imports.map((entry, index) => ({ entry, index }));
+        sortedImports.sort((a, b) => a.entry.fieldName.localeCompare(b.entry.fieldName));
+        for (const { entry: importEntry, index: importIndex } of sortedImports) {
           const kindName = EXPORT_KIND_NAMES[importEntry.kind] || "unknown";
           let signature = "";
           if (importEntry.kind === 0 && importEntry.typeIndex !== void 0 && importEntry.typeIndex < flatTypes.length) {
@@ -30451,7 +30652,8 @@ ${funcEntry.body.length} bytes, ${totalLocals} locals`,
           row.className = "detail-info-row";
           const nameLink = document.createElement("a");
           nameLink.className = "detail-info-link";
-          nameLink.style.flex = "0 0 140px";
+          nameLink.style.flex = "0 0 auto";
+          nameLink.style.maxWidth = "50%";
           nameLink.textContent = importEntry.fieldName;
           nameLink.title = `${importEntry.moduleName}.${importEntry.fieldName}`;
           nameLink.href = "#";
@@ -30489,8 +30691,9 @@ ${funcEntry.body.length} bytes, ${totalLocals} locals`,
       rightCol.appendChild(exportsHeading);
       if (this.moduleInfo.exports.length > 0) {
         const exportTable = this.createInfoTable();
-        for (let exportIndex = 0; exportIndex < this.moduleInfo.exports.length; exportIndex++) {
-          const exportEntry = this.moduleInfo.exports[exportIndex];
+        const sortedExports = this.moduleInfo.exports.map((entry, index) => ({ entry, index }));
+        sortedExports.sort((a, b) => a.entry.name.localeCompare(b.entry.name));
+        for (const { entry: exportEntry, index: exportIndex } of sortedExports) {
           const kindName = EXPORT_KIND_NAMES[exportEntry.kind] || "unknown";
           let signature = "";
           const targetSection = this.getExportTargetSection(exportEntry.kind);
@@ -30514,7 +30717,8 @@ ${funcEntry.body.length} bytes, ${totalLocals} locals`,
           const navIndex = targetSection && targetItemIndex >= 0 ? targetItemIndex : exportIndex;
           const nameLink = document.createElement("a");
           nameLink.className = "detail-info-link";
-          nameLink.style.flex = "0 0 140px";
+          nameLink.style.flex = "0 0 auto";
+          nameLink.style.maxWidth = "50%";
           nameLink.textContent = exportEntry.name;
           nameLink.title = exportEntry.name;
           nameLink.href = "#";
@@ -30607,8 +30811,8 @@ ${funcEntry.body.length} bytes, ${totalLocals} locals`,
         return scoreB - scoreA;
       });
       const maxScore = entries.length > 0 ? entries[0].branchCount * 3 + entries[0].maxNestingDepth * 5 + entries[0].instructionCount : 1;
-      const highThreshold = maxScore * 0.6;
-      const mediumThreshold = maxScore * 0.2;
+      const highThreshold = 150;
+      const mediumThreshold = 75;
       const highCount = entries.filter((entry) => entry.branchCount * 3 + entry.maxNestingDepth * 5 + entry.instructionCount >= highThreshold).length;
       const medCount = entries.filter((entry) => {
         const score = entry.branchCount * 3 + entry.maxNestingDepth * 5 + entry.instructionCount;

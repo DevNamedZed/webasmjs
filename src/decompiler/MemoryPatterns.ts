@@ -157,6 +157,10 @@ function transformStatement(statement: Statement, structBases: Set<string>): Sta
     case 'store': {
       const address = xExpr(statement.address);
       const value = xExpr(statement.value);
+      // Skip struct/array pattern detection for v128 and atomic stores
+      if (statement.storeType.includes('v128') || statement.storeType.includes('atomic')) {
+        return { kind: 'store', address, offset: statement.offset, storeType: statement.storeType, value };
+      }
       // Struct field store: base + const where base is a struct pointer
       const structStore = tryStructAccess(address, statement.offset, structBases);
       if (structStore) {
@@ -205,6 +209,10 @@ function transformExpr(expression: Expression, structBases: Set<string>): Expres
   switch (expression.kind) {
     case 'load': {
       const address = xExpr(expression.address);
+      // Skip struct/array pattern detection for v128 and atomic loads
+      if (expression.loadType.includes('v128') || expression.loadType.includes('atomic')) {
+        return { kind: 'load', address, offset: expression.offset, loadType: expression.loadType };
+      }
       // Struct field access: base + const where base is a struct pointer
       const structAccess = tryStructAccess(address, expression.offset, structBases);
       if (structAccess) {

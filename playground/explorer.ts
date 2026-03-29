@@ -3935,8 +3935,9 @@ export default class Explorer {
 
     if (this.moduleInfo.imports.length > 0) {
       const importTable = this.createInfoTable();
-      for (let importIndex = 0; importIndex < this.moduleInfo.imports.length; importIndex++) {
-        const importEntry = this.moduleInfo.imports[importIndex];
+      const sortedImports = this.moduleInfo.imports.map((entry, index) => ({ entry, index }));
+      sortedImports.sort((a, b) => a.entry.fieldName.localeCompare(b.entry.fieldName));
+      for (const { entry: importEntry, index: importIndex } of sortedImports) {
         const kindName = EXPORT_KIND_NAMES[importEntry.kind] || 'unknown';
         let signature = '';
         if (importEntry.kind === 0 && importEntry.typeIndex !== undefined && importEntry.typeIndex < flatTypes.length) {
@@ -3951,7 +3952,8 @@ export default class Explorer {
 
         const nameLink = document.createElement('a');
         nameLink.className = 'detail-info-link';
-        nameLink.style.flex = '0 0 140px';
+        nameLink.style.flex = '0 0 auto';
+        nameLink.style.maxWidth = '50%';
         nameLink.textContent = importEntry.fieldName;
         nameLink.title = `${importEntry.moduleName}.${importEntry.fieldName}`;
         nameLink.href = '#';
@@ -3994,8 +3996,9 @@ export default class Explorer {
 
     if (this.moduleInfo.exports.length > 0) {
       const exportTable = this.createInfoTable();
-      for (let exportIndex = 0; exportIndex < this.moduleInfo.exports.length; exportIndex++) {
-        const exportEntry = this.moduleInfo.exports[exportIndex];
+      const sortedExports = this.moduleInfo.exports.map((entry, index) => ({ entry, index }));
+      sortedExports.sort((a, b) => a.entry.name.localeCompare(b.entry.name));
+      for (const { entry: exportEntry, index: exportIndex } of sortedExports) {
         const kindName = EXPORT_KIND_NAMES[exportEntry.kind] || 'unknown';
         let signature = '';
         const targetSection = this.getExportTargetSection(exportEntry.kind);
@@ -4023,7 +4026,8 @@ export default class Explorer {
 
         const nameLink = document.createElement('a');
         nameLink.className = 'detail-info-link';
-        nameLink.style.flex = '0 0 140px';
+        nameLink.style.flex = '0 0 auto';
+        nameLink.style.maxWidth = '50%';
         nameLink.textContent = exportEntry.name;
         nameLink.title = exportEntry.name;
         nameLink.href = '#';
@@ -4143,8 +4147,8 @@ export default class Explorer {
       : 1;
 
     // Tier thresholds
-    const highThreshold = maxScore * 0.6;
-    const mediumThreshold = maxScore * 0.2;
+    const highThreshold = 150;
+    const mediumThreshold = 75;
     const highCount = entries.filter(entry => (entry.branchCount * 3 + entry.maxNestingDepth * 5 + entry.instructionCount) >= highThreshold).length;
     const medCount = entries.filter(entry => {
       const score = entry.branchCount * 3 + entry.maxNestingDepth * 5 + entry.instructionCount;

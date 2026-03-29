@@ -187,7 +187,7 @@ function visitInstructionOperands(instruction: SsaInstr, visitor: (value: SsaVal
       visitor(instruction.selector);
       break;
     case 'return':
-      if (instruction.value) { visitor(instruction.value); }
+      for (const retVal of instruction.values) { visitor(retVal); }
       break;
   }
 }
@@ -259,8 +259,8 @@ function replaceOperand(instruction: SsaInstr, oldId: number, newValue: SsaValue
       instruction.selector = replace(instruction.selector);
       break;
     case 'return':
-      if (instruction.value) {
-        instruction.value = replace(instruction.value);
+      for (let retIdx = 0; retIdx < instruction.values.length; retIdx++) {
+        instruction.values[retIdx] = replace(instruction.values[retIdx]);
       }
       break;
   }

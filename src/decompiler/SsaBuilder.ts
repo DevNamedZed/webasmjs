@@ -50,7 +50,7 @@ export type SsaInstr =
   | { kind: 'branch'; target: number }
   | { kind: 'branch_if'; condition: SsaValue; trueTarget: number; falseTarget: number }
   | { kind: 'branch_table'; selector: SsaValue; targets: number[]; defaultTarget: number }
-  | { kind: 'return'; value: SsaValue | null }
+  | { kind: 'return'; values: SsaValue[] }
   | { kind: 'unreachable' };
 
 export interface SsaBlock {
@@ -65,6 +65,7 @@ export interface SsaFunction {
   variables: SsaVariable[];
   paramCount: number;
   localCount: number;
+  intrinsicNames: Map<number, string>;
   entryBlockId: number;
   exitBlockId: number;
 }
@@ -178,7 +179,7 @@ export function buildSsa(
   const flatTypes = flattenTypes(moduleInfo);
   const funcTypeRaw = flatTypes[func.typeIndex];
   if (!funcTypeRaw || funcTypeRaw.kind !== 'func') {
-    return { blocks: [], variables: [], paramCount: 0, localCount: 0, entryBlockId: 0, exitBlockId: 0 };
+    return { blocks: [], variables: [], paramCount: 0, localCount: 0, entryBlockId: 0, exitBlockId: 0, intrinsicNames: new Map() };
   }
   const funcType = funcTypeRaw as FuncTypeInfo;
 
@@ -189,7 +190,9 @@ export function buildSsa(
   }
 
   let variableCounter = 0;
+  let voidIntrinsicCounter = -100;
   const allVariables: SsaVariable[] = [];
+  const intrinsicNames = new Map<number, string>();
 
   function newVariable(name: string, type: string, blockId: number): SsaVariable {
     const variable: SsaVariable = { id: variableCounter++, name, type, definedInBlock: blockId };
@@ -672,8 +675,12 @@ export function buildSsa(
       }
 
       if (opCode === OpCodes.return) {
-        const returnValue = funcType.returnTypes.length > 0 ? stack.pop() || null : null;
-        ssaBlock.instructions.push({ kind: 'return', value: returnValue });
+        const returnValues: SsaValue[] = [];
+        for (let retIdx = 0; retIdx < funcType.returnTypes.length; retIdx++) {
+          const val = stack.pop();
+          if (val) { returnValues.unshift(val); }
+        }
+        ssaBlock.instructions.push({ kind: 'return', values: returnValues });
         continue;
       }
 
@@ -697,25 +704,147 @@ export function buildSsa(
         continue;
       }
 
-      // SIMD/GC/Atomic: handle remaining binary ops (pop 2, push 1)
+      // GC operations — emit as intrinsic calls
+      if (opCode.mnemonic.startsWith('struct.') || opCode.mnemonic.startsWith('array.') ||
+          opCode.mnemonic === 'ref.i31' || opCode.mnemonic.startsWith('i31.') ||
+          opCode.mnemonic.startsWith('ref.test') || opCode.mnemonic.startsWith('ref.cast') ||
+          opCode.mnemonic.startsWith('any.') || opCode.mnemonic.startsWith('extern.') ||
+          opCode.mnemonic === 'ref.null' || opCode.mnemonic === 'ref.is_null' || opCode.mnemonic === 'ref.func') {
+        const mnemonic = opCode.mnemonic;
+        const intrinsicName = mnemonic.replace(/\./g, '_').replace(/ /g, '_');
+        let popCount = opCode.popOperands ? opCode.popOperands.length : 0;
+        const pushCount = opCode.pushOperands ? opCode.pushOperands.length : 0;
+
+        // struct.new pops N fields based on the struct type
+        if (mnemonic === 'struct.new' && instruction.immediates.values.length > 0) {
+          const typeIndex = instruction.immediates.values[0] as number;
+          const flatTypes = flattenTypes(moduleInfo);
+          if (typeIndex < flatTypes.length && flatTypes[typeIndex].kind === 'struct') {
+            popCount = flatTypes[typeIndex].fields.length;
+          }
+        }
+
+        const args: SsaValue[] = [];
+        for (let argIdx = 0; argIdx < popCount; argIdx++) {
+          const arg = stack.pop();
+          if (arg) { args.unshift(arg); }
+        }
+        // Include relevant immediates as const args (skip type index for GC ops, keep field index)
+        const isGcOp = mnemonic.startsWith('struct.') || mnemonic.startsWith('array.') ||
+          mnemonic.startsWith('ref.') || mnemonic.startsWith('i31.') ||
+          mnemonic.startsWith('any.') || mnemonic.startsWith('extern.');
+        const immediateValues = instruction.immediates.values;
+        for (let immIdx = 0; immIdx < immediateValues.length; immIdx++) {
+          const immVal = immediateValues[immIdx];
+          if (typeof immVal !== 'number') { continue; }
+          // For GC ops, skip the first immediate (type index) — it's an internal WASM index
+          if (isGcOp && immIdx === 0) { continue; }
+          args.push({ kind: 'const', value: immVal, type: 'i32' });
+        }
+        if (pushCount > 0) {
+          const resultType = mnemonic.includes('v128') || mnemonic.includes('x4') || mnemonic.includes('x8') || mnemonic.includes('x16') || mnemonic.includes('x2')
+            ? 'v128' : 'i32';
+          const result = newVariable(`t${variableCounter}`, resultType, cfgBlock.id);
+          ssaBlock.instructions.push({ kind: 'call', result, target: -4, args });
+          intrinsicNames.set(result.id, intrinsicName);
+          stack.push(result);
+        } else {
+          const voidId = voidIntrinsicCounter--;
+          intrinsicNames.set(voidId, intrinsicName);
+          ssaBlock.instructions.push({ kind: 'call', result: null, target: voidId, args });
+        }
+        continue;
+      }
+
+      // Table/bulk memory operations
+      if (opCode.mnemonic.startsWith('table.') || opCode.mnemonic === 'memory.fill' ||
+          opCode.mnemonic === 'memory.copy' || opCode.mnemonic === 'memory.init' ||
+          opCode.mnemonic === 'data.drop' || opCode.mnemonic === 'elem.drop' ||
+          opCode.mnemonic === 'table.init' || opCode.mnemonic === 'table.copy') {
+        const mnemonic = opCode.mnemonic;
+        const intrinsicName = mnemonic.replace(/\./g, '_');
+        const popCount = opCode.popOperands ? opCode.popOperands.length : 0;
+        const pushCount = opCode.pushOperands ? opCode.pushOperands.length : 0;
+        const args: SsaValue[] = [];
+        for (let argIdx = 0; argIdx < popCount; argIdx++) {
+          const arg = stack.pop();
+          if (arg) { args.unshift(arg); }
+        }
+        // Include immediates (table index, data index, etc.)
+        for (const immVal of instruction.immediates.values) {
+          if (typeof immVal === 'number') {
+            args.push({ kind: 'const', value: immVal, type: 'i32' });
+          }
+        }
+        if (pushCount > 0) {
+          const result = newVariable(`t${variableCounter}`, 'i32', cfgBlock.id);
+          ssaBlock.instructions.push({ kind: 'call', result, target: -4, args });
+          intrinsicNames.set(result.id, intrinsicName);
+          stack.push(result);
+        } else {
+          const voidId = voidIntrinsicCounter--;
+          intrinsicNames.set(voidId, intrinsicName);
+          ssaBlock.instructions.push({ kind: 'call', result: null, target: voidId, args });
+        }
+        continue;
+      }
+
+      // SIMD ternary ops (pop 3, push 1) — must check before binary
+      if (opCode.stackBehavior === 'PopPush' && opCode.popOperands && opCode.popOperands.length === 3) {
+        const mnemonic = opCode.mnemonic;
+        const intrinsicName = mnemonic.replace(/\./g, '_');
+        const arg3 = stack.pop();
+        const arg2 = stack.pop();
+        const arg1 = stack.pop();
+        if (arg1 && arg2 && arg3) {
+          const result = newVariable(`t${variableCounter}`, 'v128', cfgBlock.id);
+          ssaBlock.instructions.push({ kind: 'call', result, target: -4, args: [arg1, arg2, arg3] });
+          intrinsicNames.set(result.id, intrinsicName);
+          stack.push(result);
+        }
+        continue;
+      }
+
+      // SIMD shuffle: emit as intrinsic call with mask bytes
+      if (opCode.mnemonic === 'i8x16.shuffle') {
+        const right = stack.pop();
+        const left = stack.pop();
+        if (left && right) {
+          const args: SsaValue[] = [left, right];
+          const maskImmediate = instruction.immediates.values[0];
+          if (maskImmediate instanceof Uint8Array) {
+            for (const byte of maskImmediate) {
+              args.push({ kind: 'const', value: byte, type: 'i32' });
+            }
+          }
+          const result = newVariable(`t${variableCounter}`, 'v128', cfgBlock.id);
+          ssaBlock.instructions.push({ kind: 'call', result, target: -4, args });
+          intrinsicNames.set(result.id, 'i8x16_shuffle');
+          stack.push(result);
+        }
+        continue;
+      }
+
+      // SIMD/Atomic: handle remaining binary ops (pop 2, push 1)
       if (opCode.stackBehavior === 'PopPush') {
         const mnemonic = opCode.mnemonic;
         if (mnemonic.includes('.add') || mnemonic.includes('.sub') || mnemonic.includes('.mul') ||
             mnemonic.includes('.and') || mnemonic.includes('.or') || mnemonic.includes('.xor') ||
             mnemonic.includes('.shl') || mnemonic.includes('.shr') ||
             mnemonic.includes('.min') || mnemonic.includes('.max') ||
-            mnemonic.includes('.eq') || mnemonic.includes('.ne') ||
+            mnemonic.includes('.eq') || (mnemonic.includes('.ne') && !mnemonic.includes('.neg') && !mnemonic.includes('.nearest')) ||
             mnemonic.includes('.lt') || mnemonic.includes('.gt') ||
             mnemonic.includes('.le') || mnemonic.includes('.ge') ||
             mnemonic.includes('.avgr') || mnemonic.includes('.swizzle') ||
             mnemonic.includes('.narrow') || mnemonic.includes('.dot') ||
-            mnemonic.includes('.q15mulr')) {
+            mnemonic.includes('.q15mulr') || mnemonic.includes('.extmul') ||
+            mnemonic.includes('.bitselect') || mnemonic.includes('.andnot')) {
           const right = stack.pop();
           const left = stack.pop();
           if (left && right) {
             const resultType = mnemonic.startsWith('v128') || mnemonic.includes('x') ? 'v128' : resultTypeFromOpCode(opCode);
             const result = newVariable(`t${variableCounter}`, resultType, cfgBlock.id);
-            const operatorName = mnemonic.split('.').pop() || mnemonic;
+            const operatorName = mnemonic.replace(/\./g, '_');
             ssaBlock.instructions.push({ kind: 'binary', result, op: operatorName, left, right });
             stack.push(result);
           }
@@ -726,7 +855,7 @@ export function buildSsa(
         if (operand) {
           const resultType = mnemonic.startsWith('v128') || mnemonic.includes('x') ? 'v128' : resultTypeFromOpCode(opCode);
           const result = newVariable(`t${variableCounter}`, resultType, cfgBlock.id);
-          ssaBlock.instructions.push({ kind: 'convert', result, op: mnemonic, operand });
+          ssaBlock.instructions.push({ kind: 'convert', result, op: mnemonic.replace(/\./g, '_'), operand });
           stack.push(result);
         }
         continue;
@@ -751,11 +880,16 @@ export function buildSsa(
     // Implicit return from stack
     const hasExitEdge = cfgBlock.successors.some(successor => successor.id === cfg.exit.id);
     if (hasExitEdge && stack.length > 0 && funcType.returnTypes.length > 0) {
-      ssaBlock.instructions.push({ kind: 'return', value: stack.pop()! });
+      const returnValues: SsaValue[] = [];
+      for (let retIdx = 0; retIdx < funcType.returnTypes.length && stack.length > 0; retIdx++) {
+        const val = stack.pop();
+        if (val) { returnValues.unshift(val); }
+      }
+      ssaBlock.instructions.push({ kind: 'return', values: returnValues });
     } else if (hasExitEdge && funcType.returnTypes.length === 0) {
       const lastInstr = ssaBlock.instructions[ssaBlock.instructions.length - 1];
       if (!lastInstr || lastInstr.kind !== 'return') {
-        ssaBlock.instructions.push({ kind: 'return', value: null });
+        ssaBlock.instructions.push({ kind: 'return', values: [] });
       }
     }
 
@@ -806,6 +940,7 @@ export function buildSsa(
     localCount: totalLocalCount,
     entryBlockId: cfg.entry.id,
     exitBlockId: cfg.exit.id,
+    intrinsicNames,
   };
 }
 

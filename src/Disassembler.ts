@@ -18,6 +18,11 @@ const valueTypeNames: Record<number, string> = {
   0x71: 'nullref',
   0x73: 'nullfuncref',
   0x72: 'nullexternref',
+  // Signed keys (readVarInt7 returns signed values for these)
+  [-1]: 'i32', [-2]: 'i64', [-3]: 'f32', [-4]: 'f64', [-5]: 'v128',
+  [-16]: 'funcref', [-17]: 'externref', [-18]: 'anyref', [-19]: 'eqref',
+  [-20]: 'i31ref', [-21]: 'structref', [-22]: 'arrayref',
+  [-15]: 'nullref', [-13]: 'nullfuncref', [-14]: 'nullexternref',
 };
 
 const blockTypeNames: Record<number, string> = {
@@ -290,6 +295,8 @@ export default class Disassembler {
     const names: Record<number, string> = {
       0x7f: 'i32', 0x7e: 'i64', 0x7d: 'f32', 0x7c: 'f64', 0x7b: 'v128',
       0x70: 'funcref', 0x6f: 'externref',
+      [-1]: 'i32', [-2]: 'i64', [-3]: 'f32', [-4]: 'f64', [-5]: 'v128',
+      [-16]: 'funcref', [-17]: 'externref',
     };
     return names[valueType] || `type_${valueType}`;
   }
@@ -369,7 +376,7 @@ export default class Disassembler {
         }
         case 1: { // table
           const tt = imp.tableType!;
-          const elemType = valueTypeNames[tt.elementType & 0xff] || 'anyfunc';
+          const elemType = valueTypeNames[tt.elementType] || 'anyfunc';
           const max = tt.maximum !== null ? ` ${tt.maximum}` : '';
           this.line(`(import ${mod} ${field} (table ${tt.initial}${max} ${elemType}))`);
           break;
@@ -546,7 +553,7 @@ export default class Disassembler {
   private writeTables(): void {
     for (let i = 0; i < this.module.tables.length; i++) {
       const t = this.module.tables[i];
-      const elemType = valueTypeNames[t.elementType & 0xff] || 'anyfunc';
+      const elemType = valueTypeNames[t.elementType] || 'anyfunc';
       const max = t.maximum !== null ? ` ${t.maximum}` : '';
       this.line(`(table (;${this.importedTableCount + i};) ${t.initial}${max} ${elemType})`);
     }

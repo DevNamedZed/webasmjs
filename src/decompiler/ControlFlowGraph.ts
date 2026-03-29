@@ -135,8 +135,10 @@ export function buildControlFlowGraph(instructions: DecodedInstruction[]): Contr
     }
 
     if (mnemonic === 'delegate') {
-      // delegate ends the current try scope. The depth immediate identifies which
-      // enclosing try block handles the exception — this is runtime behavior, not CFG structure.
+      // delegate terminates the current try block (pops one scope).
+      // The depth immediate identifies which enclosing try re-catches the exception —
+      // this affects runtime exception routing but not scope nesting.
+      // The delegate instruction itself acts like 'end' for the current try.
       if (scopeStack.length > 0) {
         const scope = scopeStack.pop()!;
         if (!scope.endTarget) {

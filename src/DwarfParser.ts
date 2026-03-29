@@ -811,7 +811,7 @@ function parseDebugInfo(
         reader.readUint32(); // type_offset (4 bytes)
       }
       // Skip non-compile units entirely (type units, skeleton units, etc.)
-      if (unitType !== 0x01 && unitType !== 0x11) {
+      if (unitType !== 0x01) {
         reader.offset = unitEnd;
         continue;
       }
@@ -858,6 +858,7 @@ function parseDebugInfo(
         break;
       }
 
+      const attrStartOffset = reader.offset;
       const attrs = new Map<number, string | number | boolean | null>();
       for (const attrDef of abbrev.attributes) {
         const value = readAttrValue(reader, attrDef.form, addressSize, debugStr, debugLineStr, attrDef.implicitConst, unitStart, debugStrOffsets, strOffsetsBase);
@@ -865,6 +866,21 @@ function parseDebugInfo(
       }
 
       if (abbrev.tag === DW_TAG_compile_unit) {
+        // Extract str_offsets_base first — if non-zero, re-parse CU attributes with correct base
+        const strOffsetsBaseVal = attrs.get(DW_AT_str_offsets_base);
+        if (typeof strOffsetsBaseVal === 'number' && strOffsetsBaseVal !== strOffsetsBase) {
+          strOffsetsBase = strOffsetsBaseVal;
+          // Re-parse CU DIE attributes with the correct strOffsetsBase
+          const savedOffset = reader.offset;
+          reader.offset = attrStartOffset;
+          attrs.clear();
+          for (const attrDef of abbrev.attributes) {
+            const value = readAttrValue(reader, attrDef.form, addressSize, debugStr, debugLineStr, attrDef.implicitConst, unitStart, debugStrOffsets, strOffsetsBase);
+            attrs.set(attrDef.attribute, value);
+          }
+          reader.offset = savedOffset;
+        }
+
         const nameVal = attrs.get(DW_AT_name);
         if (typeof nameVal === 'string') { unitName = nameVal; }
         const producerVal = attrs.get(DW_AT_producer);
@@ -873,8 +889,6 @@ function parseDebugInfo(
         if (typeof langVal === 'number') { unitLanguage = langVal; }
         const compDirVal = attrs.get(DW_AT_comp_dir);
         if (typeof compDirVal === 'string') { unitCompDir = compDirVal; }
-        const strOffsetsBaseVal = attrs.get(DW_AT_str_offsets_base);
-        if (typeof strOffsetsBaseVal === 'number') { strOffsetsBase = strOffsetsBaseVal; }
       }
 
       if (abbrev.tag === DW_TAG_subprogram) {
