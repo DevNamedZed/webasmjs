@@ -22950,6 +22950,12 @@ log(mod.toString());`
       }
     }
     let nextVarId = ssaFunc.variables.length > 0 ? ssaFunc.variables.reduce((maxId, variable) => Math.max(maxId, variable.id), 0) + 1 : 1e3;
+    function realPredecessorCount(block) {
+      return block.predecessors.filter((predId) => {
+        const predBlock = blockMap.get(predId);
+        return predBlock && predBlock.successors.includes(block.id);
+      }).length;
+    }
     function isTerminatorKind(kind) {
       return kind === "branch" || kind === "branch_if" || kind === "branch_table" || kind === "return" || kind === "unreachable";
     }
@@ -23072,6 +23078,8 @@ log(mod.toString());`
           children.push(blockToNode(block));
           if (block.successors.length === 1) {
             currentBlockId = block.successors[0];
+          } else if (block.successors.length >= 2) {
+            currentBlockId = block.successors[0];
           } else {
             currentBlockId = null;
           }
@@ -23092,7 +23100,11 @@ log(mod.toString());`
           }
           const targetBlock = blockMap.get(terminator.target);
           if (targetBlock && targetBlock.predecessors.length > 1) {
-            const unprocessedPreds = targetBlock.predecessors.filter((predId) => !processed.has(predId) && !(virtuallyProcessed && virtuallyProcessed.has(predId)));
+            const realPreds = targetBlock.predecessors.filter((predId) => {
+              const predBlock = blockMap.get(predId);
+              return predBlock && predBlock.successors.includes(terminator.target);
+            });
+            const unprocessedPreds = realPreds.filter((predId) => !processed.has(predId) && !(virtuallyProcessed && virtuallyProcessed.has(predId)));
             if (unprocessedPreds.length > 0 && !dominates(dominance.immediateDominator, currentBlockId, terminator.target)) {
               currentBlockId = null;
               continue;
@@ -23214,6 +23226,23 @@ log(mod.toString());`
           children.push(blockToNode(block));
           if (block.successors.length === 1) {
             currentBlockId = block.successors[0];
+          } else if (block.successors.length === 2) {
+            const normalTarget = block.successors[0];
+            const catchTarget = block.successors[1];
+            if (!loop.bodyIds.has(normalTarget) || normalTarget === headerId) {
+              if (normalTarget === headerId) {
+                children.push({ kind: "continue" });
+              } else {
+                children.push({ kind: "break" });
+              }
+              currentBlockId = catchTarget;
+            } else if (!loop.bodyIds.has(catchTarget) || catchTarget === headerId) {
+              currentBlockId = normalTarget;
+            } else {
+              const catchBody = structureRegion(catchTarget, null);
+              children.push(catchBody);
+              currentBlockId = normalTarget;
+            }
           } else {
             break;
           }
@@ -23286,21 +23315,63 @@ log(mod.toString());`
           const ifResult = structureIf(block, terminator, null);
           children.push(ifResult.node);
           currentBlockId = ifResult.mergeBlockId;
+          if (currentBlockId === null) {
+            const postDom = dominance.postImmediateDominator.get(block.id);
+            if (postDom !== void 0 && loop.bodyIds.has(postDom) && !processed.has(postDom)) {
+              currentBlockId = postDom;
+            }
+          }
           continue;
         }
         if (terminator.kind === "branch_table") {
           children.push(blockToNodeWithoutTerminator(block));
-          const switchResult = structureSwitch(terminator, null, currentBlockId);
-          children.push(switchResult.node);
-          currentBlockId = switchResult.mergeBlockId;
-          if (currentBlockId !== null) {
-            if (currentBlockId === headerId) {
-              children.push({ kind: "continue" });
-              currentBlockId = null;
-            } else if (!loop.bodyIds.has(currentBlockId)) {
-              children.push({ kind: "break" });
-              currentBlockId = null;
+          const switchCases = [];
+          let switchDefault = { kind: "sequence", children: [] };
+          const targetToCaseValues = /* @__PURE__ */ new Map();
+          for (let caseIndex = 0; caseIndex < terminator.targets.length; caseIndex++) {
+            const targetId = terminator.targets[caseIndex];
+            if (!targetToCaseValues.has(targetId)) {
+              targetToCaseValues.set(targetId, []);
             }
+            targetToCaseValues.get(targetId).push(caseIndex);
+          }
+          const uniqueTargetIds = /* @__PURE__ */ new Set();
+          for (const targetId of terminator.targets) {
+            if (targetId !== terminator.defaultTarget) {
+              uniqueTargetIds.add(targetId);
+            }
+          }
+          for (const targetId of uniqueTargetIds) {
+            const caseValues = targetToCaseValues.get(targetId) || [];
+            if (targetId === headerId) {
+              switchCases.push({ values: caseValues, body: { kind: "continue" } });
+            } else if (!loop.bodyIds.has(targetId)) {
+              switchCases.push({ values: caseValues, body: { kind: "break" } });
+            } else if (processed.has(targetId)) {
+              switchCases.push({ values: caseValues, body: { kind: "sequence", children: [] } });
+            } else {
+              const caseBody = structureRegion(targetId, null);
+              switchCases.push({ values: caseValues, body: caseBody });
+            }
+          }
+          if (terminator.defaultTarget === headerId) {
+            switchDefault = { kind: "continue" };
+          } else if (!loop.bodyIds.has(terminator.defaultTarget)) {
+            switchDefault = { kind: "break" };
+          } else if (!processed.has(terminator.defaultTarget)) {
+            switchDefault = structureRegion(terminator.defaultTarget, null);
+          }
+          children.push({
+            kind: "switch",
+            selector: terminator.selector,
+            cases: switchCases,
+            defaultBody: switchDefault
+          });
+          const postDom = dominance.postImmediateDominator.get(currentBlockId);
+          if (postDom !== void 0 && loop.bodyIds.has(postDom) && !processed.has(postDom)) {
+            currentBlockId = postDom;
+          } else {
+            currentBlockId = null;
           }
           continue;
         }
@@ -23400,8 +23471,8 @@ log(mod.toString());`
       const preBody = blockToNodeWithoutTerminator(block);
       const trueBlock = blockMap.get(trueTarget);
       const falseBlock = blockMap.get(falseTarget);
-      const trueInlineable = trueBlock && trueBlock.predecessors.length === 1 && !processed.has(trueTarget);
-      const falseInlineable = falseBlock && falseBlock.predecessors.length === 1 && !processed.has(falseTarget);
+      const trueInlineable = trueBlock && realPredecessorCount(trueBlock) === 1 && !processed.has(trueTarget);
+      const falseInlineable = falseBlock && realPredecessorCount(falseBlock) === 1 && !processed.has(falseTarget);
       const mergePoint = dominance.postImmediateDominator.get(block.id) ?? findMergePoint(trueTarget, falseTarget);
       if (trueInlineable && falseInlineable) {
         const thenBody = structureRegion(trueTarget, mergePoint);
@@ -23422,6 +23493,13 @@ log(mod.toString());`
         const ifNode = { kind: "if", condition: negated, thenBody: elseBody, elseBody: null };
         const mergeId = trueTarget !== regionEnd && !processed.has(trueTarget) ? trueTarget : null;
         return { node: prependNode(preBody, ifNode), mergeBlockId: mergeId };
+      }
+      if (mergePoint !== null && mergePoint !== trueTarget && mergePoint !== falseTarget) {
+        const thenBody = structureRegion(trueTarget, mergePoint);
+        const elseBody = structureRegion(falseTarget, mergePoint);
+        const ifNode = { kind: "if", condition: terminator.condition, thenBody, elseBody };
+        const nextId = mergePoint !== regionEnd && !processed.has(mergePoint) ? mergePoint : null;
+        return { node: prependNode(preBody, ifNode), mergeBlockId: nextId };
       }
       const labeledBody = blockToNode(block);
       return { node: labeledBody, mergeBlockId: null };
@@ -27974,7 +28052,7 @@ log(mod.toString());`
       lineElement.className = "code-line";
       const gutter = document.createElement("span");
       gutter.className = "code-line-number";
-      gutter.textContent = String(lineIndex + 1).padStart(gutterWidth, " ");
+      gutter.textContent = String(lineIndex + 1).padStart(gutterWidth);
       lineElement.appendChild(gutter);
       const content = document.createElement("span");
       content.className = "code-line-content";
@@ -29176,19 +29254,80 @@ ${funcEntry.body.length} bytes, ${totalLocals} locals`,
           const block = document.createElement("div");
           block.className = "detail-code";
           const lines = decompiledCode.split("\n");
+          const bracePairs = /* @__PURE__ */ new Map();
+          const braceStack = [];
+          for (let lineIdx = 0; lineIdx < lines.length; lineIdx++) {
+            const stripped = lines[lineIdx].trim();
+            if (stripped.startsWith("}")) {
+              if (braceStack.length > 0) {
+                bracePairs.set(braceStack.pop(), lineIdx);
+              }
+            }
+            if (stripped.endsWith("{")) {
+              braceStack.push(lineIdx);
+            }
+          }
           const gutterWidth = String(lines.length).length;
+          const lineElements = [];
+          const foldCollapsed = /* @__PURE__ */ new Set();
           for (let lineIdx = 0; lineIdx < lines.length; lineIdx++) {
             const lineEl = document.createElement("div");
             lineEl.className = "code-line";
+            const foldSlot = document.createElement("span");
+            foldSlot.className = "code-fold-slot";
+            const closingLine = bracePairs.get(lineIdx);
+            const isFoldable = closingLine !== void 0 && closingLine - lineIdx > 1;
+            let ellipsis = null;
+            if (isFoldable) {
+              foldSlot.classList.add("foldable");
+              foldSlot.textContent = "\u25BE";
+              const openIdx = lineIdx;
+              const closeIdx = closingLine;
+              const hiddenCount = closeIdx - openIdx - 1;
+              ellipsis = document.createElement("span");
+              ellipsis.className = "code-fold-ellipsis";
+              ellipsis.textContent = `\u2026 ${hiddenCount} lines`;
+              ellipsis.style.display = "none";
+              ellipsis.addEventListener("click", () => {
+                foldSlot.click();
+              });
+              foldSlot.addEventListener("click", () => {
+                const wasCollapsed = foldCollapsed.has(openIdx);
+                if (wasCollapsed) {
+                  foldCollapsed.delete(openIdx);
+                } else {
+                  foldCollapsed.add(openIdx);
+                }
+                const isNowCollapsed = foldCollapsed.has(openIdx);
+                ellipsis.style.display = isNowCollapsed ? "" : "none";
+                foldSlot.textContent = isNowCollapsed ? "\u25B8" : "\u25BE";
+                for (let targetLine = openIdx + 1; targetLine < closeIdx; targetLine++) {
+                  let shouldHide = false;
+                  for (const collapsedOpen of foldCollapsed) {
+                    const collapsedClose = bracePairs.get(collapsedOpen);
+                    if (collapsedClose !== void 0 && targetLine > collapsedOpen && targetLine < collapsedClose) {
+                      shouldHide = true;
+                      break;
+                    }
+                  }
+                  lineElements[targetLine].style.display = shouldHide ? "none" : "";
+                }
+              });
+            }
             const gutter = document.createElement("span");
             gutter.className = "code-line-number";
-            gutter.textContent = String(lineIdx + 1).padStart(gutterWidth, " ");
+            gutter.textContent = String(lineIdx + 1).padStart(gutterWidth);
             lineEl.appendChild(gutter);
-            const content = document.createElement("span");
-            content.className = "code-line-content";
-            renderHighlightedC(content, lines[lineIdx], highlightOptions);
-            lineEl.appendChild(content);
+            lineEl.appendChild(foldSlot);
+            const lineContent = document.createElement("span");
+            lineContent.className = "code-line-content";
+            renderHighlightedC(lineContent, lines[lineIdx], highlightOptions);
+            lineEl.appendChild(lineContent);
+            if (ellipsis) {
+              lineEl.appendChild(ellipsis);
+            }
             block.appendChild(lineEl);
+            lineElements.push(lineEl);
           }
           const wrapper = document.createElement("div");
           wrapper.className = "detail-block-wrapper";

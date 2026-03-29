@@ -54,6 +54,13 @@ export function structureFunction(
     ? ssaFunc.variables.reduce((maxId, variable) => Math.max(maxId, variable.id), 0) + 1
     : 1000;
 
+  function realPredecessorCount(block: SsaBlock): number {
+    return block.predecessors.filter(predId => {
+      const predBlock = blockMap.get(predId);
+      return predBlock && predBlock.successors.includes(block.id);
+    }).length;
+  }
+
   function isTerminatorKind(kind: string): boolean {
     return kind === 'branch' || kind === 'branch_if' || kind === 'branch_table' || kind === 'return' || kind === 'unreachable';
   }
@@ -197,6 +204,9 @@ export function structureFunction(
         children.push(blockToNode(block));
         if (block.successors.length === 1) {
           currentBlockId = block.successors[0];
+        } else if (block.successors.length >= 2) {
+          // Try/catch edge: follow the normal path (first successor)
+          currentBlockId = block.successors[0];
         } else {
           currentBlockId = null;
         }
@@ -226,9 +236,13 @@ export function structureFunction(
         // This prevents one arm of an if/else from consuming the merge block
         // before the other arm has been structured.
         if (targetBlock && targetBlock.predecessors.length > 1) {
-          const unprocessedPreds = targetBlock.predecessors.filter(predId =>
+          // Only count predecessors that actually have this block as a successor (real CFG edges)
+          const realPreds = targetBlock.predecessors.filter(predId => {
+            const predBlock = blockMap.get(predId);
+            return predBlock && predBlock.successors.includes(terminator.target);
+          });
+          const unprocessedPreds = realPreds.filter(predId =>
             !processed.has(predId) && !(virtuallyProcessed && virtuallyProcessed.has(predId)));
-          // Allow entry if the current block dominates the target
           if (unprocessedPreds.length > 0 && !dominates(dominance.immediateDominator, currentBlockId!, terminator.target)) {
             currentBlockId = null;
             continue;
@@ -378,6 +392,24 @@ export function structureFunction(
         children.push(blockToNode(block));
         if (block.successors.length === 1) {
           currentBlockId = block.successors[0];
+        } else if (block.successors.length === 2) {
+          // Try/catch edge: structure both paths
+          const normalTarget = block.successors[0];
+          const catchTarget = block.successors[1];
+          if (!loop.bodyIds.has(normalTarget) || normalTarget === headerId) {
+            // Normal path exits loop — follow catch path
+            if (normalTarget === headerId) { children.push({ kind: 'continue' }); }
+            else { children.push({ kind: 'break' }); }
+            currentBlockId = catchTarget;
+          } else if (!loop.bodyIds.has(catchTarget) || catchTarget === headerId) {
+            // Catch path exits loop — follow normal path
+            currentBlockId = normalTarget;
+          } else {
+            // Both in loop — structure catch path as side branch, continue with normal
+            const catchBody = structureRegion(catchTarget, null);
+            children.push(catchBody);
+            currentBlockId = normalTarget;
+          }
         } else {
           break;
         }
@@ -457,22 +489,63 @@ export function structureFunction(
         const ifResult = structureIf(block, terminator, null);
         children.push(ifResult.node);
         currentBlockId = ifResult.mergeBlockId;
+        // If structureIf couldn't find a merge point, try the post-dominator
+        if (currentBlockId === null) {
+          const postDom = dominance.postImmediateDominator.get(block.id);
+          if (postDom !== undefined && loop.bodyIds.has(postDom) && !processed.has(postDom)) {
+            currentBlockId = postDom;
+          }
+        }
         continue;
       }
 
       if (terminator.kind === 'branch_table') {
         children.push(blockToNodeWithoutTerminator(block));
-        const switchResult = structureSwitch(terminator, null, currentBlockId!);
-        children.push(switchResult.node);
-        currentBlockId = switchResult.mergeBlockId;
-        if (currentBlockId !== null) {
-          if (currentBlockId === headerId) {
-            children.push({ kind: 'continue' });
-            currentBlockId = null;
-          } else if (!loop.bodyIds.has(currentBlockId)) {
-            children.push({ kind: 'break' });
-            currentBlockId = null;
+        // For switches inside loops, convert out-of-loop targets to break/continue
+        const switchCases: { values: number[]; body: StructuredNode }[] = [];
+        let switchDefault: StructuredNode = { kind: 'sequence', children: [] };
+        const targetToCaseValues = new Map<number, number[]>();
+        for (let caseIndex = 0; caseIndex < terminator.targets.length; caseIndex++) {
+          const targetId = terminator.targets[caseIndex];
+          if (!targetToCaseValues.has(targetId)) { targetToCaseValues.set(targetId, []); }
+          targetToCaseValues.get(targetId)!.push(caseIndex);
+        }
+        const uniqueTargetIds = new Set<number>();
+        for (const targetId of terminator.targets) {
+          if (targetId !== terminator.defaultTarget) { uniqueTargetIds.add(targetId); }
+        }
+        for (const targetId of uniqueTargetIds) {
+          const caseValues = targetToCaseValues.get(targetId) || [];
+          if (targetId === headerId) {
+            switchCases.push({ values: caseValues, body: { kind: 'continue' } });
+          } else if (!loop.bodyIds.has(targetId)) {
+            switchCases.push({ values: caseValues, body: { kind: 'break' } });
+          } else if (processed.has(targetId)) {
+            switchCases.push({ values: caseValues, body: { kind: 'sequence', children: [] } });
+          } else {
+            const caseBody = structureRegion(targetId, null);
+            switchCases.push({ values: caseValues, body: caseBody });
           }
+        }
+        if (terminator.defaultTarget === headerId) {
+          switchDefault = { kind: 'continue' };
+        } else if (!loop.bodyIds.has(terminator.defaultTarget)) {
+          switchDefault = { kind: 'break' };
+        } else if (!processed.has(terminator.defaultTarget)) {
+          switchDefault = structureRegion(terminator.defaultTarget, null);
+        }
+        children.push({
+          kind: 'switch',
+          selector: terminator.selector,
+          cases: switchCases,
+          defaultBody: switchDefault,
+        });
+        // After switch inside loop, continue from merge point if it's in the loop
+        const postDom = dominance.postImmediateDominator.get(currentBlockId!);
+        if (postDom !== undefined && loop.bodyIds.has(postDom) && !processed.has(postDom)) {
+          currentBlockId = postDom;
+        } else {
+          currentBlockId = null;
         }
         continue;
       }
@@ -592,8 +665,8 @@ export function structureFunction(
     const trueBlock = blockMap.get(trueTarget);
     const falseBlock = blockMap.get(falseTarget);
 
-    const trueInlineable = trueBlock && trueBlock.predecessors.length === 1 && !processed.has(trueTarget);
-    const falseInlineable = falseBlock && falseBlock.predecessors.length === 1 && !processed.has(falseTarget);
+    const trueInlineable = trueBlock && realPredecessorCount(trueBlock) === 1 && !processed.has(trueTarget);
+    const falseInlineable = falseBlock && realPredecessorCount(falseBlock) === 1 && !processed.has(falseTarget);
 
     // Use post-dominator as merge point (more accurate than BFS intersection)
     const mergePoint = dominance.postImmediateDominator.get(block.id) ?? findMergePoint(trueTarget, falseTarget);
@@ -624,7 +697,17 @@ export function structureFunction(
       return { node: prependNode(preBody, ifNode), mergeBlockId: mergeId };
     }
 
-    // Neither inlineable — emit block instructions and continue
+    // Neither inlineable — try using the post-dominator as merge point
+    // and structure both branches aggressively
+    if (mergePoint !== null && mergePoint !== trueTarget && mergePoint !== falseTarget) {
+      const thenBody = structureRegion(trueTarget, mergePoint);
+      const elseBody = structureRegion(falseTarget, mergePoint);
+      const ifNode: StructuredNode = { kind: 'if', condition: terminator.condition, thenBody, elseBody };
+      const nextId = mergePoint !== regionEnd && !processed.has(mergePoint) ? mergePoint : null;
+      return { node: prependNode(preBody, ifNode), mergeBlockId: nextId };
+    }
+
+    // Last resort — emit block instructions and continue
     const labeledBody = blockToNode(block);
     return { node: labeledBody, mergeBlockId: null };
   }

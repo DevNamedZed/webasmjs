@@ -189,14 +189,13 @@ export function appendCodeBlock(parent: HTMLElement, code: string): void {
 
   const lines = code.split('\n');
   const gutterWidth = String(lines.length).length;
-
   for (let lineIndex = 0; lineIndex < lines.length; lineIndex++) {
     const lineElement = document.createElement('div');
     lineElement.className = 'code-line';
 
     const gutter = document.createElement('span');
     gutter.className = 'code-line-number';
-    gutter.textContent = String(lineIndex + 1).padStart(gutterWidth, ' ');
+    gutter.textContent = String(lineIndex + 1).padStart(gutterWidth);
     lineElement.appendChild(gutter);
 
     const content = document.createElement('span');

@@ -185,19 +185,96 @@ export function renderFunctionDetail(context: DetailContext, funcIndex: number):
         const block = document.createElement('div');
         block.className = 'detail-code';
         const lines = decompiledCode.split('\n');
+
+        // Match every opening { to its closing }
+        const bracePairs = new Map<number, number>();
+        const braceStack: number[] = [];
+        for (let lineIdx = 0; lineIdx < lines.length; lineIdx++) {
+          const stripped = lines[lineIdx].trim();
+          if (stripped.startsWith('}')) {
+            if (braceStack.length > 0) {
+              bracePairs.set(braceStack.pop()!, lineIdx);
+            }
+          }
+          if (stripped.endsWith('{')) {
+            braceStack.push(lineIdx);
+          }
+        }
+
         const gutterWidth = String(lines.length).length;
+
+        const lineElements: HTMLElement[] = [];
+        const foldCollapsed = new Set<number>();
+
         for (let lineIdx = 0; lineIdx < lines.length; lineIdx++) {
           const lineEl = document.createElement('div');
           lineEl.className = 'code-line';
+
+          const foldSlot = document.createElement('span');
+          foldSlot.className = 'code-fold-slot';
+
+          const closingLine = bracePairs.get(lineIdx);
+          const isFoldable = closingLine !== undefined && closingLine - lineIdx > 1;
+
+          let ellipsis: HTMLSpanElement | null = null;
+          if (isFoldable) {
+            foldSlot.classList.add('foldable');
+            foldSlot.textContent = '\u25BE';
+
+            const openIdx = lineIdx;
+            const closeIdx = closingLine;
+            const hiddenCount = closeIdx - openIdx - 1;
+
+            ellipsis = document.createElement('span');
+            ellipsis.className = 'code-fold-ellipsis';
+            ellipsis.textContent = `\u2026 ${hiddenCount} lines`;
+            ellipsis.style.display = 'none';
+            ellipsis.addEventListener('click', () => {
+              foldSlot.click();
+            });
+
+            foldSlot.addEventListener('click', () => {
+              const wasCollapsed = foldCollapsed.has(openIdx);
+              if (wasCollapsed) {
+                foldCollapsed.delete(openIdx);
+              } else {
+                foldCollapsed.add(openIdx);
+              }
+              const isNowCollapsed = foldCollapsed.has(openIdx);
+              ellipsis!.style.display = isNowCollapsed ? '' : 'none';
+              foldSlot.textContent = isNowCollapsed ? '\u25B8' : '\u25BE';
+              for (let targetLine = openIdx + 1; targetLine < closeIdx; targetLine++) {
+                let shouldHide = false;
+                for (const collapsedOpen of foldCollapsed) {
+                  const collapsedClose = bracePairs.get(collapsedOpen);
+                  if (collapsedClose !== undefined && targetLine > collapsedOpen && targetLine < collapsedClose) {
+                    shouldHide = true;
+                    break;
+                  }
+                }
+                lineElements[targetLine].style.display = shouldHide ? 'none' : '';
+              }
+            });
+          }
+
           const gutter = document.createElement('span');
           gutter.className = 'code-line-number';
-          gutter.textContent = String(lineIdx + 1).padStart(gutterWidth, ' ');
+          gutter.textContent = String(lineIdx + 1).padStart(gutterWidth);
           lineEl.appendChild(gutter);
-          const content = document.createElement('span');
-          content.className = 'code-line-content';
-          renderHighlightedC(content, lines[lineIdx], highlightOptions);
-          lineEl.appendChild(content);
+
+          lineEl.appendChild(foldSlot);
+
+          const lineContent = document.createElement('span');
+          lineContent.className = 'code-line-content';
+          renderHighlightedC(lineContent, lines[lineIdx], highlightOptions);
+          lineEl.appendChild(lineContent);
+
+          if (ellipsis) {
+            lineEl.appendChild(ellipsis);
+          }
+
           block.appendChild(lineEl);
+          lineElements.push(lineEl);
         }
         const wrapper = document.createElement('div');
         wrapper.className = 'detail-block-wrapper';

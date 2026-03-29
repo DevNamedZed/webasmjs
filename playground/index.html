@@ -1110,26 +1110,61 @@
 
   .code-line {
     display: flex;
-    padding: 0 16px;
+    padding: 0 16px 0 0;
   }
 
   .code-line:hover { background: rgba(30, 30, 46, 0.8); }
 
   .code-line-number {
     color: #45475a;
-    text-align: right;
-    padding-right: 16px;
-    min-width: 4ch;
+    white-space: pre;
+    padding-left: 12px;
+    padding-right: 12px;
     user-select: none;
     flex-shrink: 0;
-    flex-grow: 0;
     border-right: 1px solid #313244;
-    margin-right: 16px;
     font-family: inherit;
     font-variant-numeric: tabular-nums;
   }
 
+  .code-fold-slot {
+    width: 18px;
+    flex-shrink: 0;
+    text-align: center;
+    font-size: 11px;
+    color: #585b70;
+    user-select: none;
+    line-height: inherit;
+    visibility: hidden;
+  }
+
+  .code-fold-slot.foldable {
+    cursor: pointer;
+    visibility: visible;
+  }
+
+  .code-fold-slot.foldable:hover {
+    color: #cdd6f4;
+  }
+
   .code-line-content { white-space: pre; }
+
+  .code-fold-ellipsis {
+    color: #7f849c;
+    background: #1e1e2e;
+    border: 1px solid #313244;
+    border-radius: 4px;
+    padding: 0 6px;
+    margin-left: 8px;
+    font-size: 11px;
+    cursor: pointer;
+    user-select: none;
+  }
+
+  .code-fold-ellipsis:hover {
+    color: #cdd6f4;
+    border-color: #45475a;
+  }
 
   .detail-block-wrapper { position: relative; }
 

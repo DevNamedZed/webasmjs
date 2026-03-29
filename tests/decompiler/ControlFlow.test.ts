@@ -342,6 +342,42 @@ describe('Decompiler: Switch (br_table)', () => {
     expect(output).toContain('200');
     expect(output).not.toContain('unvisited');
   });
+
+  test('multi-exit loop structures all exit paths', () => {
+    const output = expectDecompiles((mod) => {
+      mod.defineMemory(1);
+      mod.defineFunction('f', null, [ValueType.Int32, ValueType.Int32], (f, a) => {
+        // Two blocks after the loop for two distinct exit paths
+        const pathA = a.block(BlockType.Void);
+        const pathB = a.block(BlockType.Void);
+        const lp = a.loop(BlockType.Void);
+        // Exit 1: if param0 == 0, break to path A
+        a.get_local(a.getParameter(0));
+        a.eqz_i32();
+        a.br_if(pathA);
+        // Exit 2: if param1 == 0, break to path B
+        a.get_local(a.getParameter(1));
+        a.eqz_i32();
+        a.br_if(pathB);
+        // Loop body
+        a.const_i32(0);
+        a.const_i32(1);
+        a.store_i32(2, 0);
+        a.br(lp);
+        a.end(); // loop
+        a.end(); // pathB
+        a.const_i32(0);
+        a.const_i32(20);
+        a.store_i32(2, 4);
+        a.return();
+        a.end(); // pathA
+        a.const_i32(0);
+        a.const_i32(10);
+        a.store_i32(2, 8);
+      });
+    });
+    expect(output).not.toContain('unvisited');
+  });
 });
 
 describe('Decompiler: Do-While Loop', () => {
