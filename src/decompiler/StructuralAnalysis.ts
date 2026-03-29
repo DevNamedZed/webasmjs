@@ -316,12 +316,31 @@ export function structureFunction(
     const bodyNode = structureLoopBody(headerId, headerId, loop);
     const whileNode: StructuredNode = { kind: 'while', condition: null, body: bodyNode };
 
-    const exitId = findSingleExit(loop);
-    if (exitId !== null && exitId !== regionEnd && !processed.has(exitId)) {
-      const afterLoop = structureRegion(exitId, regionEnd);
-      return { kind: 'sequence', children: [whileNode, afterLoop] };
+    // Structure code after the loop — handle multiple exit targets
+    const afterChildren: StructuredNode[] = [whileNode];
+    if (loop.exitIds.size > 0) {
+      // Find the convergence point where all exits meet
+      const postDom = dominance.postImmediateDominator.get(headerId);
+      const convergenceId = (postDom !== undefined && !loop.bodyIds.has(postDom)) ? postDom : null;
+
+      // Structure each unprocessed exit path up to the convergence point
+      for (const exitId of loop.exitIds) {
+        if (exitId === regionEnd || processed.has(exitId)) { continue; }
+        if (exitId === convergenceId) { continue; }
+        const exitPath = structureRegion(exitId, convergenceId ?? regionEnd);
+        afterChildren.push(exitPath);
+      }
+
+      // Structure from convergence point onward
+      if (convergenceId !== null && convergenceId !== regionEnd && !processed.has(convergenceId)) {
+        const afterConvergence = structureRegion(convergenceId, regionEnd);
+        afterChildren.push(afterConvergence);
+      }
     }
-    return whileNode;
+    if (afterChildren.length === 1) {
+      return whileNode;
+    }
+    return { kind: 'sequence', children: afterChildren };
   }
 
   function structureLoopBody(
@@ -438,6 +457,23 @@ export function structureFunction(
         const ifResult = structureIf(block, terminator, null);
         children.push(ifResult.node);
         currentBlockId = ifResult.mergeBlockId;
+        continue;
+      }
+
+      if (terminator.kind === 'branch_table') {
+        children.push(blockToNodeWithoutTerminator(block));
+        const switchResult = structureSwitch(terminator, null, currentBlockId!);
+        children.push(switchResult.node);
+        currentBlockId = switchResult.mergeBlockId;
+        if (currentBlockId !== null) {
+          if (currentBlockId === headerId) {
+            children.push({ kind: 'continue' });
+            currentBlockId = null;
+          } else if (!loop.bodyIds.has(currentBlockId)) {
+            children.push({ kind: 'break' });
+            currentBlockId = null;
+          }
+        }
         continue;
       }
 
@@ -594,19 +630,19 @@ export function structureFunction(
   }
 
   function findSingleExit(loop: NaturalLoop): number | null {
+    if (loop.exitIds.size === 0) {
+      return null;
+    }
     if (loop.exitIds.size === 1) {
       return loop.exitIds.values().next().value ?? null;
     }
-    if (loop.exitIds.size > 1) {
-      // Multiple exits — use post-dominator of loop header as the merge point
-      const postDom = dominance.postImmediateDominator.get(loop.headerId);
-      if (postDom !== undefined && !loop.bodyIds.has(postDom)) {
-        return postDom;
-      }
-      // Fallback: pick the first exit
-      return loop.exitIds.values().next().value ?? null;
+    // Multiple exits — use post-dominator of loop header as the convergence point
+    const postDom = dominance.postImmediateDominator.get(loop.headerId);
+    if (postDom !== undefined && !loop.bodyIds.has(postDom)) {
+      return postDom;
     }
-    return null;
+    // Fallback: pick the first exit
+    return loop.exitIds.values().next().value ?? null;
   }
 
   const result = structureRegion(ssaFunc.entryBlockId, ssaFunc.exitBlockId);

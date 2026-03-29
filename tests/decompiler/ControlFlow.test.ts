@@ -308,6 +308,40 @@ describe('Decompiler: Switch (br_table)', () => {
     expect(output).toContain('switch');
     expect(output).toContain('case');
   });
+
+  test('switch inside loop dispatches cases', () => {
+    const output = expectDecompiles((mod) => {
+      mod.defineMemory(1);
+      const readByte = mod.importFunction('env', 'readByte', [ValueType.Int32], []);
+      mod.defineFunction('f', null, [], (f, a) => {
+        const lp = a.loop(BlockType.Void);
+        a.call(readByte);
+        const blockDefault = a.block(BlockType.Void);
+        const block1 = a.block(BlockType.Void);
+        const block0 = a.block(BlockType.Void);
+        a.br_table(blockDefault, block0, block1);
+        a.end(); // block0
+        a.const_i32(0);
+        a.const_i32(100);
+        a.store_i32(2, 0);
+        a.br(lp);
+        a.end(); // block1
+        a.const_i32(0);
+        a.const_i32(200);
+        a.store_i32(2, 4);
+        a.br(lp);
+        a.end(); // blockDefault
+        a.return();
+        a.end(); // loop
+      });
+    });
+    expect(output).toContain('while');
+    expect(output).toContain('switch');
+    expect(output).toContain('case');
+    expect(output).toContain('100');
+    expect(output).toContain('200');
+    expect(output).not.toContain('unvisited');
+  });
 });
 
 describe('Decompiler: Do-While Loop', () => {

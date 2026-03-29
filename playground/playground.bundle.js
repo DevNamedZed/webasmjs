@@ -23139,9 +23139,9 @@ log(mod.toString());`
             condition: terminator.condition,
             body: prependNode(preBody, bodyNode2)
           };
-          const exitId2 = falseTarget;
-          if (exitId2 !== regionEnd && !processed.has(exitId2)) {
-            const afterLoop = structureRegion(exitId2, regionEnd);
+          const exitId = falseTarget;
+          if (exitId !== regionEnd && !processed.has(exitId)) {
+            const afterLoop = structureRegion(exitId, regionEnd);
             return { kind: "sequence", children: [whileNode2, afterLoop] };
           }
           return whileNode2;
@@ -23155,9 +23155,9 @@ log(mod.toString());`
             condition: negatedCondition,
             body: prependNode(preBody, bodyNode2)
           };
-          const exitId2 = trueTarget;
-          if (exitId2 !== regionEnd && !processed.has(exitId2)) {
-            const afterLoop = structureRegion(exitId2, regionEnd);
+          const exitId = trueTarget;
+          if (exitId !== regionEnd && !processed.has(exitId)) {
+            const afterLoop = structureRegion(exitId, regionEnd);
             return { kind: "sequence", children: [whileNode2, afterLoop] };
           }
           return whileNode2;
@@ -23165,12 +23165,29 @@ log(mod.toString());`
       }
       const bodyNode = structureLoopBody(headerId, headerId, loop);
       const whileNode = { kind: "while", condition: null, body: bodyNode };
-      const exitId = findSingleExit(loop);
-      if (exitId !== null && exitId !== regionEnd && !processed.has(exitId)) {
-        const afterLoop = structureRegion(exitId, regionEnd);
-        return { kind: "sequence", children: [whileNode, afterLoop] };
+      const afterChildren = [whileNode];
+      if (loop.exitIds.size > 0) {
+        const postDom = dominance.postImmediateDominator.get(headerId);
+        const convergenceId = postDom !== void 0 && !loop.bodyIds.has(postDom) ? postDom : null;
+        for (const exitId of loop.exitIds) {
+          if (exitId === regionEnd || processed.has(exitId)) {
+            continue;
+          }
+          if (exitId === convergenceId) {
+            continue;
+          }
+          const exitPath = structureRegion(exitId, convergenceId ?? regionEnd);
+          afterChildren.push(exitPath);
+        }
+        if (convergenceId !== null && convergenceId !== regionEnd && !processed.has(convergenceId)) {
+          const afterConvergence = structureRegion(convergenceId, regionEnd);
+          afterChildren.push(afterConvergence);
+        }
       }
-      return whileNode;
+      if (afterChildren.length === 1) {
+        return whileNode;
+      }
+      return { kind: "sequence", children: afterChildren };
     }
     function structureLoopBody(startId, headerId, loop) {
       const children = [];
@@ -23269,6 +23286,22 @@ log(mod.toString());`
           const ifResult = structureIf(block, terminator, null);
           children.push(ifResult.node);
           currentBlockId = ifResult.mergeBlockId;
+          continue;
+        }
+        if (terminator.kind === "branch_table") {
+          children.push(blockToNodeWithoutTerminator(block));
+          const switchResult = structureSwitch(terminator, null, currentBlockId);
+          children.push(switchResult.node);
+          currentBlockId = switchResult.mergeBlockId;
+          if (currentBlockId !== null) {
+            if (currentBlockId === headerId) {
+              children.push({ kind: "continue" });
+              currentBlockId = null;
+            } else if (!loop.bodyIds.has(currentBlockId)) {
+              children.push({ kind: "break" });
+              currentBlockId = null;
+            }
+          }
           continue;
         }
         children.push(blockToNode(block));
@@ -23394,17 +23427,17 @@ log(mod.toString());`
       return { node: labeledBody, mergeBlockId: null };
     }
     function findSingleExit(loop) {
+      if (loop.exitIds.size === 0) {
+        return null;
+      }
       if (loop.exitIds.size === 1) {
         return loop.exitIds.values().next().value ?? null;
       }
-      if (loop.exitIds.size > 1) {
-        const postDom = dominance.postImmediateDominator.get(loop.headerId);
-        if (postDom !== void 0 && !loop.bodyIds.has(postDom)) {
-          return postDom;
-        }
-        return loop.exitIds.values().next().value ?? null;
+      const postDom = dominance.postImmediateDominator.get(loop.headerId);
+      if (postDom !== void 0 && !loop.bodyIds.has(postDom)) {
+        return postDom;
       }
-      return null;
+      return loop.exitIds.values().next().value ?? null;
     }
     const result = structureRegion(ssaFunc.entryBlockId, ssaFunc.exitBlockId);
     const unvisited = [];
@@ -25962,6 +25995,9 @@ log(mod.toString());`
         case "expr":
           emit(`${formatExpression(stmt.value, 0)};`);
           break;
+        default:
+          emit(`/* unknown stmt: ${stmt.kind} */`);
+          break;
       }
     }
     function isIntrinsicOp(op) {
@@ -26063,6 +26099,9 @@ log(mod.toString());`
         }
         case "field_access": {
           return formatFieldAccess(expr.base, expr.offset);
+        }
+        default: {
+          return `/* unknown expr: ${expr.kind} */`;
         }
       }
     }
@@ -28531,7 +28570,7 @@ ${tipSignature}
 ${funcEntry.body.length} bytes, ${totalLocals} locals`,
               heatColor
             };
-          })
+          }).sort((a, b) => a.label.localeCompare(b.label, void 0, { numeric: true }))
         };
         root.children.push(functionsNode);
       }
@@ -30651,9 +30690,7 @@ ${funcEntry.body.length} bytes, ${totalLocals} locals`,
           const row = document.createElement("div");
           row.className = "detail-info-row";
           const nameLink = document.createElement("a");
-          nameLink.className = "detail-info-link";
-          nameLink.style.flex = "0 0 auto";
-          nameLink.style.maxWidth = "50%";
+          nameLink.className = "detail-info-link module-interface-name";
           nameLink.textContent = importEntry.fieldName;
           nameLink.title = `${importEntry.moduleName}.${importEntry.fieldName}`;
           nameLink.href = "#";
@@ -30716,9 +30753,7 @@ ${funcEntry.body.length} bytes, ${totalLocals} locals`,
           const navSection = targetSection && targetItemIndex >= 0 ? targetSection : "export";
           const navIndex = targetSection && targetItemIndex >= 0 ? targetItemIndex : exportIndex;
           const nameLink = document.createElement("a");
-          nameLink.className = "detail-info-link";
-          nameLink.style.flex = "0 0 auto";
-          nameLink.style.maxWidth = "50%";
+          nameLink.className = "detail-info-link module-interface-name";
           nameLink.textContent = exportEntry.name;
           nameLink.title = exportEntry.name;
           nameLink.href = "#";

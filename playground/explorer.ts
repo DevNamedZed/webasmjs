@@ -1533,12 +1533,12 @@ export default class Explorer {
           }
           return {
             label,
-            section: 'function',
+            section: 'function' as const,
             index: funcIndex,
             tooltip: `func ${globalIndex}\n${tipSignature}\n${funcEntry.body.length} bytes, ${totalLocals} locals`,
             heatColor,
           };
-        }),
+        }).sort((a, b) => a.label.localeCompare(b.label, undefined, { numeric: true })),
       };
       root.children!.push(functionsNode);
     }
@@ -3951,9 +3951,7 @@ export default class Explorer {
         row.className = 'detail-info-row';
 
         const nameLink = document.createElement('a');
-        nameLink.className = 'detail-info-link';
-        nameLink.style.flex = '0 0 auto';
-        nameLink.style.maxWidth = '50%';
+        nameLink.className = 'detail-info-link module-interface-name';
         nameLink.textContent = importEntry.fieldName;
         nameLink.title = `${importEntry.moduleName}.${importEntry.fieldName}`;
         nameLink.href = '#';
@@ -4025,9 +4023,7 @@ export default class Explorer {
         const navIndex = (targetSection && targetItemIndex >= 0) ? targetItemIndex : exportIndex;
 
         const nameLink = document.createElement('a');
-        nameLink.className = 'detail-info-link';
-        nameLink.style.flex = '0 0 auto';
-        nameLink.style.maxWidth = '50%';
+        nameLink.className = 'detail-info-link module-interface-name';
         nameLink.textContent = exportEntry.name;
         nameLink.title = exportEntry.name;
         nameLink.href = '#';

@@ -315,6 +315,9 @@ export function emitLowered(
       case 'expr':
         emit(`${formatExpression(stmt.value, 0)};`);
         break;
+      default:
+        emit(`/* unknown stmt: ${(stmt as Statement).kind} */`);
+        break;
     }
   }
 
@@ -425,6 +428,9 @@ export function emitLowered(
       }
       case 'field_access': {
         return formatFieldAccess(expr.base, expr.offset);
+      }
+      default: {
+        return `/* unknown expr: ${(expr as Expression).kind} */`;
       }
     }
   }
