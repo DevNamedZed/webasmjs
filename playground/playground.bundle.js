@@ -23059,6 +23059,11 @@ log(mod.toString());`
       let currentBlockId = blockId;
       while (currentBlockId !== null && currentBlockId !== regionEnd) {
         if (processed.has(currentBlockId)) {
+          const skipTarget = dominance.postImmediateDominator.get(currentBlockId);
+          if (skipTarget !== void 0 && skipTarget !== currentBlockId && skipTarget !== regionEnd && !processed.has(skipTarget)) {
+            currentBlockId = skipTarget;
+            continue;
+          }
           break;
         }
         const block = blockMap.get(currentBlockId);
@@ -23134,6 +23139,35 @@ log(mod.toString());`
       }
       return { kind: "sequence", children };
     }
+    function structureAfterWhileLoop(whileNode, loop, primaryExitId, regionEnd) {
+      const afterChildren = [whileNode];
+      const postDom = dominance.postImmediateDominator.get(loop.headerId);
+      const convergenceId = postDom !== void 0 && !loop.bodyIds.has(postDom) ? postDom : null;
+      if (primaryExitId !== regionEnd && !processed.has(primaryExitId)) {
+        if (primaryExitId !== convergenceId) {
+          const primaryPath = structureRegion(primaryExitId, convergenceId ?? regionEnd);
+          afterChildren.push(primaryPath);
+        }
+      }
+      for (const exitId of loop.exitIds) {
+        if (exitId === primaryExitId || exitId === regionEnd || processed.has(exitId)) {
+          continue;
+        }
+        if (exitId === convergenceId) {
+          continue;
+        }
+        const exitPath = structureRegion(exitId, convergenceId ?? regionEnd);
+        afterChildren.push(exitPath);
+      }
+      if (convergenceId !== null && convergenceId !== regionEnd && !processed.has(convergenceId)) {
+        const afterConvergence = structureRegion(convergenceId, regionEnd);
+        afterChildren.push(afterConvergence);
+      }
+      if (afterChildren.length === 1) {
+        return whileNode;
+      }
+      return { kind: "sequence", children: afterChildren };
+    }
     function structureLoop(headerId, loop, regionEnd) {
       processed.add(headerId);
       const headerBlock = blockMap.get(headerId);
@@ -23151,12 +23185,7 @@ log(mod.toString());`
             condition: terminator.condition,
             body: prependNode(preBody, bodyNode2)
           };
-          const exitId = falseTarget;
-          if (exitId !== regionEnd && !processed.has(exitId)) {
-            const afterLoop = structureRegion(exitId, regionEnd);
-            return { kind: "sequence", children: [whileNode2, afterLoop] };
-          }
-          return whileNode2;
+          return structureAfterWhileLoop(whileNode2, loop, falseTarget, regionEnd);
         }
         if (!trueInLoop && falseInLoop) {
           const bodyNode2 = structureLoopBody(falseTarget, headerId, loop);
@@ -23167,12 +23196,7 @@ log(mod.toString());`
             condition: negatedCondition,
             body: prependNode(preBody, bodyNode2)
           };
-          const exitId = trueTarget;
-          if (exitId !== regionEnd && !processed.has(exitId)) {
-            const afterLoop = structureRegion(exitId, regionEnd);
-            return { kind: "sequence", children: [whileNode2, afterLoop] };
-          }
-          return whileNode2;
+          return structureAfterWhileLoop(whileNode2, loop, trueTarget, regionEnd);
         }
       }
       const bodyNode = structureLoopBody(headerId, headerId, loop);
@@ -23500,6 +23524,19 @@ log(mod.toString());`
         const ifNode = { kind: "if", condition: terminator.condition, thenBody, elseBody };
         const nextId = mergePoint !== regionEnd && !processed.has(mergePoint) ? mergePoint : null;
         return { node: prependNode(preBody, ifNode), mergeBlockId: nextId };
+      }
+      if (mergePoint === falseTarget && !processed.has(trueTarget)) {
+        const thenBody = structureRegion(trueTarget, falseTarget);
+        const ifNode = { kind: "if", condition: terminator.condition, thenBody, elseBody: null };
+        const mergeId = falseTarget !== regionEnd && !processed.has(falseTarget) ? falseTarget : null;
+        return { node: prependNode(preBody, ifNode), mergeBlockId: mergeId };
+      }
+      if (mergePoint === trueTarget && !processed.has(falseTarget)) {
+        const elseBody = structureRegion(falseTarget, trueTarget);
+        const negated = negateCondition(terminator.condition);
+        const ifNode = { kind: "if", condition: negated, thenBody: elseBody, elseBody: null };
+        const mergeId = trueTarget !== regionEnd && !processed.has(trueTarget) ? trueTarget : null;
+        return { node: prependNode(preBody, ifNode), mergeBlockId: mergeId };
       }
       const labeledBody = blockToNode(block);
       return { node: labeledBody, mergeBlockId: null };

@@ -180,6 +180,15 @@ export function structureFunction(
 
     while (currentBlockId !== null && currentBlockId !== regionEnd) {
       if (processed.has(currentBlockId)) {
+        // If the block was already consumed by a nested call, skip to the
+        // post-dominator so we can continue structuring downstream blocks
+        // that haven't been processed yet.
+        const skipTarget = dominance.postImmediateDominator.get(currentBlockId);
+        if (skipTarget !== undefined && skipTarget !== currentBlockId
+            && skipTarget !== regionEnd && !processed.has(skipTarget)) {
+          currentBlockId = skipTarget;
+          continue;
+        }
         break;
       }
 
@@ -277,6 +286,46 @@ export function structureFunction(
     return { kind: 'sequence', children };
   }
 
+  function structureAfterWhileLoop(
+    whileNode: StructuredNode,
+    loop: NaturalLoop,
+    primaryExitId: number,
+    regionEnd: number | null,
+  ): StructuredNode {
+    const afterChildren: StructuredNode[] = [whileNode];
+
+    // Find convergence point where all loop exits meet
+    const postDom = dominance.postImmediateDominator.get(loop.headerId);
+    const convergenceId = (postDom !== undefined && !loop.bodyIds.has(postDom)) ? postDom : null;
+
+    // Structure the primary exit path (the while condition's false branch)
+    if (primaryExitId !== regionEnd && !processed.has(primaryExitId)) {
+      if (primaryExitId !== convergenceId) {
+        const primaryPath = structureRegion(primaryExitId, convergenceId ?? regionEnd);
+        afterChildren.push(primaryPath);
+      }
+    }
+
+    // Structure any other unprocessed exit paths reached via break statements
+    for (const exitId of loop.exitIds) {
+      if (exitId === primaryExitId || exitId === regionEnd || processed.has(exitId)) { continue; }
+      if (exitId === convergenceId) { continue; }
+      const exitPath = structureRegion(exitId, convergenceId ?? regionEnd);
+      afterChildren.push(exitPath);
+    }
+
+    // Structure from convergence point onward
+    if (convergenceId !== null && convergenceId !== regionEnd && !processed.has(convergenceId)) {
+      const afterConvergence = structureRegion(convergenceId, regionEnd);
+      afterChildren.push(afterConvergence);
+    }
+
+    if (afterChildren.length === 1) {
+      return whileNode;
+    }
+    return { kind: 'sequence', children: afterChildren };
+  }
+
   function structureLoop(
     headerId: number,
     loop: NaturalLoop,
@@ -301,12 +350,7 @@ export function structureFunction(
           condition: terminator.condition,
           body: prependNode(preBody, bodyNode),
         };
-        const exitId = falseTarget;
-        if (exitId !== regionEnd && !processed.has(exitId)) {
-          const afterLoop = structureRegion(exitId, regionEnd);
-          return { kind: 'sequence', children: [whileNode, afterLoop] };
-        }
-        return whileNode;
+        return structureAfterWhileLoop(whileNode, loop, falseTarget, regionEnd);
       }
 
       if (!trueInLoop && falseInLoop) {
@@ -318,12 +362,7 @@ export function structureFunction(
           condition: negatedCondition,
           body: prependNode(preBody, bodyNode),
         };
-        const exitId = trueTarget;
-        if (exitId !== regionEnd && !processed.has(exitId)) {
-          const afterLoop = structureRegion(exitId, regionEnd);
-          return { kind: 'sequence', children: [whileNode, afterLoop] };
-        }
-        return whileNode;
+        return structureAfterWhileLoop(whileNode, loop, trueTarget, regionEnd);
       }
     }
 
@@ -705,6 +744,21 @@ export function structureFunction(
       const ifNode: StructuredNode = { kind: 'if', condition: terminator.condition, thenBody, elseBody };
       const nextId = mergePoint !== regionEnd && !processed.has(mergePoint) ? mergePoint : null;
       return { node: prependNode(preBody, ifNode), mergeBlockId: nextId };
+    }
+
+    // Merge point equals one of the targets — structure the other branch, use target as merge
+    if (mergePoint === falseTarget && !processed.has(trueTarget)) {
+      const thenBody = structureRegion(trueTarget, falseTarget);
+      const ifNode: StructuredNode = { kind: 'if', condition: terminator.condition, thenBody, elseBody: null };
+      const mergeId = falseTarget !== regionEnd && !processed.has(falseTarget) ? falseTarget : null;
+      return { node: prependNode(preBody, ifNode), mergeBlockId: mergeId };
+    }
+    if (mergePoint === trueTarget && !processed.has(falseTarget)) {
+      const elseBody = structureRegion(falseTarget, trueTarget);
+      const negated = negateCondition(terminator.condition);
+      const ifNode: StructuredNode = { kind: 'if', condition: negated, thenBody: elseBody, elseBody: null };
+      const mergeId = trueTarget !== regionEnd && !processed.has(trueTarget) ? trueTarget : null;
+      return { node: prependNode(preBody, ifNode), mergeBlockId: mergeId };
     }
 
     // Last resort — emit block instructions and continue

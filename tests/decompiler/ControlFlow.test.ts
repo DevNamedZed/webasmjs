@@ -484,3 +484,192 @@ describe('Decompiler: Else-If Chain', () => {
     expect(output).toContain('else if');
   });
 });
+
+describe('Decompiler: Unvisited Block Elimination', () => {
+  test('loop exit block reachable from if branch inside loop body', () => {
+    // Reproduces the W_GetLumpName pattern: a loop with two exits where
+    // one exit block is also reachable from an if-branch inside the loop,
+    // causing it to be processed before the multi-exit handler reaches it.
+    const output = expectDecompiles((mod) => {
+      mod.defineMemory(1);
+      mod.defineFunction('f', null, [ValueType.Int32, ValueType.Int32], (f, a) => {
+        const exitA = a.block(BlockType.Void);
+        const exitB = a.block(BlockType.Void);
+        const lp = a.loop(BlockType.Void);
+
+        // Branch: if param0 → exit to exitA
+        a.get_local(a.getParameter(0));
+        a.br_if(exitA);
+
+        // Inside the loop body, an if/else where one branch exits to exitB
+        a.get_local(a.getParameter(1));
+        a.if(BlockType.Void);
+        a.const_i32(0);
+        a.const_i32(99);
+        a.store_i32(2, 0);
+        a.br(exitB);
+        a.else();
+        a.const_i32(0);
+        a.const_i32(88);
+        a.store_i32(2, 0);
+        a.end();
+
+        // Continue loop
+        a.br(lp);
+        a.end(); // loop
+        a.end(); // exitB
+        a.const_i32(0);
+        a.const_i32(20);
+        a.store_i32(2, 4);
+        a.return();
+        a.end(); // exitA
+        a.const_i32(0);
+        a.const_i32(10);
+        a.store_i32(2, 8);
+      });
+    });
+    expect(output).not.toContain('unvisited');
+  });
+
+  test('multi-predecessor block inside loop with if/else convergence', () => {
+    // Reproduces the Host_Loadgame_f pattern: inside a loop, an if/else
+    // where both branches converge at a block that also has predecessors
+    // from earlier in the loop. The merge-point heuristic defers processing.
+    const output = expectDecompiles((mod) => {
+      mod.defineMemory(1);
+      mod.defineFunction('f', null, [ValueType.Int32, ValueType.Int32], (f, a) => {
+        const exit = a.block(BlockType.Void);
+        const lp = a.loop(BlockType.Void);
+
+        // Exit condition
+        a.get_local(a.getParameter(0));
+        a.br_if(exit);
+
+        // First if/else inside loop
+        a.get_local(a.getParameter(1));
+        a.if(BlockType.Void);
+        a.const_i32(0);
+        a.const_i32(1);
+        a.store_i32(2, 0);
+        a.else();
+        a.const_i32(0);
+        a.const_i32(2);
+        a.store_i32(2, 0);
+        a.end();
+
+        // Code after if/else merge — this block has predecessors from both branches
+        a.const_i32(0);
+        a.const_i32(3);
+        a.store_i32(2, 0);
+
+        // Second conditional exit
+        a.get_local(a.getParameter(1));
+        a.br_if(exit);
+
+        // More code after second conditional
+        a.const_i32(0);
+        a.const_i32(4);
+        a.store_i32(2, 0);
+
+        a.br(lp);
+        a.end(); // loop
+        a.end(); // exit
+      });
+    });
+    expect(output).not.toContain('unvisited');
+  });
+
+  test('nested if/else inside loop where branches share exit target', () => {
+    // Reproduces the SV_StartSound pattern: complex nested conditions inside
+    // a loop with multiple blocks sharing exit paths.
+    const output = expectDecompiles((mod) => {
+      mod.defineMemory(1);
+      mod.defineFunction('f', null, [ValueType.Int32, ValueType.Int32, ValueType.Int32], (f, a) => {
+        const exit = a.block(BlockType.Void);
+        const lp = a.loop(BlockType.Void);
+
+        // First exit check
+        a.get_local(a.getParameter(0));
+        a.br_if(exit);
+
+        // Nested if
+        a.get_local(a.getParameter(1));
+        a.if(BlockType.Void);
+
+        // Inner if
+        a.get_local(a.getParameter(2));
+        a.if(BlockType.Void);
+        a.const_i32(0);
+        a.const_i32(10);
+        a.store_i32(2, 0);
+        a.br(exit); // inner if exits loop
+        a.else();
+        a.const_i32(0);
+        a.const_i32(20);
+        a.store_i32(2, 0);
+        a.end(); // inner if
+
+        a.else();
+        a.const_i32(0);
+        a.const_i32(30);
+        a.store_i32(2, 0);
+        a.end(); // outer if
+
+        // Post-if code, continue loop
+        a.const_i32(0);
+        a.const_i32(40);
+        a.store_i32(2, 0);
+        a.br(lp);
+        a.end(); // loop
+        a.end(); // exit
+        a.const_i32(0);
+        a.const_i32(50);
+        a.store_i32(2, 8);
+      });
+    });
+    expect(output).not.toContain('unvisited');
+  });
+
+  test('loop with branch to block having multiple unprocessed predecessors', () => {
+    // Tests the merge-point heuristic inside loops: a block inside a loop
+    // that is targeted by branches from two different paths. The heuristic
+    // should not defer processing when we are inside a loop body.
+    const output = expectDecompiles((mod) => {
+      mod.defineMemory(1);
+      mod.defineFunction('f', null, [ValueType.Int32, ValueType.Int32], (f, a) => {
+        const exit = a.block(BlockType.Void);
+        const lp = a.loop(BlockType.Void);
+        const merge = a.block(BlockType.Void);
+
+        a.get_local(a.getParameter(0));
+        a.br_if(merge);
+
+        a.const_i32(0);
+        a.const_i32(1);
+        a.store_i32(2, 0);
+
+        a.get_local(a.getParameter(1));
+        a.br_if(merge);
+
+        a.const_i32(0);
+        a.const_i32(2);
+        a.store_i32(2, 0);
+
+        a.end(); // merge
+
+        // Code after merge point (inside loop)
+        a.const_i32(0);
+        a.const_i32(3);
+        a.store_i32(2, 0);
+
+        a.get_local(a.getParameter(0));
+        a.br_if(exit);
+
+        a.br(lp);
+        a.end(); // loop
+        a.end(); // exit
+      });
+    });
+    expect(output).not.toContain('unvisited');
+  });
+});
